@@ -415,8 +415,9 @@ pub def PlanFile.read (path : String) : IO (Option PlanDoc) := do {
     }
 }
 
-/// The attribution trailer every commit weaver makes itself carries.
-pub def PlanRepo.trailer : String := "Assisted by Weaver agent weaver@monad-lang.org"
+/// The co-author trailer every commit weaver makes itself carries (the
+/// base prompt asks the model to add the same one to its own commits).
+pub def PlanRepo.trailer : String := "Co-Authored-By: Weaver <weaver@monad-lang.org>"
 
 /// Commit one plan file in the plan repo when it is a git work tree.
 /// Never pushes. Hooks run. The message's second paragraph is the weaver
@@ -439,6 +440,7 @@ def commit_in (r : PlanRepo) (path : String) (subject : String) : IO (Option Str
             if Bool.not (code == 0)
             then IO.pure (Option.some (String.concat "plan not committed: " (String.trim out)))
             else do {
+                // The user is the author and committer; Weaver only signs on.
                 let c <- Proc.capture "git" ["-C", r.root, "commit", "-q", "-m", subject, "-m", PlanRepo.trailer, "--", path];
                 match c {
                     Pair.pair code2 out2 =>

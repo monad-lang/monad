@@ -444,6 +444,12 @@ shows the diff. No (or EOF) starts untrusted: only your own `~/.config/weaver/AG
 untrusted unless `--trust` or `WEAVER_TRUST=1` trusts the run (not
 recorded). `/trust` trusts it from inside a session.
 
+### Commits
+
+Commits weaver makes itself (a captured plan in the plan repo) end with a
+`Co-Authored-By: Weaver <weaver@monad-lang.org>` trailer, and the system
+prompt asks the model to end the commits it makes with the same trailer.
+
 ### Startup
 
 On a terminal the TUI opens at once. The rest of startup -- the project

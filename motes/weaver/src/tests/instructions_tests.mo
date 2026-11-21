@@ -91,7 +91,7 @@ def one_file : InstrFile :=
 /// The base prompt tells the model to attribute the commits it makes.
 #[test]
 def test_base_prompt_carries_the_commit_trailer : Bool :=
-    String.contains Prompt.base "Assisted by Weaver agent weaver@monad-lang.org"
+    String.contains Prompt.base "Co-Authored-By: Weaver <weaver@monad-lang.org>"
         && String.contains Prompt.base "git commit"
 
 /// No files leaves the base prompt byte-identical; a file is appended

@@ -318,12 +318,15 @@ def test_a_git_plan_repo_gets_a_commit : IO Bool := do {
     let a <- PlanRepo.capture r st "m" "" "# Tracked\n";
     let log <- Proc.capture "git" ["-C", r.root, "log", "--format=%s"];
     let body <- Proc.capture "git" ["-C", r.root, "log", "--format=%B"];
+    let who <- Proc.capture "git" ["-C", r.root, "log", "--format=%an <%ae> / %cn <%ce>"];
+    let idents : String := match who { Pair.pair _ w => w };
     match log {
         Pair.pair code out => match body {
             Pair.pair code2 out2 =>
                 IO.pure (code == 0 && code2 == 0
                     && String.contains out "plan: Tracked -- draft"
                     && String.contains out2 (String.concat "\n\n" PlanRepo.trailer)
+                    && String.contains idents "t <t@example.invalid> / t <t@example.invalid>"
                     && Bool.not (String.is_empty (path_or a))),
         },
     }
