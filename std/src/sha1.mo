@@ -13,7 +13,10 @@
 /// footer, including its under-2^32-bits assumption); only the schedule and
 /// the compression rounds differ.
 
-use std::sha256 {}
+use std::sha256 {
+    Sha256.at_or_zero, Sha256.drop_n, Sha256.hex_of_bytes, Sha256.pack_words, Sha256.pad,
+    Sha256.take_n, Sha256.unpack_word,
+}
 
 // ── State ──
 
