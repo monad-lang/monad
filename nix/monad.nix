@@ -331,8 +331,9 @@
       # monadup's inputs. The compiler itself is a packaged binary, so this
       # tree only needs the motes monadup imports (its closure includes
       # `runtime`, hence `llvm`) and `runtime/src/runtime.c`, which the final
-      # relink compiles. `motes/serde` is present because `motes/json`'s
-      # manifest declares it. Kept OUT of `compilerSrc`: monadup is a
+      # relink compiles. `sys` is present because `std` builds on it (the OS
+      # floor), and `motes/serde` because `motes/json`'s manifest declares
+      # it. Kept OUT of `compilerSrc`: monadup is a
       # consumer of the compiler, not part of it.
       monadupSrc = lib.fileset.toSource {
         root = ../.;
@@ -349,6 +350,7 @@
               [
                 "init"
                 "std"
+                "sys"
                 "llvm"
                 "runtime"
                 "motes/clap"
