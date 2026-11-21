@@ -45,6 +45,8 @@ pub def Status.created : U16 := 201u16
 pub def Status.accepted : U16 := 202u16
 pub def Status.no_content : U16 := 204u16
 pub def Status.partial_content : U16 := 206u16
+/// 101 — the server accepts a protocol upgrade (WebSocket).
+pub def Status.switching_protocols : U16 := 101u16
 pub def Status.moved_permanently : U16 := 301u16
 pub def Status.found : U16 := 302u16
 pub def Status.see_other : U16 := 303u16
@@ -62,6 +64,8 @@ pub def Status.conflict : U16 := 409u16
 pub def Status.payload_too_large : U16 := 413u16
 pub def Status.expectation_failed : U16 := 417u16
 pub def Status.request_header_fields_too_large : U16 := 431u16
+/// 426 — the request needs an upgrade this server cannot do.
+pub def Status.upgrade_required : U16 := 426u16
 pub def Status.internal_server_error : U16 := 500u16
 pub def Status.bad_gateway : U16 := 502u16
 pub def Status.service_unavailable : U16 := 503u16

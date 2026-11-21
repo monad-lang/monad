@@ -15,6 +15,7 @@ pub use lib::types {
     Status.ok, Status.created, Status.accepted, Status.no_content,
     Status.partial_content, Status.moved_permanently, Status.found, Status.see_other,
     Status.not_modified, Status.temporary_redirect, Status.permanent_redirect,
+    Status.switching_protocols, Status.upgrade_required,
     Status.bad_request, Status.unauthorized, Status.forbidden, Status.not_found,
     Status.method_not_allowed, Status.range_not_satisfiable, Status.conflict,
     Status.request_timeout, Status.payload_too_large, Status.expectation_failed,
@@ -90,4 +91,17 @@ pub use lib::sse {
     SseState, SseEvent, Sse.init, Sse.push,
     Sse.encode, Sse.encode_event, Sse.encode_comment, Sse.encode_retry,
     Sse.body, Sse.response,
+}
+
+pub use lib::websocket {
+    WsMessage, WsClose, WsInbound, WsOffer, WsOpcode, WsFrame, WsMask, WsDecoder, WsHeaders,
+    Ws.close_normal, Ws.close_going_away, Ws.close_protocol_error, Ws.close_unsupported,
+    Ws.close_no_status, Ws.close_abnormal, Ws.close_invalid_data, Ws.close_policy,
+    Ws.close_too_big, Ws.close_internal_error, WsClose.of,
+    Ws.guid, Ws.accept_key, Ws.has_token, Ws.header_list, Ws.key_valid, Ws.check_upgrade,
+    Ws.upgrade_required, Ws.select_protocol, Ws.accept_response, Ws.client_headers,
+    Ws.check_accept, Ws.valid_utf8,
+    Ws.apply_mask, Ws.encode_frame, Ws.message_frame, Ws.control_frame, Ws.encode_close,
+    Ws.close_code_valid, Ws.decode_close, WsOpcode.code, WsOpcode.of_code,
+    WsDecoder.new, Ws.push, WsMask.of_bytes, WsMask.to_bytes, WsHeaders.of,
 }
