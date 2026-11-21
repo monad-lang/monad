@@ -3,7 +3,12 @@
 /// reads), so no fibers are needed.
 
 use http::types {Transport}
-use http::websocket {WsClose, WsMessage, WsOpcode, Ws.control_frame, Ws.encode_close, WsOpcode.code}
+use http::websocket {
+    WsClose, WsMask, WsMessage, WsOpcode, Ws.control_frame, Ws.encode_close, Ws.encode_frame,
+    Ws.message_frame,
+    WsOpcode.code,
+}
+use http::types {Transport.write_bytes}
 use lib::websocket_io {
     WsConfig, WsConn, WsError, WsRole, Ws.close, Ws.drain, Ws.recv, Ws.recv_timeout, Ws.send_text,
     Ws.start,
@@ -208,6 +213,36 @@ def test_recv_timeout_none : IO Bool := do {
                         Stream.close client_sock;
                         Stream.close server_sock;
                         IO.pure ok
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A frame that arrives in the same read as the handshake (a client may send
+// immediately after its request) must not be lost: `Ws.start` feeds the
+// leftover to the decoder for both roles.
+#[test]
+def test_leftover_frames_are_kept : IO Bool := do {
+    let p <- pair;
+    match p {
+        Result.err _ => IO.pure false,
+        Result.ok pr => match pr {
+            Pair.pair client_sock server_sock => do {
+                // Write one unmasked text frame from the client side before
+                // the server session starts.
+                let frame := Ws.encode_frame (Option.some (WsMask.of_bytes [1u8, 2u8, 3u8, 4u8])) (Ws.message_frame (WsMessage.text "early"));
+                let t : Transport := Transport.plain client_sock;
+                let _ <- Transport.write_bytes t frame;
+                let sc <- Ws.start cfg WsRole.server (Transport.plain server_sock) frame;
+                match sc {
+                    Result.err _ => IO.pure false,
+                    Result.ok s => do {
+                        let got <- Ws.recv s;
+                        Stream.close client_sock;
+                        Stream.close server_sock;
+                        IO.pure (match got { Result.ok m => text_of m == Option.some "early", Result.err _ => false })
                     }
                 }
             }

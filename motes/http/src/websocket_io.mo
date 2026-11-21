@@ -120,17 +120,16 @@ pub def Ws.start (cfg : WsConfig) (role : WsRole) (tp : Transport) (leftover : L
     let c : WsConn :=
         { t := tc, role := role, cfg := cfg, decoder := d, pending := pending, closed := closed,
             lock := lock, seed := seed };
-    match Ws.is_server role {
-        true => IO.pure (Result.ok c),
-        false => do {
-            if List.is_empty leftover then IO.pure (Result.ok c)
-            else do {
-                let r <- Ws.pump c leftover;
-                match r {
-                    Result.err e => IO.pure (Result.err e),
-                    Result.ok _ => IO.pure (Result.ok c)
-                }
-            }
+    // Both roles feed the leftover before returning: a client's server may
+    // answer frames before the client reads its 101, and a client may send
+    // frames in the same packet as its upgrade request (the server's first
+    // read then returns head and frame together).
+    if List.is_empty leftover then IO.pure (Result.ok c)
+    else do {
+        let r <- Ws.pump c leftover;
+        match r {
+            Result.err e => IO.pure (Result.err e),
+            Result.ok _ => IO.pure (Result.ok c)
         }
     }
 }
