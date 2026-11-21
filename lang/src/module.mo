@@ -43,6 +43,7 @@ use lib::typecheck::macro_apply {expand_decl_gen_call}
 use lib::typecheck::macro_expand {MetaIntrinsicCtx, expand_term_with_meta}
 use lib::typecheck::macro_queue {DeclGenEntry, DeriveHandlerReg, TermMacroEntry, build_decl_gen_registry, build_term_macro_registry, check_macro_declarations, check_macro_uses, decls_have_live_term_call, derive_bridge_decls, derive_handler_regs_of_decls, expand_decls, expand_decls_terms_res, find_duplicate_derive_target, lookup_decl_gen, lookup_term_macro}
 use lib::typecheck::meta_eval {meta_eval_invoke}
+use lib::meta_env {decl_all_ref_names, decls_all_ref_names, meta_env_decls, term_ref_names}
 use lib::typecheck::meta_reflect {
     build_type_info_value, collect_inductives, find_inductive_by_bare_name,
     reify_decls_value_to_decls, term_free_var_name,
@@ -6593,6 +6594,98 @@ def expand_decls_graph_checked (scope : Scope) (whole_graph_decls : List Decl) (
         Option.none => expand_decls_graph_go scope whole_graph_decls target raw_target dep_modules,
     }
 
+/// The term pass, the reflect pass and the dependency pass of a graph
+/// expansion, with `dispatched` as the meta-def evaluation environment.
+def expand_with_env
+    (registry : List DeclGenEntry) (inds : List Inductive) (dispatched : List Decl)
+    (term_lookup : Identifier -> Option Term) (graph_subst : List Decl) (target_subst : List Decl)
+    (raw_subst : List Decl) (dep_modules : List ModuleInfo) (raw_changed : Bool)
+    : Result String GraphExpansion :=
+    let meta_ctx : MetaIntrinsicCtx := {
+        mic_dispatched := dispatched,
+        mic_inductives := inds,
+    } in
+    let expand_terms : Term -> Result String Term :=
+        fn t => expand_term_with_meta term_lookup meta_ctx t in
+    // The TERM pass runs first: a term macro may expand into the
+    // decl-position `reflect_type_info!` call the next match resolves
+    // (and, for `fmt!`, into a term-position `meta!` this same walk
+    // evaluates).
+    match expand_decls_terms_res expand_terms graph_subst {
+        Result.err e => Result.err e,
+        Result.ok graph_term =>
+            match expand_decls_terms_res expand_terms target_subst {
+                Result.err e => Result.err e,
+                Result.ok target_term =>
+                    match expand_decls_terms_res expand_terms raw_subst {
+                        Result.err e => Result.err e,
+                        Result.ok raw_term =>
+                            match resolve_reflect_calls inds dispatched graph_term {
+                                Result.err e => Result.err e,
+                                Result.ok graph_final =>
+                                    match resolve_reflect_calls inds dispatched target_term {
+                                        Result.err e => Result.err e,
+                                        // This branch always rewrites at
+                                        // least the `reflect_type_info!`
+                                        // call it just resolved.
+                                        Result.ok target_final =>
+                                            match resolve_reflect_calls inds dispatched raw_term {
+                                                Result.err e => Result.err e,
+                                                Result.ok raw_final =>
+                                                    match expand_dep_modules_raw registry inds dispatched term_lookup meta_ctx dep_modules {
+                                                        Result.err e => Result.err e,
+                                                        Result.ok raw_all_final =>
+                                                            let expanded : GraphExpansion :=
+                                                                { graph := graph_final, target := target_final, raw_target := raw_final, changed := true, raw_changed := raw_changed, raw_all := raw_all_final } in
+                                                            Result.ok expanded,
+                                                    },
+                                            },
+                                    },
+                            },
+                    },
+            },
+    }
+
+/// The names a graph expansion's meta-defs can be spelled with: the bodies
+/// of term macros and decl-gens, and every declaration that still holds a
+/// meta intrinsic or a live macro call.
+def meta_env_roots
+    (registry : List DeclGenEntry) (term_registry : List TermMacroEntry)
+    (term_lookup : Identifier -> Option Term) (graph_subst : List Decl) (target_subst : List Decl)
+    (raw_subst : List Decl) : List String :=
+    let acc0 : List String := decl_gen_roots registry (term_macro_roots term_registry List.empty) in
+    let acc1 : List String := call_site_roots term_lookup graph_subst acc0 in
+    call_site_roots term_lookup raw_subst (call_site_roots term_lookup target_subst acc1)
+
+#[partial]
+def term_macro_roots (entries : List TermMacroEntry) (acc : List String) : List String :=
+    match entries {
+        List.empty => acc,
+        List.cons e rest => match e {
+            TermMacroEntry.tm_entry _name body => term_macro_roots rest (term_ref_names body acc),
+        },
+    }
+
+#[partial]
+def decl_gen_roots (entries : List DeclGenEntry) (acc : List String) : List String :=
+    match entries {
+        List.empty => acc,
+        List.cons e rest => match e {
+            DeclGenEntry.dg_entry _name _params gen_decls _targets =>
+                decl_gen_roots rest (decls_all_ref_names gen_decls acc),
+        },
+    }
+
+#[partial]
+def call_site_roots (term_lookup : Identifier -> Option Term) (decls : List Decl) (acc : List String) : List String :=
+    match decls {
+        List.empty => acc,
+        List.cons d rest =>
+            if is_meta_intrinsic_call d || decls_have_live_term_call term_lookup [d]
+            then call_site_roots term_lookup rest (decl_all_ref_names d acc)
+            else call_site_roots term_lookup rest acc,
+    }
+
 def expand_decls_graph_go (scope : Scope) (whole_graph_decls : List Decl) (target : List Decl) (raw_target : List Decl) (dep_modules : List ModuleInfo) : Result String GraphExpansion :=
     let registry : List DeclGenEntry := build_decl_gen_registry whole_graph_decls in
     let graph_subst : List Decl := decl_gen_subst_decls registry whole_graph_decls in
@@ -6651,51 +6744,14 @@ def expand_decls_graph_go (scope : Scope) (whole_graph_decls : List Decl) (targe
         // this validation only ever ran when a `reflect_type_info!` call
         // was present in the graph, and the downstream gate runs the same
         // check unconditionally.
-        let dispatched := elaborate_module_decls_best_effort scope whole_graph_decls empty_locs in
-        let meta_ctx : MetaIntrinsicCtx := {
-            mic_dispatched := dispatched,
-            mic_inductives := inds,
-        } in
-        let expand_terms : Term -> Result String Term :=
-            fn t => expand_term_with_meta term_lookup meta_ctx t in
-        // The TERM pass runs first: a term macro may expand into the
-        // decl-position `reflect_type_info!` call the next match resolves
-        // (and, for `fmt!`, into a term-position `meta!` this same walk
-        // evaluates).
-        match expand_decls_terms_res expand_terms graph_subst {
-            Result.err e => Result.err e,
-            Result.ok graph_term =>
-                match expand_decls_terms_res expand_terms target_subst {
-                    Result.err e => Result.err e,
-                    Result.ok target_term =>
-                        match expand_decls_terms_res expand_terms raw_subst {
-                            Result.err e => Result.err e,
-                            Result.ok raw_term =>
-                                match resolve_reflect_calls inds dispatched graph_term {
-                                    Result.err e => Result.err e,
-                                    Result.ok graph_final =>
-                                        match resolve_reflect_calls inds dispatched target_term {
-                                            Result.err e => Result.err e,
-                                            // This branch always rewrites at
-                                            // least the `reflect_type_info!`
-                                            // call it just resolved.
-                                            Result.ok target_final =>
-                                                match resolve_reflect_calls inds dispatched raw_term {
-                                                    Result.err e => Result.err e,
-                                                    Result.ok raw_final =>
-                                                        match expand_dep_modules_raw registry inds dispatched term_lookup meta_ctx dep_modules {
-                                                            Result.err e => Result.err e,
-                                                            Result.ok raw_all_final =>
-                                                                let expanded : GraphExpansion :=
-                                                                    { graph := graph_final, target := target_final, raw_target := raw_final, changed := true, raw_changed := raw_changed, raw_all := raw_all_final } in
-                                                                Result.ok expanded,
-                                                        },
-                                                },
-                                        },
-                                },
-                        },
-                },
-        }
+        // Only what a meta-def can reach is elaborated. A def that fails to
+        // elaborate, or one the closure misses, fails the meta-def that
+        // lowers it, and that error fails the build.
+        let elab_one : Decl -> Result String Decl := fn d => elaborate_decl_with_scope d scope empty_locs in
+        let roots : List String :=
+            meta_env_roots registry term_registry term_lookup graph_subst target_subst raw_subst in
+        let narrow : List Decl := meta_env_decls elab_one whole_graph_decls roots in
+        expand_with_env registry inds narrow term_lookup graph_subst target_subst raw_subst dep_modules raw_changed
     else
         let unexpanded : GraphExpansion :=
             { graph := graph_subst, target := target_subst, raw_target := raw_subst, changed := substituted, raw_changed := raw_changed, raw_all := List.empty } in
