@@ -184,7 +184,7 @@ def Client.reader_write (r : Client.Reader) (bytes : List U8) : IO (Result Strin
 /// The port a scheme connects on when the URI names none: 443 for
 /// `https`, 80 for everything else.
 def Client.default_port (scheme : String) : U16 :=
-    if String.beq scheme "https"
+    if Bool.or (String.beq scheme "https") (String.beq scheme "wss")
     then 443u16
     else 80u16
 
@@ -331,7 +331,7 @@ def Client.connect_with_timeout_io (url : String) (timeout_ms : I64) (io_ms : I6
     match Uri.parse url {
         Result.err e => return (Result.err e),
         Result.ok u =>
-            if String.beq u.scheme "https"
+            if Bool.or (String.beq u.scheme "https") (String.beq u.scheme "wss")
             then Client.connect_tls u timeout_ms io_ms
             else Client.connect_tcp u timeout_ms io_ms
     }
@@ -408,6 +408,17 @@ def Client.connect_tls_done (hp : Pair String U16) (timeout_ms : I64) (tls_res :
             let socket : Transport := Transport.secure (fn n => Tls.read s n) (fn data => Tls.write s data) (fn _ => Tls.close s) pending wait_read wait_write in
             return (Result.ok ({ socket := socket, host := host, port := port, timeout_ms := timeout_ms } : Connection))
     }
+
+/// Open a connection to `url` and hand back only its transport (the
+/// WebSocket client speaks the upgrade on top of it). `wss` is TLS, `ws`
+/// plain, exactly like `https`/`http`.
+pub def Client.transport (url : String) (timeout_ms : I64) (io_ms : I64) : IO (Result String Transport) := do {
+    let c <- Client.connect_with_timeout_io url timeout_ms io_ms;
+    match c {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok conn => IO.pure (Result.ok conn.socket)
+    }
+}
 
 /// Write a request to the connection's socket (no read). Exposed so callers
 /// (and tests) can interleave writes with server-side reads/writes.

@@ -35,10 +35,11 @@ use lib::handler_t {HandlerT, HttpError}
 /// with the live connection. `protocols` is the server's subprotocol
 /// preference order; the first one the client offered is selected.
 ///
-/// A request that is not an upgrade (or offers none of `protocols` and is
-/// therefore refused by its caller) is answered here: 426 with
-/// `Sec-WebSocket-Version: 13`, 400 for a malformed key, 405 for a
-/// non-GET.
+/// A request that is not an upgrade is answered here: 426 with
+/// `Sec-WebSocket-Version: 13`, 400 for a malformed key, 405 for a non-GET.
+/// When `protocols` is non-empty it is also a requirement: a client that
+/// offered none of them is refused with 400 (an empty `protocols` accepts
+/// any client).
 pub def MoonWs.handler (cfg : WsConfig) (protocols : List String)
     (session : Ctx -> WsConn -> IO Unit) : HandlerT IO Response :=
     HandlerT.mk (fn (ctx : Ctx) => do {
@@ -53,6 +54,25 @@ pub def MoonWs.handler (cfg : WsConfig) (protocols : List String)
 def MoonWs.accept (ctx : Ctx) (offer : WsOffer) (cfg : WsConfig) (protocols : List String)
     (session : Ctx -> WsConn -> IO Unit) : IO (Result HttpError Response) := do {
     let protocol := Ws.select_protocol (Shared.of offer.protocols) protocols;
+    match MoonWs.protocol_refusal protocols protocol {
+        Option.some refusal => IO.pure (Result.ok refusal),
+        Option.none => MoonWs.schedule ctx offer protocol cfg session
+    }
+}
+
+/// A protocol requirement that was not met is a 400.
+def MoonWs.protocol_refusal (protocols : List String) (selected : Option String) : Option Response :=
+    match protocols {
+        List.empty => Option.none,
+        List.cons _ _ =>
+            match selected {
+                Option.some _ => Option.none,
+                Option.none => Option.some (Response.text 400u16 "a subprotocol is required")
+            }
+    }
+
+def MoonWs.schedule (ctx : Ctx) (offer : WsOffer) (protocol : Option String) (cfg : WsConfig)
+    (session : Ctx -> WsConn -> IO Unit) : IO (Result HttpError Response) := do {
     let res := Ws.accept_response offer.key protocol;
     let run := fn (t : Transport) (rest : List U8) => do {
         let started <- Ws.start cfg WsRole.server t rest;

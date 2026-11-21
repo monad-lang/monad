@@ -9,3 +9,5 @@
 // index here.
 //
 // What the file buys is that the mote has a target: `use moose` resolves.
+
+pub use lib::websocket {MooseWs.connect, MooseWs.connect_with_key, MooseWs.key_from, MooseWs.url_of}
