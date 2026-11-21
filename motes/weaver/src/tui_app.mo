@@ -38,7 +38,7 @@ use weaver::commands {
     Commands.plan_after_turn, Commands.setting_rows, Commands.cycle_setting, Commands.apply_setting, SettingRow, SettingKind,
     SessionPage, Commands.session_page, Commands.sessions_for, Commands.turns_label, Commands.turn_context,
     Commands.store_turn_plan, Commands.join_notes, Commands.note_into_state, Commands.persist_note, Commands.skill_turn, set_max_tokens,
-    Commands.send_history_for, Commands.output_ceiling_for,
+    Commands.send_history_for, Commands.output_ceiling_for, Commands.cutoff_continues,
 }
 use log::logger {Logger}
 use weaver::policy {Mode, Mode.show, Mode.cycle, Mode.is_auto, Policy.decide, Policy.unguarded, Decision}
@@ -1478,13 +1478,15 @@ pub def TuiApp.settings_options (rows : List SettingRow) : List DialogOption :=
                 o,
         }) rows
 
+/// No provider action row: the body already shows `provider/model`, and a
+/// row that only reprints the preset name kept the list one row too long
+/// for the tail actions to fit an 80x24 screen.
 def settings_actions : List DialogOption :=
     let a_model : DialogOption := { label := "Model... (opens the picker)", hint := "", key := "" } in
-    let a_provider : DialogOption := { label := "Provider (use /provider <name>)", hint := "", key := "" } in
     let a_save_p : DialogOption := { label := "Save to project (.weaver/config.toml)", hint := "", key := "" } in
     let a_save_g : DialogOption := { label := "Save to global (~/.weaver/config.toml)", hint := "", key := "" } in
     let a_close : DialogOption := { label := "Close", hint := "Esc", key := "" } in
-    [a_model, a_provider, a_save_p, a_save_g, a_close]
+    [a_model, a_save_p, a_save_g, a_close]
 
 /// One open of the dialog with `selected` highlighted and `status` as the
 /// subtitle. Answers the edited state and the chosen action's index
@@ -1530,9 +1532,8 @@ def row_key_at (i : I64) (rows : List SettingRow) : String :=
 def settings_choose_action (i : I64) (st : WeaverState) : IO WeaverMsg := do {
     let line : String :=
         if i == 0 then "/model"
-        else if i == 1 then "/provider"
-        else if i == 2 then "/settings save project"
-        else if i == 3 then "/settings save global"
+        else if i == 1 then "/settings save project"
+        else if i == 2 then "/settings save global"
         else "";
     if String.is_empty line
     then return (WeaverMsg.command_result (Effect.ok st "settings closed"))
@@ -1854,7 +1855,8 @@ def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : Strin
         let gated : RunState := { with_task with gate := Approver.gate approver,
             emit := progress_live log st.store, on_usage := on_usage,
             should_stop := stop, inbox := Inbox.seam st.store, side_spend := Subagent.drain spend, stopped := false,
-            send_history := Commands.send_history_for st, output_ceiling := Commands.output_ceiling_for st };
+            send_history := Commands.send_history_for st, output_ceiling := Commands.output_ceiling_for st,
+            continue_cutoffs := Commands.cutoff_continues };
         let ready : RunState := append_user gated text;
         ResultT.run (drive_loop ready)
     })

@@ -20,7 +20,8 @@ use weaver::commands {
     WeaverState, Effect, Commands.dispatch, Commands.context_used, Commands.context_percent,
     Commands.set_plan, Commands.plan_after_turn, SessionPage, Commands.session_page,
     Commands.turns_label, Commands.turn_context, Commands.sessions_for, Commands.place_suffix,
-    Commands.memory_text, Commands.store_plan, Commands.linked_plan, Commands.with_skills, Commands.skill_turn, Commands.builtin_names, Commands.apply_setting, Commands.cycle_setting, command_table, SlashCommand, MountedCommand, Commands.mount, Effect.ok,
+    Commands.memory_text, Commands.store_plan, Commands.linked_plan, Commands.with_skills, Commands.skill_turn, Commands.builtin_names, Commands.apply_setting, Commands.cycle_setting,
+    Commands.next_effort, command_table, SlashCommand, MountedCommand, Commands.mount, Effect.ok,
     Commands.send_history_projector, Commands.send_history_for, Commands.output_ceiling_for,
 }
 use loom::strand {Active, Disposed, Strand, StrandRun, Strand.run, Strand.sealed}
@@ -1355,6 +1356,27 @@ def test_setting_auto_safety_toggles : Bool :=
                     })),
         },
     }
+
+// ── reasoning effort ───────────────────────────────────────────────────
+
+def effort_after (st : WeaverState) (key : String) (value : String) : String :=
+    match Commands.apply_setting st key value {
+        Result.err _ => "ERR",
+        Result.ok pr => match pr { Pair.pair st2 _ => st2.run.session.config.effort },
+    }
+
+#[test]
+def test_setting_effort_accepts_the_levels : Bool :=
+    let st : WeaverState := state_of Mode.manual [] in
+    effort_after st "effort" "xhigh" == "xhigh"
+        && effort_after st "effort" "default" == ""
+        && effort_after st "effort" "loud" == "ERR"
+
+#[test]
+def test_setting_effort_cycles : Bool :=
+    Commands.next_effort "" == "low"
+        && Commands.next_effort "high" == "xhigh"
+        && Commands.next_effort "max" == ""
 
 // ── Phase 7: mounted commands ──────────────────────────────────────────
 

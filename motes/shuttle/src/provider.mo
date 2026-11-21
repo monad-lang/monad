@@ -23,7 +23,7 @@ use openai::client {OpenAI.complete_stream, OpenAI.list_models}
 use shuttle::wire::openai {OpenAI.encode_request, OpenAI.decode_response}
 use anthropic::client {Anthropic.complete_stream, Anthropic.list_models}
 use anthropic::types {MessagesRequest, MessagesResponse}
-use shuttle::wire::anthropic {Anthropic.encode_request, Anthropic.decode_response}
+use shuttle::wire::anthropic {Anthropic.encode_request, Anthropic.decode_response, Anthropic.with_effort}
 use shuttle::wire::mock {Mock.send}
 
 pub type Wire {
@@ -47,6 +47,9 @@ pub struct ProviderConfig {
     /// session with a legacy weaver cap is raised on resume only when this
     /// is true, so a deliberate small budget survives.
     max_tokens_auto : Bool := true,
+    /// The reasoning effort (Anthropic `output_config.effort`: low, medium,
+    /// high, xhigh, max); "" leaves it to the model's default.
+    effort : String := "",
 }
 
 def wire_tag (w : Wire) : String :=
@@ -85,7 +88,8 @@ pub def ProviderConfig.serialize_json (c : ProviderConfig) : Json :=
             Pair.pair "max_tokens" (Json.make_num_int c.max_tokens),
             Pair.pair "wire" (Wire.serialize_json c.wire),
             Pair.pair "thinking" (Json.make_bool c.thinking),
-            Pair.pair "max_tokens_auto" (Json.make_bool c.max_tokens_auto)]
+            Pair.pair "max_tokens_auto" (Json.make_bool c.max_tokens_auto),
+            Pair.pair "effort" (Json.make_str c.effort)]
 
 def config_field (obj : BTreeMap String Json) (name : String) : Result String Json :=
     match Json.object_get name obj {
@@ -166,7 +170,21 @@ def config_model_step (obj : BTreeMap String Json) (base_url : String) : Result 
 def config_of_object (obj : BTreeMap String Json) : Result String ProviderConfig :=
     match config_str_field obj "base_url" {
         Result.err e => Result.err e,
-        Result.ok base_url => config_model_step obj base_url,
+        Result.ok base_url => config_with_effort obj (config_model_step obj base_url),
+    }
+
+/// `effort` is OPTIONAL: a session saved before the field existed, or a
+/// junk value, decodes as "" (the model's default).
+def config_with_effort (obj : BTreeMap String Json) (r : Result String ProviderConfig) : Result String ProviderConfig :=
+    match r {
+        Result.err e => Result.err e,
+        Result.ok c =>
+            let e : String := match config_str_field obj "effort" {
+                Result.ok v => v,
+                Result.err _ => "",
+            } in
+            let out : ProviderConfig := { c with effort := e } in
+            Result.ok out,
     }
 
 pub def ProviderConfig.deserialize_json (j : Json) : Result String ProviderConfig :=
@@ -210,7 +228,8 @@ def anthropic_send_step (cfg : ProviderConfig) (key_opt : Option String) (req : 
 
 def send_anthropic (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) (stop : Unit -> IO Bool) (emit : String -> IO Unit) : ResultT String IO Turn := do {
     let key_opt <- ResultT.lift (ProviderConfig.effective_key cfg);
-    let req := Anthropic.encode_request cfg.model cfg.max_tokens cfg.thinking system tools history;
+    let req : MessagesRequest := Anthropic.with_effort cfg.effort
+        (Anthropic.encode_request cfg.model cfg.max_tokens cfg.thinking system tools history);
     let resp <- anthropic_send_step cfg key_opt req stop emit;
     ResultT.mk (return (Anthropic.decode_response resp))
 }

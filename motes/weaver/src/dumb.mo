@@ -22,7 +22,7 @@ use weaver::commands {
     WeaverState, Effect, set_fatal, Commands.dispatch, Commands.autocompact,
     Commands.plan_after_turn, Commands.set_plan, Commands.turn_context, Commands.store_turn_plan, Commands.skill_turn,
     Commands.context_used, Commands.context_percent, set_max_tokens, Commands.send_history_for,
-    Commands.output_ceiling_for,
+    Commands.output_ceiling_for, Commands.cutoff_continues,
 }
 use weaver::providers {Weaver.max_tokens_reclamp}
 use weaver::gate {Gate.weaver, ApproverConfig, Approver.linear, Approver.gate}
@@ -592,7 +592,7 @@ def gate_for (st : WeaverState) (line : String) (read : Unit -> IO (Option Strin
     let policy_gate : Gate := Gate.weaver st.mode st.grants (Place.cwd_of st.place) (Store.scratch_of st.store) (Option.some ctx) read write;
     let approver : Service ApproverConfig := Approver.linear policy_gate;
     let r2 : RunState := { base with gate := Approver.gate approver, send_history := Commands.send_history_for st,
-        output_ceiling := Commands.output_ceiling_for st };
+        output_ceiling := Commands.output_ceiling_for st, continue_cutoffs := Commands.cutoff_continues };
     IO.pure r2
 }
 

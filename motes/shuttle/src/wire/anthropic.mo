@@ -158,7 +158,7 @@ def system_blocks_of (ms : List Message) : List Block :=
             },
     }
 
-/// `effort` stays unset; `thinking` comes from the provider config
+/// `effort` is set by `Anthropic.with_effort`; `thinking` comes from the provider config
 /// (off by default -- it costs tokens and latency). The wire type
 /// carries both (`motes/anthropic`'s own tests pin the shapes).
 pub def Anthropic.encode_request (cfg_model : String) (max_tokens : I64) (thinking : Bool) (system : String) (tools : List ToolSpec) (history : List Message) : MessagesRequest :=
@@ -179,6 +179,13 @@ pub def Anthropic.encode_request (cfg_model : String) (max_tokens : I64) (thinki
         thinking := thinking,
         effort := Option.none,
     }
+
+/// The request with a reasoning effort; "" leaves it unset.
+pub def Anthropic.with_effort (effort : String) (req : MessagesRequest) : MessagesRequest :=
+    if String.is_empty effort then req
+    else
+        let out : MessagesRequest := { req with effort := Option.some effort } in
+        out
 
 /// `stop_reason` mapping -- `"refusal"` is a STOP REASON here, not an
 /// error: it arrives in an HTTP 200 body and the loop treats it as

@@ -302,7 +302,12 @@ never raised, and Ollama/mock are uncapped), and `/settings max_tokens`
 reports the effective value. A reply cut off at `max_tokens` with no text
 (the budget went to reasoning) or a half-written tool call is resent once at
 double the budget, up to the provider's cap (32768 when it has none), and a
-cut-off tool call is never run or saved.
+cut-off tool call is never run or saved. When that resend succeeds and the budget
+was weaver's own default, the raised budget is kept for the rest of the
+session (a budget set with `/settings max_tokens` is never changed). A reply
+cut off mid-text is continued: weaver adds a user line asking the model to
+pick up where it stopped, up to twice per turn, and the transcript notes
+each continuation.
 
 The provider decides which models exist: `/model` with no argument
 fetches its `/v1/models` list (the mock wire answers `mock` offline),
@@ -459,6 +464,9 @@ provider = "ollama"
 model = "qwen3:8b"     # used as-is; /model lists the API's catalogue
 max_turns = 500        # model calls per session (raise with /budget)
 thinking = false       # ask for the provider's reasoning channel
+effort = "high"        # reasoning effort: low | medium | high | xhigh | max
+                       # (unset = the model's default; Anthropic only --
+                       # the OpenAI-compatible wire ignores it)
 max_tokens = 16384     # per-response output budget (weaver's default; 512 cut off
                        # tool calls, and 4k cut whole-file edits mid-block)
 context_window = 128000  # the window autocompact measures against; when unset,

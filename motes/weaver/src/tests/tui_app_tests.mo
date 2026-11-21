@@ -1142,8 +1142,12 @@ def test_settings_options_make_the_number_rows_editable : Bool :=
         Option.some o => String.starts_with "Auto mode safety net: " o.label,
         Option.none => false,
     } in
-    let shape : Bool := List.length opts == 9 && editable_count opts == 5 in
-    shape && budget_shown && fold_shown && danger_cycles && safety_toggle
+    let effort_cycles : Bool := match List.get 9 opts {
+        Option.some o => String.starts_with "Reasoning effort: " o.label,
+        Option.none => false,
+    } in
+    let shape : Bool := List.length opts == 10 && editable_count opts == 5 in
+    shape && budget_shown && fold_shown && danger_cycles && safety_toggle && effort_cycles
 
 /// A repo-scoped picker offers the switch to every repo's sessions, just
 /// before Cancel.

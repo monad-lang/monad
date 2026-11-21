@@ -9,7 +9,7 @@ use shuttle::provider {ProviderConfig, Wire}
 use shuttle::tool {ToolSpec}
 use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
-use json::json {Json}
+use json::json {Json, Json.parse}
 use std::process {process_id}
 use std::list {List.any}
 
@@ -145,3 +145,22 @@ def test_config_codec_drops_direct_key : Bool :=
             Option.none => true,
         },
     }
+
+/// `effort` round-trips, and a config saved before the field existed
+/// decodes as "" (the model's default).
+#[test]
+def test_config_codec_effort : Bool :=
+    let high : ProviderConfig := { keyed_config with effort := "high" } in
+    let round : Bool := match ProviderConfig.deserialize_json (ProviderConfig.serialize_json high) {
+        Result.err _ => false,
+        Result.ok c => c.effort == "high",
+    } in
+    let legacy_text : String := r#"{"base_url":"x","model":"m","api_key_env":"K","max_tokens":8,"wire":"mock"}"# in
+    let legacy : Bool := match Json.parse legacy_text {
+        Result.err _ => false,
+        Result.ok j => match ProviderConfig.deserialize_json j {
+            Result.err _ => false,
+            Result.ok c => String.is_empty c.effort,
+        },
+    } in
+    round && legacy

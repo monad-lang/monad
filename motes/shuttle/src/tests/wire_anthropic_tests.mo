@@ -5,11 +5,11 @@
 /// deserialize_json` first, exactly as `Anthropic.complete` would),
 /// so what is asserted is the full wire-to-normal-form path, not just
 /// the adapter's own mapping.
-use shuttle::wire::anthropic {Anthropic.encode_request, Anthropic.decode_response}
+use shuttle::wire::anthropic {Anthropic.encode_request, Anthropic.decode_response, Anthropic.with_effort}
 use shuttle::message_types {Role, Content, StopReason}
 use shuttle::message {Message, Turn, Usage}
 use shuttle::tool {ToolSpec}
-use anthropic::types {AnthropicMessage, Block, MessagesRequest, MessagesResponse}
+use anthropic::types {AnthropicMessage, Block, MessagesRequest, MessagesResponse, MessagesRequest.serialize_json}
 use json::json {Json, Json.parse, Json.to_string}
 use std::list {}
 use std::map {Map, BTreeMap}
@@ -353,3 +353,12 @@ def test_encode_skips_an_empty_assistant_message : Bool :=
     let u2 : Message := { role := Role.user, content := [Content.text "continue"] } in
     let req : MessagesRequest := Anthropic.encode_request "claude-opus-5" 512 false "sys" [] [u1, empty, u2] in
     List.length req.messages == 2
+
+/// `output_config.effort` is sent only when an effort is set.
+#[test]
+def test_effort_rides_output_config_only_when_set : Bool :=
+    let base : MessagesRequest := Anthropic.encode_request "claude-opus-5" 512 true "sys" [] [] in
+    let plain : String := Json.to_string (MessagesRequest.serialize_json (Anthropic.with_effort "" base)) in
+    let set : String := Json.to_string (MessagesRequest.serialize_json (Anthropic.with_effort "low" base)) in
+    Bool.not (String.contains plain "output_config")
+        && String.contains set "\"effort\":\"low\""

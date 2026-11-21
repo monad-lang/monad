@@ -11,12 +11,13 @@ use shuttle::provider {ProviderConfig, Wire, Provider.silent_emit}
 use shuttle::gate {Gate.auto}
 use shuttle::registry {ToolRegistry}
 use shuttle::loop {
-    Loop.initial_state, Loop.iterate, Loop.truncated_unusable, Loop.raised_budget, Loop.drop_truncated_tool_use
+    Loop.initial_state, Loop.iterate, Loop.truncated_unusable, Loop.raised_budget, Loop.drop_truncated_tool_use,
+    Loop.kept_budget, Loop.should_continue_cutoff, Loop.continue_prompt
 }
 use shuttle::agent {Agent.exec, RunState}
 use json::json {Json, Json.make_array, Json.make_str, Json.to_string}
 use std::process {process_id}
-use std::list {List.any}
+use std::list {List.any, List.filter}
 
 def script_path : String :=
     String.concat "/tmp/shuttle_mock_turns_" (String.concat (I64.to_string process_id) ".json")
@@ -44,25 +45,61 @@ def cut_tool_call : Turn :=
     let cut : Content := Content.tool_use "call_1" "echo" (Json.make_str "{\"pa") in
     turn_of [Content.thinking "planning" "", cut] StopReason.max_tokens
 
-def write_script (t : Turn) : IO Unit :=
-    let text : String := Json.to_string (Json.make_array [Turn.serialize_json t]) in
+def write_script (t : Turn) : IO Unit := write_scripts [t]
+
+def write_scripts (ts : List Turn) : IO Unit :=
+    let text : String := Json.to_string (Json.make_array (List.map (fn (t : Turn) => Turn.serialize_json t) ts)) in
     do { let _w <- Test.write_fixture (Path.path script_path) text; return unit }
+
+def cut_text : Turn := turn_of [Content.text "the first half"] StopReason.max_tokens
+
+def done_text : Turn := turn_of [Content.text " and the rest"] StopReason.end_turn
+
+def is_stop (want : StopReason) (got : Option StopReason) : Bool :=
+    match got {
+        Option.none => false,
+        Option.some r => StopReason.tag r == StopReason.tag want,
+    }
+
+def is_user (m : Message) : Bool :=
+    match m.role { Role.user => true, _ => false }
+
+def first_text (cs : List Content) : String :=
+    match cs {
+        List.empty => "",
+        List.cons c _ => match c { Content.text t => t, _ => "" },
+    }
+
+def last_user_text (history : List Message) : String :=
+    match List.reverse (List.filter is_user history) {
+        List.empty => "",
+        List.cons m _ => first_text m.content,
+    }
 
 def mock_config : ProviderConfig :=
     { base_url := "mock", model := "mock", api_key_env := "SHUTTLE_UNUSED_KEY", max_tokens := 8,
         wire := Wire.mock, thinking := false }
 
+def auto_config : ProviderConfig := { mock_config with max_tokens_auto := true }
+
+def user_config : ProviderConfig := { mock_config with max_tokens_auto := false }
+
 def user_message : Message := { role := Role.user, content := [Content.text "go"] }
 
-def run_with_ceiling (ceiling : I64) : IO (Result String RunState) := do {
+def run_with (ceiling : I64) (continues : I64) : IO (Result String RunState) := do {
     let st0 : RunState := Loop.initial_state mock_config ToolRegistry.empty "sys" [user_message] 4 emit_tap Gate.auto;
-    let st : RunState := { st0 with output_ceiling := ceiling };
+    let st : RunState := { st0 with output_ceiling := ceiling, continue_cutoffs := continues };
     let r <- ResultT.run (Agent.exec Loop.iterate st);
     return (match r {
         Result.ok p => match p { Pair.pair s _ => Result.ok s },
         Result.err e => Result.err e,
     })
 }
+
+def run_with_ceiling (ceiling : I64) : IO (Result String RunState) := run_with ceiling 0
+
+def is_some (o : Option I64) : Bool :=
+    match o { Option.some _ => true, Option.none => false }
 
 def is_tool_use (c : Content) : Bool :=
     match c { Content.tool_use _ _ _ => true, _ => false }
@@ -131,3 +168,71 @@ def test_no_ceiling_no_resend : IO Bool := do {
                 && Bool.not (any_tool_use s.session.history),
     })
 }
+
+#[test]
+def test_should_continue_only_a_cut_with_text : Bool :=
+    Loop.should_continue_cutoff 1 cut_text
+        && Bool.not (Loop.should_continue_cutoff 0 cut_text)
+        && Bool.not (Loop.should_continue_cutoff 1 done_text)
+        && Bool.not (Loop.should_continue_cutoff 1 (turn_of [Content.thinking "reasoning" ""] StopReason.max_tokens))
+
+/// A reply cut off mid-text is continued: the history gains the continue
+/// line and the second half, and the run ends normally.
+#[test]
+def test_a_cut_text_reply_is_continued : IO Bool := do {
+    write_scripts [cut_text, done_text];
+    reset_tap;
+    let r <- run_with 0 1;
+    let tap <- read_tap;
+    return (match r {
+        Result.err _ => false,
+        Result.ok s =>
+            String.contains tap "continuing"
+                && s.session.turns == 2
+                && List.length s.session.history == 4
+                && last_user_text s.session.history == Loop.continue_prompt
+                && is_stop StopReason.end_turn s.last_stop
+                && s.continue_cutoffs == 0,
+    })
+}
+
+/// No continuations left: the cut reply is the final answer, as before.
+#[test]
+def test_no_continues_no_continuation : IO Bool := do {
+    write_scripts [cut_text, done_text];
+    reset_tap;
+    let r <- run_with 0 0;
+    let tap <- read_tap;
+    return (match r {
+        Result.err _ => false,
+        Result.ok s =>
+            Bool.not (String.contains tap "continuing")
+                && s.session.turns == 1
+                && is_stop StopReason.max_tokens s.last_stop,
+    })
+}
+
+/// A continuation cut off again stops once the allowance is spent, and the
+/// run still reports the cut-off.
+#[test]
+def test_a_continuation_cut_again_stops : IO Bool := do {
+    write_scripts [cut_text, cut_text, done_text];
+    reset_tap;
+    let r <- run_with 0 1;
+    return (match r {
+        Result.err _ => false,
+        Result.ok s => s.session.turns == 2 && is_stop StopReason.max_tokens s.last_stop,
+    })
+}
+
+/// The raised budget is kept only after a resend that worked, and only when
+/// weaver chose the budget.
+#[test]
+def test_kept_budget_rules : Bool :=
+    let kept : Option I64 := Loop.kept_budget auto_config 16 cut_tool_call done_text in
+    let kept_ok : Bool := match kept { Option.some n => n == 16, Option.none => false } in
+    let user_kept : Bool := is_some (Loop.kept_budget user_config 16 cut_tool_call done_text) in
+    let cut_again : Bool := is_some (Loop.kept_budget auto_config 16 cut_tool_call cut_tool_call) in
+    let no_resend : Bool := is_some (Loop.kept_budget auto_config 16 cut_text done_text) in
+    let no_ceiling : Bool := is_some (Loop.kept_budget auto_config 0 cut_tool_call done_text) in
+    kept_ok && Bool.not user_kept && Bool.not cut_again && Bool.not no_resend && Bool.not no_ceiling

@@ -215,9 +215,13 @@ def warnings_note (ws : List WeaverError) : Option String :=
 /// default, not the preset's 512 -- `/provider` preserves it through
 /// `inherit_thinking`, and `/settings` changes it live.
 def effective_cfg (s : Settings) (cfg : ProviderConfig) : ProviderConfig :=
-    let cfg1 : ProviderConfig := match s.thinking {
+    let cfg0 : ProviderConfig := match s.effort {
         Option.none => cfg,
-        Option.some b => { cfg with thinking := b },
+        Option.some e => { cfg with effort := e },
+    } in
+    let cfg1 : ProviderConfig := match s.thinking {
+        Option.none => cfg0,
+        Option.some b => { cfg0 with thinking := b },
     } in
     match s.max_tokens {
         // The DEFAULT is provider-aware, so it never trips the clamp note.

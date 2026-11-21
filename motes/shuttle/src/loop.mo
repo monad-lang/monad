@@ -297,12 +297,15 @@ def agent_send_run (s : RunState) : ResultT String IO (Pair RunState Turn) := do
     else do {
         let base : Session := s.session;
         let spent2 : Usage := usage_add s.session.spent turn.usage;
-        let session2 : Session := { base with turns := s.session.turns + 1, spent := spent2 };
+        let kept : Option I64 := Loop.kept_budget s.session.config s.output_ceiling turn0 turn;
+        let cfg2 : ProviderConfig := Loop.config_with_budget s.session.config kept;
+        let session2 : Session := { base with turns := s.session.turns + 1, spent := spent2, config := cfg2 };
         let s2 : RunState := { s with session := session2, turns_left := s.turns_left - 1, last_stop := Option.some turn.stop };
         // The usage hook is IO, so it runs inside the ResultT wrapper's own
         // do block (an `IO` bind in the ResultT do would not typecheck, and
         // `ResultT.lift` in a do block is the recorded compiled-backend trap).
         ResultT.mk (do {
+            let _ <- Loop.emit_kept s.emit kept;
             let _ <- s.on_usage spent2;
             return (Result.ok (Pair.pair s2 turn))
         })
@@ -381,6 +384,30 @@ def Loop.resend_truncated (s : RunState) (specs : List ToolSpec) (sent : List Me
             s.sleep_ms (if s.retries < 1 then 1 else s.retries) 1 2000 s.emit);
         return (Loop.with_dropped_usage turn res)
     })
+
+/// The raised budget to keep for the rest of the session: a resend ran,
+/// its reply was not cut again, and weaver (not the user) chose the
+/// budget. `none` keeps the config as it is.
+pub def Loop.kept_budget (cfg : ProviderConfig) (ceiling : I64) (first : Turn) (final : Turn) : Option I64 :=
+    let raised : I64 := Loop.raised_budget cfg.max_tokens ceiling in
+    let resent : Bool := Bool.and (Loop.truncated_unusable first) (I64.lt cfg.max_tokens raised) in
+    if Bool.and (Bool.and resent cfg.max_tokens_auto) (Bool.not (StopReason.is_truncated final.stop))
+    then Option.some raised
+    else Option.none
+
+def Loop.config_with_budget (cfg : ProviderConfig) (kept : Option I64) : ProviderConfig :=
+    match kept {
+        Option.none => cfg,
+        Option.some n =>
+            let out : ProviderConfig := { cfg with max_tokens := n } in
+            out,
+    }
+
+def Loop.emit_kept (emit : String -> IO Unit) (kept : Option I64) : IO Unit :=
+    match kept {
+        Option.none => IO.pure unit,
+        Option.some n => emit (String.concat_list ["\n[output limit is now ", I64.to_string n, " for this session]\n"]),
+    }
 
 /// The resend's result with the dropped attempt's usage folded in.
 def Loop.with_dropped_usage (first : Turn) (res : Result String Turn) : Result String Turn :=
@@ -777,8 +804,53 @@ def loop_dispatch_or_finish (turn : Turn) : Agent AgentAnswered AgentDone Unit :
     match turn.stop {
         StopReason.tool_use_stop =>
             Agent.bind (Loop.dispatch turn) (fn (results : List Content) => Agent.and_then (Loop.append_results turn results) Loop.iterate),
-        _ => Loop.finish turn,
+        _ => Agent.bind (Loop.check_cutoff turn) (fn (cont : Option Unit) => loop_finish_or_continue turn cont),
     }
+
+/// A reply cut off mid-text continues while the run allows it; any other
+/// finish is final.
+#[terminating]
+def loop_finish_or_continue (turn : Turn) (cont : Option Unit) : Agent AgentAnswered AgentDone Unit :=
+    match cont {
+        Option.some _ => Agent.and_then (Loop.continue_cutoff turn) Loop.iterate,
+        Option.none => Loop.finish turn,
+    }
+
+/// The line that asks the model to pick up a cut-off reply.
+pub def Loop.continue_prompt : String :=
+    String.concat "[your reply was cut off at the output limit; continue exactly where it stopped, "
+        "without repeating what you already wrote]"
+
+/// Should this run continue the reply? `some` when it was cut off with
+/// text in it and the run has continuations left.
+pub def Loop.check_cutoff (turn : Turn) : Agent AgentAnswered AgentAnswered (Option Unit) :=
+    Agent.agent (fn (s : RunState) =>
+        let go : Bool := Loop.should_continue_cutoff s.continue_cutoffs turn in
+        let out : Pair RunState (Option Unit) := Pair.pair s (if go then Option.some unit else Option.none) in
+        ResultT.mk (return (Result.ok out)))
+
+pub def Loop.should_continue_cutoff (left : I64) (turn : Turn) : Bool :=
+    Bool.and (I64.gt left 0)
+        (Bool.and (StopReason.is_truncated turn.stop) (content_has_text turn.message.content))
+
+/// Answered -> Idle: keep the cut-off reply, add the continue line, and
+/// spend one continuation.
+pub def Loop.continue_cutoff (turn : Turn) : Agent AgentAnswered AgentIdle Unit :=
+    Agent.agent (fn (s : RunState) => agent_continue_run turn s)
+
+def agent_continue_run (turn : Turn) (s : RunState) : ResultT String IO (Pair RunState Unit) :=
+    ResultT.mk (do {
+        let _ <- s.emit "\n[cut off at the output limit -- continuing]\n";
+        return (Result.ok (Pair.pair (continue_state turn s) unit))
+    })
+
+def continue_state (turn : Turn) (s : RunState) : RunState :=
+    let ask : Message := { role := Role.user, content := [Content.text Loop.continue_prompt] } in
+    let history2 : List Message := List.append s.session.history [turn.message, ask] in
+    let base : Session := s.session in
+    let session2 : Session := { base with history := history2 } in
+    let s2 : RunState := { s with session := session2, continue_cutoffs := s.continue_cutoffs - 1 } in
+    s2
 
 /// The value-level branch after one send: the stop check first, then the
 /// usual dispatch-or-finish.

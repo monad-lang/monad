@@ -1505,7 +1505,44 @@ pub def Commands.setting_rows (st : WeaverState) : List SettingRow :=
     let r7 : SettingRow := { key := "auto_on_danger", label := "Auto mode on a dangerous verdict", value := AutoDanger.show st.auto_on_danger, kind := SettingKind.setting_cycle } in
     let safe_text : String := if st.auto_safety then "on" else "off" in
     let r8 : SettingRow := { key := "auto_safety", label := "Auto mode safety net", value := safe_text, kind := SettingKind.setting_toggle } in
-    [r0, r1, r2, r3, r4, r5, r6, r7, r8]
+    let r9 : SettingRow := { key := "effort", label := "Reasoning effort", value := Commands.effort_text cfg.effort,
+        kind := SettingKind.setting_cycle } in
+    [r0, r1, r2, r3, r4, r5, r6, r7, r8, r9]
+
+/// The effort levels `/settings effort` accepts, in cycle order; ""
+/// (shown as "default") leaves the choice to the model.
+pub def Commands.effort_levels : List String := ["", "low", "medium", "high", "xhigh", "max"]
+
+pub def Commands.effort_text (e : String) : String := if String.is_empty e then "default" else e
+
+/// A typed effort value, or none when it is not a level.
+pub def Commands.parse_effort (v : String) : Option String :=
+    let t : String := String.trim v in
+    if Bool.or (t == "default") (Bool.or (t == "off") (String.is_empty t)) then Option.some ""
+    else if List.any (fn (l : String) => l == t) Commands.effort_levels then Option.some t
+    else Option.none
+
+/// The level after `e` in the cycle (wrapping to "default").
+pub def Commands.next_effort (e : String) : String := next_effort_in e Commands.effort_levels
+
+#[partial]
+def next_effort_in (e : String) (ls : List String) : String :=
+    match ls {
+        List.empty => "",
+        List.cons l rest =>
+            if l == e then (match rest { List.cons n _ => n, List.empty => "" })
+            else next_effort_in e rest,
+    }
+
+def set_effort (st : WeaverState) (e : String) : WeaverState :=
+    let cfg : ProviderConfig := st.run.session.config in
+    let cfg2 : ProviderConfig := { cfg with effort := e } in
+    let cur : Session := st.run.session in
+    let sess : Session := { cur with config := cfg2 } in
+    let base : RunState := st.run in
+    let run2 : RunState := { base with session := sess } in
+    let st2 : WeaverState := { st with run := run2 } in
+    st2
 
 /// The fold row's value: the resolved budget, or "auto" when the setting
 /// is unset and the window decides (0 means folding is off).
@@ -1586,8 +1623,14 @@ pub def Commands.apply_setting (st : WeaverState) (key : String) (value : String
         else if Bool.or (value == "off") (value == "false")
         then Result.ok (Pair.pair (set_auto_safety st false) "auto_safety: off (auto runs every tool unasked)")
         else Result.err "auto_safety: on | off"
+    else if key == "effort"
+    then match Commands.parse_effort value {
+        Option.none => Result.err "effort: default | low | medium | high | xhigh | max",
+        Option.some e => Result.ok (Pair.pair (set_effort st e) (String.concat "effort: " (Commands.effort_text e))),
+    }
     else Result.err (String.concat "unknown setting: "
-        (String.concat key " (mode | thinking | max_tokens | max_turns | context_window | compact_at | resume_fold | auto_on_danger | auto_safety)"))
+        (String.concat key (String.concat " (mode | thinking | effort | max_tokens | max_turns | context_window"
+            " | compact_at | resume_fold | auto_on_danger | auto_safety)")))
 
 /// Step a cycling setting (mode, thinking) to its next value: the
 /// dialog's Enter on those rows. Number settings are typed instead.
@@ -1600,6 +1643,8 @@ pub def Commands.cycle_setting (st : WeaverState) (key : String) : Result String
     then Commands.apply_setting st key (match st.auto_on_danger { AutoDanger.refuse_it => "ask", AutoDanger.ask_human => "deny" })
     else if key == "auto_safety"
     then Commands.apply_setting st key (if st.auto_safety then "off" else "on")
+    else if key == "effort"
+    then Commands.apply_setting st key (Commands.effort_text (Commands.next_effort st.run.session.config.effort))
     else Result.err (String.concat "not a cycling setting: " key)
 
 def settings_update (st : WeaverState) : SettingsUpdate :=
@@ -1616,6 +1661,7 @@ def settings_update (st : WeaverState) : SettingsUpdate :=
         resume_fold := st.resume_fold,
         auto_on_danger := Option.some (AutoDanger.show st.auto_on_danger),
         auto_safety := Option.some st.auto_safety,
+        effort := if String.is_empty cfg.effort then Option.none else Option.some cfg.effort,
     } in
     u
 
@@ -1667,6 +1713,9 @@ pub def Commands.send_history_projector (budget : I64) : List Message -> List Me
 /// would leave.
 pub def Commands.send_history_for (st : WeaverState) : List Message -> List Message :=
     Commands.send_history_projector (Compact.threshold st.context_window st.compact_at)
+
+/// How many times one turn continues a reply cut off mid-text.
+pub def Commands.cutoff_continues : I64 := 2
 
 /// The most a cut-off reply's resend may raise `max_tokens` to
 /// (`RunState.output_ceiling`): the provider's own cap, else 32768.
@@ -1801,7 +1850,8 @@ def set_resume_fold (st : WeaverState) (n : I64) : WeaverState :=
 /// chose.
 def inherit_thinking (st : WeaverState) (cfg : ProviderConfig) : ProviderConfig :=
     let cur : ProviderConfig := st.run.session.config in
-    let cfg2 : ProviderConfig := { cfg with thinking := cur.thinking, max_tokens := cur.max_tokens, max_tokens_auto := cur.max_tokens_auto } in
+    let cfg2 : ProviderConfig := { cfg with thinking := cur.thinking, max_tokens := cur.max_tokens,
+        max_tokens_auto := cur.max_tokens_auto, effort := cur.effort } in
     cfg2
 
 def cmd_quit (arg : String) (st : WeaverState) : IO (Result WeaverError Effect) :=

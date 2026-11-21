@@ -86,6 +86,9 @@ pub struct RunState {
     /// `max_tokens` stop with no text (all reasoning) or a half-written
     /// tool call is resent once at double the budget, up to this; 0 = never.
     output_ceiling : I64 := 0,
+    /// How many more times this run may continue a reply cut off mid-text
+    /// (a user line asks the model to pick up where it stopped); 0 = never.
+    continue_cutoffs : I64 := 0,
 }
 
 /// The usage hook's default: do nothing.
