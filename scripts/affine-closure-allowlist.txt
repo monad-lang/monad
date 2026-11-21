@@ -29,7 +29,6 @@ codegen 345
 eval 41
 lang 2368
 motes/fmt 34
-motes/json 11
 motes/log 10
 motes/lsp 97
 motes/toolkit 176

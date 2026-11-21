@@ -21,8 +21,8 @@ pub instance Serializer Toy {
 }
 
 pub instance Deserializer Toy {
-    def de_is_null (d : Toy) : Bool :=
-        match d { Toy.t_null => true, _ => false }
+    def de_is_null (d : Shared Toy) : Bool :=
+        match Shared.get d { Toy.t_null => true, _ => false }
     def de_get_bool (d : Toy) : Result String Bool :=
         match d { Toy.t_bool b => Result.ok b, _ => Result.err "expected a bool" }
     def de_get_int (d : Toy) : Result String I64 :=
@@ -31,8 +31,11 @@ pub instance Deserializer Toy {
         match d { Toy.t_string s => Result.ok s, _ => Result.err "expected a string" }
     def de_get_list (d : Toy) : Result String (List Toy) :=
         match d { Toy.t_list xs => Result.ok xs, _ => Result.err "expected a list" }
-    def de_get_field (d : Toy) (name : String) : Result String (Option Toy) :=
-        match d { Toy.t_object fields => Result.ok (toy_field_lookup fields name), _ => Result.err "expected an object" }
+    def de_get_field (d : Shared Toy) (name : String) : Result String (Option Toy) :=
+        match Shared.get d {
+            Toy.t_object fields => Result.ok (toy_field_lookup fields name),
+            _ => Result.err "expected an object",
+        }
 }
 
 def toy_field_lookup (fields : List (Pair String Toy)) (name : String) : Option Toy :=
@@ -53,9 +56,10 @@ pub def toy_ser_string (s : String) : Toy := Serializer.ser_string s
 pub def toy_ser_list (xs : List Toy) : Toy := Serializer.ser_list xs
 pub def toy_ser_object (fields : List (Pair String Toy)) : Toy := Serializer.ser_object fields
 
-pub def toy_de_is_null (d : Toy) : Bool := Deserializer.de_is_null d
+pub def toy_de_is_null (d : Shared Toy) : Bool := Deserializer.de_is_null d
 pub def toy_de_get_bool (d : Toy) : Result String Bool := Deserializer.de_get_bool d
 pub def toy_de_get_int (d : Toy) : Result String I64 := Deserializer.de_get_int d
 pub def toy_de_get_string (d : Toy) : Result String String := Deserializer.de_get_string d
 pub def toy_de_get_list (d : Toy) : Result String (List Toy) := Deserializer.de_get_list d
-pub def toy_de_get_field (d : Toy) (name : String) : Result String (Option Toy) := Deserializer.de_get_field d name
+pub def toy_de_get_field (d : Shared Toy) (name : String) : Result String (Option Toy) :=
+    Deserializer.de_get_field d name

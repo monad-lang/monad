@@ -43,11 +43,18 @@ pub class Serializer (S : Type) {
 /// lets `derive.mo` treat a defaulted/`Option`-typed field as optional:
 /// the caller decides what a missing key means, the format backend only
 /// reports whether the key was there.
+///
+/// `de_get_field` and `de_is_null` take the value as `Shared D`: they only
+/// READ it, and a derived decoder asks them about a value it goes on to
+/// use -- `de_get_field` once per field of the same object, `de_is_null`
+/// before decoding a present `Option` field. The borrow is in the
+/// signature, so the generated decoder lends the value (`Shared.of d`)
+/// instead of moving it more than once, which the affine rule rejects.
 pub class Deserializer (D : Type) {
-    def de_is_null (d : D) : Bool
+    def de_is_null (d : Shared D) : Bool
     def de_get_bool (d : D) : Result String Bool
     def de_get_int (d : D) : Result String I64
     def de_get_string (d : D) : Result String String
     def de_get_list (d : D) : Result String (List D)
-    def de_get_field (d : D) (name : String) : Result String (Option D)
+    def de_get_field (d : Shared D) (name : String) : Result String (Option D)
 }

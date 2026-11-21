@@ -246,7 +246,8 @@ def decode_value_expr (format_tag : String) (fmt_typ_name : String) (field_typ :
     let raw := e_var raw_name in
     match option_inner field_typ {
         Option.some inner =>
-            e_if (e_app (fmt_fn format_tag "_de_is_null") raw)
+            // Lent, not moved: `raw` is decoded below when it is not null.
+            e_if (e_app (fmt_fn format_tag "_de_is_null") (e_app (e_var "Shared.of") raw))
                 (result_ok (e_ctor "Option.none" List.empty))
                 (e_match (decode_value_expr format_tag fmt_typ_name inner raw_name)
                     (List.cons (match_arm "err" (List.cons "__e" List.empty) (result_err (e_var "__e")))
@@ -300,7 +301,9 @@ def missing_field_value (field_name : String) (field_typ : Expr) (default : Opti
 def decode_one_field (format_tag : String) (fmt_typ_name : String) (f : FieldInfo) (cont : Expr) : Expr :=
     let fname := field_name_of f in
     let ftyp := field_typ_of f in
-    let get_call := e_app (e_app (fmt_fn format_tag "_de_get_field") (e_var "d")) (e_str fname) in
+    // A borrow per field: `d` is read once per field and never moved.
+    let lent_d : Expr := e_app (e_var "Shared.of") (e_var "d") in
+    let get_call := e_app (e_app (fmt_fn format_tag "_de_get_field") lent_d) (e_str fname) in
     e_match get_call
         (List.cons (match_arm "err" (List.cons "__e" List.empty) (result_err (e_var "__e")))
             (List.cons (match_arm "ok" (List.cons "__maybe" List.empty)

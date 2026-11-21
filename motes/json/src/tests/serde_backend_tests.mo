@@ -31,12 +31,15 @@ struct WithRawJson {
 derive_json_serialize! WithRawJson
 derive_json_deserialize! WithRawJson
 
+/// Built fresh at each use: the record stores one and the check compares
+/// against another, and `Json` is affine.
+def passthrough_payload : Json := Json.array [Json.num (Json.Number.int 1), Json.str "x"]
+
 #[test]
 def test_derive_json_identity_passthrough_field : Bool :=
-    let inner : Json := Json.array [Json.num (Json.Number.int 1), Json.str "x"] in
-    let w : WithRawJson := { label := "x", payload := inner } in
+    let w : WithRawJson := { label := "x", payload := passthrough_payload } in
     match WithRawJson.deserialize_json (WithRawJson.serialize_json w) {
         Result.ok w2 =>
-            match w2 { WithRawJson.mk label payload => Json.beq payload inner },
+            match w2 { WithRawJson.mk label payload => Json.beq payload passthrough_payload },
         Result.err _ => false,
     }

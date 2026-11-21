@@ -266,32 +266,28 @@ def is_number_byte (b : U8) : Bool :=
                 (Bool.or (U8.beq b 43u8)
                     (Bool.or (U8.beq b 101u8) (U8.beq b 69u8)))))
 
+/// Split at the first `b`: the bytes before it, and the bytes after it if
+/// it occurs. With no `b`, the head is the whole input -- so a caller
+/// never needs the input again after the split.
 #[partial]
-def split_bytes_at (b : U8) (bs : List U8) (acc : List U8) : Option (Pair (List U8) (List U8)) :=
+def split_bytes_at (b : U8) (bs : List U8) (acc : List U8) : Pair (List U8) (Option (List U8)) :=
     match bs {
-        List.empty => Option.none,
+        List.empty => Pair.pair (List.reverse acc) Option.none,
         List.cons x rest =>
             if U8.beq x b
-            then Option.some (Pair.pair (List.reverse acc) rest)
+            then Pair.pair (List.reverse acc) (Option.some rest)
             else split_bytes_at b rest (List.cons x acc),
     }
 
-/// Split at 'e' or 'E'.
+/// Split at 'e' or 'E', in the shape of `split_bytes_at`.
 #[partial]
-def split_exp_bytes (bs : List U8) (acc : List U8) : Option (Pair (List U8) (List U8)) :=
+def split_exp_bytes (bs : List U8) (acc : List U8) : Pair (List U8) (Option (List U8)) :=
     match bs {
-        List.empty => Option.none,
+        List.empty => Pair.pair (List.reverse acc) Option.none,
         List.cons x rest =>
             if Bool.or (U8.beq x 101u8) (U8.beq x 69u8)
-            then Option.some (Pair.pair (List.reverse acc) rest)
+            then Pair.pair (List.reverse acc) (Option.some rest)
             else split_exp_bytes rest (List.cons x acc),
-    }
-
-#[partial]
-def bytes_len (bs : List U8) : I64 :=
-    match bs {
-        List.empty => 0,
-        List.cons _ rest => 1 + bytes_len rest,
     }
 
 #[terminating]
@@ -311,7 +307,7 @@ def digits_value (bs : List U8) : Option I64 :=
             }
             else if U8.beq b 43u8
             then parse_i64 (String.from_list rest)
-            else parse_i64 (String.from_list bs),
+            else parse_i64 (String.from_list (List.cons b rest)),
     }
 
 /// Assemble the value from its parts. `scale` is the exponent minus the
@@ -339,26 +335,30 @@ def number_value_of_token (tok : String) : Option Json.Number :=
         List.empty => Option.none,
         List.cons b rest =>
             let neg : Bool := U8.beq b 45u8 in
-            let body : List U8 := if neg then rest else String.to_list tok in
-            let exp_split : Option (Pair (List U8) (List U8)) := split_exp_bytes body List.empty in
-            let mant : List U8 := match exp_split {
-                Option.none => body,
-                Option.some p => p.first,
-            } in
-            let expv : Option I64 := match exp_split {
-                Option.none => Option.some 0i64,
-                Option.some p => digits_value p.second,
-            } in
-            let dot : Option (Pair (List U8) (List U8)) := split_bytes_at 46u8 mant List.empty in
-            let intpart : List U8 := match dot {
-                Option.none => mant,
-                Option.some p => p.first,
-            } in
-            let fracpart : List U8 := match dot {
-                Option.none => List.empty,
-                Option.some p => p.second,
-            } in
-            number_from_parts neg (digits_value intpart) (digits_value fracpart) (bytes_len fracpart) expv,
+            let body : List U8 := if neg then rest else List.cons b rest in
+            match split_exp_bytes body List.empty {
+                Pair.pair mant exp => number_from_mantissa neg mant (exponent_value exp),
+            },
+    }
+
+/// An absent exponent is 0.
+def exponent_value (exp : Option (List U8)) : Option I64 :=
+    match exp {
+        Option.none => Option.some 0i64,
+        Option.some e => digits_value e,
+    }
+
+/// Split the mantissa at '.' and assemble. An absent fraction is the empty
+/// run: value 0, length 0. The fraction is read twice (its value and its
+/// byte length), so it is held as a `String`, which is `Copy`.
+def number_from_mantissa (neg : Bool) (mant : List U8) (expv : Option I64) : Option Json.Number :=
+    match split_bytes_at 46u8 mant List.empty {
+        Pair.pair intpart frac => match frac {
+            Option.none => number_from_parts neg (digits_value intpart) (Option.some 0i64) 0i64 expv,
+            Option.some f =>
+                let fs : String := String.from_list f in
+                number_from_parts neg (digits_value intpart) (digits_value (String.to_list fs)) (String.length fs) expv,
+        },
     }
 
 def parse_number_token (r : ParseResult String) : ParseResult Json.Number :=
@@ -1056,8 +1056,8 @@ pub instance Json.Serializer Person {
 /// extra round of type inference this compiler isn't reliable at (see NOTE above).
 /// Json.deserialize_field is still useful on its own, at a single call site with an
 /// explicit result-type annotation (see test_deserialize_field_i64 below).
-def Person.get_name (obj : BTreeMap String Json) : Result String String :=
-    match Map.lookup "name" obj {
+def Person.get_name (obj : Shared (BTreeMap String Json)) : Result String String :=
+    match Map.lookup "name" (Shared.get obj) {
         some j => Json.get_str j,
         none => err "missing field: name"
     }
@@ -1078,7 +1078,7 @@ pub instance Json.Deserializer Person {
     def deserialize (j : Json) : Result String Person :=
         match Json.get_object j {
             ok obj =>
-                match Person.get_name obj {
+                match Person.get_name (Shared.of obj) {
                     ok name => Person.deserialize_with_name obj name,
                     err e => err e
                 },
@@ -1373,7 +1373,9 @@ def test_parse_unicode_escape_bmp : Bool :=
         Result.err _ => false,
         Result.ok j => match Json.get_str j {
             Result.err _ => false,
-            Result.ok s => Bool.and (String.length s == 2i64) (String.contains s "é"),
+            Result.ok raw =>
+                let s : String := raw in
+                Bool.and (String.length s == 2i64) (String.contains s "é"),
         },
     }
 

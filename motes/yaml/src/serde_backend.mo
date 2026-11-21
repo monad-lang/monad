@@ -43,14 +43,14 @@ pub instance Serializer Yaml {
 }
 
 pub instance Deserializer Yaml {
-    def de_is_null (d : Yaml) : Bool :=
-        match d { Yaml.null => true, _ => false }
+    def de_is_null (d : Shared Yaml) : Bool :=
+        match Shared.get d { Yaml.null => true, _ => false }
     def de_get_bool (d : Yaml) : Result String Bool := Yaml.get_bool d
     def de_get_int (d : Yaml) : Result String I64 := Yaml.get_int d
     def de_get_string (d : Yaml) : Result String String := Yaml.get_str d
     def de_get_list (d : Yaml) : Result String (List Yaml) := Yaml.get_seq d
-    def de_get_field (d : Yaml) (name : String) : Result String (Option Yaml) :=
-        match Yaml.get_mapping d {
+    def de_get_field (d : Shared Yaml) (name : String) : Result String (Option Yaml) :=
+        match Yaml.get_mapping (Shared.get d) {
             Result.err e => Result.err e,
             Result.ok m => Result.ok (Yaml.mapping_get name m),
         }
@@ -65,12 +65,13 @@ pub def yaml_ser_string (s : String) : Yaml := Serializer.ser_string s
 pub def yaml_ser_list (xs : List Yaml) : Yaml := Serializer.ser_list xs
 pub def yaml_ser_object (fields : List (Pair String Yaml)) : Yaml := Serializer.ser_object fields
 
-pub def yaml_de_is_null (d : Yaml) : Bool := Deserializer.de_is_null d
+pub def yaml_de_is_null (d : Shared Yaml) : Bool := Deserializer.de_is_null d
 pub def yaml_de_get_bool (d : Yaml) : Result String Bool := Deserializer.de_get_bool d
 pub def yaml_de_get_int (d : Yaml) : Result String I64 := Deserializer.de_get_int d
 pub def yaml_de_get_string (d : Yaml) : Result String String := Deserializer.de_get_string d
 pub def yaml_de_get_list (d : Yaml) : Result String (List Yaml) := Deserializer.de_get_list d
-pub def yaml_de_get_field (d : Yaml) (name : String) : Result String (Option Yaml) := Deserializer.de_get_field d name
+pub def yaml_de_get_field (d : Shared Yaml) (name : String) : Result String (Option Yaml) :=
+    Deserializer.de_get_field d name
 
 // The shared `derive_yaml_serialize!`/`derive_yaml_deserialize!` macros --
 // EVERY consumer uses THESE, never a per-file copy: this is a

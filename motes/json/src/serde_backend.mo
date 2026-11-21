@@ -44,14 +44,14 @@ pub instance Serializer Json {
 }
 
 pub instance Deserializer Json {
-    def de_is_null (d : Json) : Bool :=
-        match d { Json.null => true, _ => false }
+    def de_is_null (d : Shared Json) : Bool :=
+        match Shared.get d { Json.null => true, _ => false }
     def de_get_bool (d : Json) : Result String Bool := Json.get_bool d
     def de_get_int (d : Json) : Result String I64 := Json.get_num_i64 (Json.get_num d)
     def de_get_string (d : Json) : Result String String := Json.get_str d
     def de_get_list (d : Json) : Result String (List Json) := Json.get_array d
-    def de_get_field (d : Json) (name : String) : Result String (Option Json) :=
-        match Json.get_object d {
+    def de_get_field (d : Shared Json) (name : String) : Result String (Option Json) :=
+        match Json.get_object (Shared.get d) {
             Result.err e => Result.err e,
             Result.ok obj => Result.ok (Json.object_get name obj),
         }
@@ -69,12 +69,13 @@ pub def json_ser_string (s : String) : Json := Serializer.ser_string s
 pub def json_ser_list (xs : List Json) : Json := Serializer.ser_list xs
 pub def json_ser_object (fields : List (Pair String Json)) : Json := Serializer.ser_object fields
 
-pub def json_de_is_null (d : Json) : Bool := Deserializer.de_is_null d
+pub def json_de_is_null (d : Shared Json) : Bool := Deserializer.de_is_null d
 pub def json_de_get_bool (d : Json) : Result String Bool := Deserializer.de_get_bool d
 pub def json_de_get_int (d : Json) : Result String I64 := Deserializer.de_get_int d
 pub def json_de_get_string (d : Json) : Result String String := Deserializer.de_get_string d
 pub def json_de_get_list (d : Json) : Result String (List Json) := Deserializer.de_get_list d
-pub def json_de_get_field (d : Json) (name : String) : Result String (Option Json) := Deserializer.de_get_field d name
+pub def json_de_get_field (d : Shared Json) (name : String) : Result String (Option Json) :=
+    Deserializer.de_get_field d name
 
 // The shared `derive_json_serialize!`/`derive_json_deserialize!` macros
 // -- EVERY consumer (`motes/openai`, `motes/shuttle`, ...) uses THESE,
