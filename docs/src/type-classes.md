@@ -135,7 +135,7 @@ prelude ones are available without an import.
 | `Monad (M)` | `bind`, `pure` | requires `Applicative` |
 | `Comonad (W)` | `extract`, `duplicate`, `extend` | dual of `Monad`; no `Functor` superclass |
 | `IndexedMonad (M)` | `pure`, `bind`, `map`, `and_then`, `lift` | indexed by two phantom parameters |
-| `MonadState (M)` | `get`, `set`, `modify_get`, `modify`*, `get_map`* | * has a default body. The state type is an implicit forall, not a class parameter |
+| `MonadState (M) (S)` | `get`, `set`, `modify_get`, `modify`*, `get_map`* | * has a default body. `S` is the state type each instance fixes (`instance MonadState (State I64) I64`); calls resolve on `M` alone |
 | `MonadLift m n` | `monad_lift` | lift a computation from `m` into `n` |
 | `MonadLiftT m n` | `monad_lift_t` | transitive form; the reflexive `MonadLiftT m m` instance does not dispatch (see below) |
 | `IndexedMonadState (M)` | `get`, `set`, `modify_get` | indexed counterpart of `MonadState` |

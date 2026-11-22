@@ -4962,23 +4962,15 @@ def term_matches_carrier (wildcard_names : List Identifier) (ins_term : Term) (c
         _ => Similar.similar ins_term carrier,
     }
 
+/// The carrier answers the class's FIRST parameter, so only the first
+/// arg is compared. The rest are determined by it: `instance MonadState
+/// (State I64) I64` fixes `S` once `M` is known, and `HAdd A A A`'s later
+/// `A`s are the same wildcard.
 #[partial]
 def instance_args_match_carrier (ins : Instance) (carrier : Term) : Bool :=
-    match ins {
-        Instance.mk _ _ _ args _ _ _ =>
-            let wildcards := instance_wildcard_names ins in
-            all_args_match wildcards args carrier,
-    }
-
-#[partial]
-def all_args_match (wildcards : List Identifier) (args : List Term) (carrier : Term) : Bool :=
-    match args {
+    match ins.args {
         List.empty => false,
-        List.cons a rest =>
-            match rest {
-                List.empty => term_matches_carrier wildcards a carrier,
-                List.cons _ _ => term_matches_carrier wildcards a carrier && all_args_match wildcards rest carrier,
-            },
+        List.cons first _ => term_matches_carrier (instance_wildcard_names ins) first carrier,
     }
 
 #[partial]
@@ -5025,10 +5017,10 @@ def term_contains_wildcard (wildcards : List Identifier) (t : Term) : Bool :=
 /// reference) and was applied to each element instead of the element
 /// instance's (`__Dict_Show_I64`).
 ///
-/// Every arg is walked against the SAME carrier, mirroring
-/// `all_args_match`'s own convention: a multi-param class's instance
-/// (`instance [Add A] HAdd A A A`) names its wildcard in several
-/// positions, all of which the one carrier answers.
+/// Every arg is walked against the SAME carrier: a multi-param class's
+/// instance (`instance [Add A] HAdd A A A`) names its wildcard in several
+/// positions, all of which the one carrier answers, and a concrete later
+/// arg (`I64` in `MonadState (State I64) I64`) binds nothing.
 #[partial]
 def carrier_bindings (wildcards : List Identifier) (ins_args : List Term) (carrier : Term) : List (Pair Identifier Term) :=
     match ins_args {
@@ -6774,6 +6766,22 @@ def method_carrier_hint (cls : Class) (method_name : Identifier) (hint : Option 
                         Option.some carrier_name =>
                             lookup_binding (bind_term_vars (class_method_var_names cls sig) (final_result_type sig) full List.empty) carrier_name,
                     },
+            },
+    }
+
+/// Is the method's result headed by the class's first parameter (`get : M
+/// S`, `modify_get : (S -> Pair S A) -> M A`)? Then `method_carrier_hint`
+/// reads exactly that parameter off an expected result type, whatever the
+/// class's arity: `MonadState (M) (S)` resolves on `M` alone, while
+/// `HAdd.add : A -> B -> C` (result `C`, not the first parameter) does not
+/// qualify.
+pub def method_result_headed_by_carrier (cls : Class) (method_name : Identifier) : Bool :=
+    match class_method_declared_type cls method_name {
+        Option.none => false,
+        Option.some sig =>
+            match class_first_param_name cls {
+                Option.none => false,
+                Option.some carrier_name => app_head_is_param [carrier_name] (final_result_type sig),
             },
     }
 

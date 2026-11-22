@@ -107,11 +107,10 @@ pub class Comonad (W : Type -> Type) {
     def extend (f : W A -> B) (W A) : W B
 }
 
-/// State monad: thread state S through a monad M.
-/// Single-param class (M only) — S is an implicit forall variable,
-/// like Map's K/V, so `KnownInstances` can key on the monad's concrete
-/// head (e.g. `State`), not a variable.
-pub class MonadState (M : Type -> Type) {
+/// State monad: thread state S through a monad M. S is a class parameter
+/// because each instance fixes it (`instance MonadState (State I64) I64`);
+/// M stays first so `KnownInstances` keys on the monad's concrete head.
+pub class MonadState (M : Type -> Type) (S : Type) {
     def get : M S
     def set (s : S) : M Unit
     def modify_get (f : S -> Pair S A) : M A

@@ -22,7 +22,7 @@ use lang::scope {
     build_scope_def, carrier_bindings, class_method_declared_type, class_method_ref,
     class_default_carrier, class_name_eq,
     class_method_var_names, class_param_names, dict_binding_class_of, final_result_type,
-    method_carrier_hint, method_sig_carrier,
+    method_carrier_hint, method_result_headed_by_carrier, method_sig_carrier,
     dict_hint_marker_terms, dict_hint_name, dict_param_name, emitted_dict_constraints,
     find_constructor_in_inductive, find_matching_instance,
     flatten_call_spine, identifier_tail, inductive_has_constructor, instance_module_prefix,
@@ -1213,7 +1213,16 @@ def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDe
                         ok tt => if mentions_hole expected_type then ok (open_method_vars cls method_name tt) else direct,
                         err _ =>
                             match class_has_single_param cls {
-                                false => direct,
+                                // A multi-param class gets the result-type
+                                // channel only, and only when the result is
+                                // headed by its first parameter (`MonadState`).
+                                false =>
+                                    if method_result_headed_by_carrier cls method_name
+                                    then
+                                        resolve_with_carrier_hint class_name cls method_name expected_type scope locals
+                                            (method_carrier_hint cls method_name (Option.some (final_result_type expected_type)))
+                                            direct
+                                    else direct,
                                 true =>
                                     resolve_with_carrier_hint class_name cls method_name expected_type scope locals
                                         (method_carrier_hint cls method_name (Option.some (final_result_type expected_type)))
