@@ -166,9 +166,6 @@ pub struct TuiModel {
     /// title call, so it never blocks the turn's persistence or its
     /// dialog.
     title_due : Bool := false,
-    /// The submitted turn's generation (the stop signal's stale-request
-    /// guard).
-    turn_gen : I64 := 0,
     /// A dialog on the turn's fiber owns stdin and the terminal: the tick
     /// poll sets it, `reads_input` acks once after that, and the poll
     /// that sees the close clears it and forces a repaint.
@@ -242,7 +239,7 @@ pub def init_tui_model (log : Option Logger) (st : WeaverState) (rows : I64) (co
 
 /// The startup tail loaded from the session store.
 pub def init_tui_model_with (log : Option Logger) (st : WeaverState) (rows : I64) (cols : I64) (tr : Transcript) : TuiModel :=
-    let m : TuiModel := { state := st, prompt := Prompt.empty, pane := Pane.make tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, turn_pending := false, frame := 0, banner := Banner.shown, live := Live.idle, modal := false, plan_ready := false, title_due := false, turn_gen := 0, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, auto_start := Option.none, log := log, todos := List.empty, todos_open := true, tasks_running := 0, tasks_seen := List.empty, repaint_due := false, btw_ready := List.empty,
+    let m : TuiModel := { state := st, prompt := Prompt.empty, pane := Pane.make tr, rows := rows, cols := cols, ctrl_c_streak := 0, ctrl_d_streak := 0, turn_pending := false, frame := 0, banner := Banner.shown, live := Live.idle, modal := false, plan_ready := false, title_due := false, overlay_open := false, dialog_seq := 0, picker := Option.none, queued := List.empty, queued_ready := false, auto_start := Option.none, log := log, todos := List.empty, todos_open := true, tasks_running := 0, tasks_seen := List.empty, repaint_due := false, btw_ready := List.empty,
         booting := Option.none, boot_start := Option.none, boot_run := Option.none, boot_stage_ref := Option.none } in
     Model.refresh_rows m
 

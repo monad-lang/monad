@@ -35,7 +35,7 @@ def store_at (dir : String) : StoreState :=
     s
 
 def state_of (mode : Mode) (store : Option StoreState) : WeaverState :=
-    { run := run_of, mode := mode, provider := "mock", budget := 10, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, place := Option.none, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, fatal := Option.none, colors := false, name := Option.none, trusted := false, instructions := List.empty, instr_seen := Option.none, store := store, auto_on_danger := AutoDanger.refuse_it, verdicts := Option.none, plan_repo := Option.none, skills := List.empty, auto_start := false, auto_failures := Option.none, auto_safety := true, mounted := Option.none, auto_progress := Option.none, fatal_out := Option.none }
+    { run := run_of, mode := mode, provider := "mock", budget := 10, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, place := Option.none, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, fatal := Option.none, colors := false, name := Option.none, trusted := false, instructions := List.empty, instr_seen := Option.none, store := store, auto_on_danger := AutoDanger.refuse_it, verdicts := Option.none, plan_repo := Option.none, skills := List.empty, auto_start := false, auto_failures := Option.none, auto_safety := true, mounted := Option.none, auto_progress := Option.none, fatal_out := Option.none, cancel_slot := Option.none }
 
 def meta_of : PlanMeta :=
     { PlanMeta.empty with title := "Tracked", status := "in-progress", completion := 40, next_action := "write the test" }

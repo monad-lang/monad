@@ -66,6 +66,7 @@ use weaver::error {WeaverError, WeaverError.show}
 use weaver::tui_app {Tui.run_resumed, Tui.run_booting, Tui.booted}
 use weaver::model {Booted}
 use std::concurrent::combine {sleepIO}
+use std::concurrent::cancel {Cancel}
 use log::logger {Logger}
 use weaver::logs {LogSetup, Logs.setup, Logs.finish, Logs.info, Logs.error, Logs.log_rss}
 use weaver::process_tools {
@@ -453,7 +454,7 @@ def initial_state (p : Plan) (reg : ToolRegistry) (s : Settings) (colors : Bool)
     let left : I64 := if p.max_turns - session.turns < 0 then 0 else p.max_turns - session.turns in
     let run : RunState := { session := session, reg := reg, turns_left := left, emit := stdout_write, gate := Gate.auto, always := List.empty, retries := 3, sleep_ms := Dumb.poll_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false, last_stop := Option.none } in
     let prov : String := Weaver.provider_of p.provider session.config in
-    let st : WeaverState := { run := run, mode := p.mode, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, resume_fold := p.resume_fold, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, trusted := p.trusted, instructions := p.instructions, instr_seen := Option.none, store := store, auto_on_danger := auto_on_danger_of s, verdicts := Option.none, plan_repo := Option.none, skills := p.skills, auto_start := p.auto_start, auto_failures := Option.none, auto_safety := auto_safety_of s, mounted := Option.none, auto_progress := Option.none, fatal_out := Option.none, shell_notes := List.empty } in
+    let st : WeaverState := { run := run, mode := p.mode, provider := prov, budget := p.max_turns, context_window := p.context_window, compact_at := p.compact_at, resume_fold := p.resume_fold, plan := Option.none, last_context := 0, grants := grants, place := place, mcps := p.mcps, keys := s.api_keys, catalog := BTreeMap.empty, quit := false, colors := colors, fatal := Option.none, name := Option.none, trusted := p.trusted, instructions := p.instructions, instr_seen := Option.none, store := store, auto_on_danger := auto_on_danger_of s, verdicts := Option.none, plan_repo := Option.none, skills := p.skills, auto_start := p.auto_start, auto_failures := Option.none, auto_safety := auto_safety_of s, mounted := Option.none, auto_progress := Option.none, fatal_out := Option.none, shell_notes := List.empty, cancel_slot := Option.none } in
     st
 
 /// The dumb UI's palette switch: `NO_COLOR` set anywhere is off --
@@ -839,6 +840,10 @@ def prepare_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) 
     let progress <- Ref.new zero_progress;
     let no_fatal : Option WeaverError := Option.none;
     let fatal_slot <- Ref.new no_fatal;
+    // The running turn's cancellation token: `drive_tui` stores it, Esc and
+    // the monitor fire it.
+    let no_cancel : Option Cancel := Option.none;
+    let cancel_slot <- Ref.new no_cancel;
     let plan <- stored_plan o.store;
     // Phase 7's settings mount point: the knobs reach the session through
     // the service, so a plugin reads the same resolved record later.
@@ -847,7 +852,7 @@ def prepare_opened (setup : LogSetup) (colors : Bool) (p : Plan) (s : Settings) 
     let st1 : WeaverState := Commands.set_plan st0 plan;
     let name <- Commands.session_name st1;
     let repo <- plan_repo_of s place;
-    let st_r0 : WeaverState := { st1 with name := name, instr_seen := Option.some instr_seen, verdicts := Option.some verdicts, plan_repo := repo, auto_failures := Option.some failures, mounted := Option.some mounts, auto_progress := Option.some progress, fatal_out := Option.some fatal_slot };
+    let st_r0 : WeaverState := { st1 with name := name, instr_seen := Option.some instr_seen, verdicts := Option.some verdicts, plan_repo := repo, auto_failures := Option.some failures, mounted := Option.some mounts, auto_progress := Option.some progress, fatal_out := Option.some fatal_slot, cancel_slot := Option.some cancel_slot };
     // The prompt is rebuilt now that the store (and so the scratch path)
     // is known: the session object was built before it existed.
     let st_r : WeaverState := with_instructions st_r0 st_r0.instructions;

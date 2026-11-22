@@ -45,6 +45,8 @@ use std::concurrent::fiber {never_started}
 use tui::types {Event, Key}
 use tui::tui {Cmd}
 use std::list {List.filter, List.intercalate, List.any}
+use std::ref {Ref, Ref.new, Ref.set}
+use std::concurrent::cancel {Cancel, Cancel.new, Cancel.is_fired}
 
 // ── The offline state (commands_tests.mo's shape) ───────────────────────
 
@@ -58,7 +60,7 @@ def run_of : RunState :=
     { session := session_of, reg := ToolRegistry.empty, turns_left := 10, emit := fn (_ : String) => IO.pure unit, gate := Gate.auto, always := List.empty, retries := 1, sleep_ms := silent_sleep, on_usage := silent_usage, should_stop := silent_stop, inbox := silent_inbox, side_spend := silent_side_spend, stopped := false, last_stop := Option.none }
 
 def state_of (mode : Mode) : WeaverState :=
-    { run := run_of, mode := mode, provider := "mock", budget := 10, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, place := Option.none, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, name := Option.none, store := Option.none, auto_on_danger := AutoDanger.refuse_it, verdicts := Option.none, plan_repo := Option.none, skills := List.empty, auto_start := false, auto_failures := Option.none, auto_safety := true, trusted := false, instructions := List.empty, instr_seen := Option.none, mounted := Option.none, auto_progress := Option.none, fatal_out := Option.none }
+    { run := run_of, mode := mode, provider := "mock", budget := 10, context_window := 128000, compact_at := 80, plan := Option.none, last_context := 0, grants := Option.none, place := Option.none, mcps := List.empty, keys := BTreeMap.empty, catalog := BTreeMap.empty, quit := false, colors := false, fatal := Option.none, name := Option.none, store := Option.none, auto_on_danger := AutoDanger.refuse_it, verdicts := Option.none, plan_repo := Option.none, skills := List.empty, auto_start := false, auto_failures := Option.none, auto_safety := true, trusted := false, instructions := List.empty, instr_seen := Option.none, mounted := Option.none, auto_progress := Option.none, fatal_out := Option.none, cancel_slot := Option.none }
 
 def model_of (mode : Mode) : TuiModel :=
     let m : TuiModel := init_tui_model Option.none (state_of mode) 24 80 in
@@ -607,6 +609,34 @@ def test_escape_requests_stop_while_pending : Bool :=
         Pair.pair m2 cmd =>
             m2.live.stopping && cmd_is_inspect cmd
                 && String.contains (Live.status_text m2.live) "stopping",
+    }
+
+/// Esc fires the running turn's token: the same one its `should_stop`
+/// seam reads, so the model call, the tools and the subagents all see it.
+#[test]
+def test_escape_fires_the_turn_token : IO Bool := do {
+    let no_cancel : Option Cancel := Option.none;
+    let slot <- Ref.new no_cancel;
+    let tok <- Cancel.new;
+    let _ <- Ref.set slot (Option.some tok);
+    let with_slot : WeaverState := { (state_of Mode.manual) with cancel_slot := Option.some slot };
+    let base : TuiModel := enter_pending (model_of Mode.manual);
+    let m : TuiModel := { base with state := with_slot };
+    esc_fires m tok
+}
+
+def esc_fires (m : TuiModel) (tok : Cancel) : IO Bool :=
+    match TuiApp.update m (key_msg Key.escape) {
+        Pair.pair _ cmd => inspect_fires cmd tok,
+    }
+
+def inspect_fires (cmd : Cmd WeaverMsg) (tok : Cancel) : IO Bool :=
+    match cmd {
+        Cmd.inspect a => do {
+            let _msg <- a unit;
+            Cancel.is_fired tok
+        },
+        _ => IO.pure false,
     }
 
 // Esc with nothing to cancel is a no-op.

@@ -51,7 +51,8 @@ use std::path {Path, Path.of, Path.parent, Path.to_string, Path.beq, Path.file_n
 use std::io {IO.is_dir, IO.current_time_nano}
 use std::map {Map, BTreeMap}
 use std::list {List.intercalate, List.any, List.filter}
-use std::ref {Ref, Ref.get, Ref.modify}
+use std::ref {Ref, Ref.get, Ref.modify, Ref.set}
+use std::concurrent::cancel {Cancel}
 use loom::strand {Active, Strand, Strand.bracket}
 use parsec::number {parse_i64}
 use weaver::permissions {
@@ -168,6 +169,10 @@ pub struct WeaverState {
     /// Where the TUI writes a fatal error so `main` can exit 1 after the
     /// app closes (the app's own state is gone by then).
     fatal_out : Option (Ref (Option WeaverError)) := Option.none,
+    /// The running turn's cancellation token. The turn fiber stores its
+    /// token here before the loop runs; Esc and the monitor fire whatever
+    /// is there, and the turn's `should_stop` seam reads the same token.
+    cancel_slot : Option (Ref (Option Cancel)) := Option.none,
     /// `! cmd` results the model has not seen yet (`bang.mo`): they ride
     /// the next submitted line, then clear.
     shell_notes : List String := List.empty,

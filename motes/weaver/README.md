@@ -79,7 +79,6 @@ tui_app.mo         the TUI's IO half: TuiApp.update (closes over a
 providers.mo       the provider presets (host, key env var, wire)
 format.mo          token/elapsed display formatters (the thinking row)
 overlay.mo         the dialog/stdin-ownership handshake and close sequence
-stop.mo            the generation-guarded Esc stop signal
 logs.mo            the debug log path/level/events and crash detector
 procs.mo           detached background processes (pid/log/meta files)
 process_tools.mo   read_process / kill_process / list_processes
@@ -136,9 +135,10 @@ prompt size) and cumulative `spent` — they are different quantities:
 cumulative input sums the whole prompt of every model call. Keys typed mid-turn
 land in the input box, and Enter QUEUES them: the line is echoed as
 `queued: ...` and runs as the next turn when the running one ends (a
-failed or stopped turn starts it too). Esc asks the turn to stop: the row says `stopping…`, the in-flight model call or
-foreground tool finishes, and the turn ends at the next boundary with a
-`[stopped]` line -- the partial session is kept. A `shell`
+failed or stopped turn starts it too). Esc asks the turn to stop: the row says `stopping…`, and the running turn's
+cancel token is fired. A streaming model call ends within 200 ms even while
+the server is silent (a long reasoning pause), and the turn ends at the next
+boundary with a `[stopped]` line -- the partial session is kept. A `shell`
 command the turn waits on is killed at once, and a `read_process` wait
 ends (its task keeps running); background tasks keep running and retry
 backoffs are not interrupted, and a stalled provider read is bounded by

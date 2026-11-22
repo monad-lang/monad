@@ -81,7 +81,7 @@ def state_of (mode : Mode) (mcps : List String) : WeaverState := {
     store := Option.none,
     auto_start := false,
     auto_failures := Option.none,
-    mounted := Option.none, auto_on_danger := AutoDanger.refuse_it, verdicts := Option.none, plan_repo := Option.none, skills := List.empty, auto_safety := true, auto_progress := Option.none, fatal_out := Option.none, }
+    mounted := Option.none, auto_on_danger := AutoDanger.refuse_it, verdicts := Option.none, plan_repo := Option.none, skills := List.empty, auto_safety := true, auto_progress := Option.none, fatal_out := Option.none, cancel_slot := Option.none, }
 
 def run_of : RunState := {
     session := session_of,

@@ -88,7 +88,7 @@ use weaver::store {
 }
 use weaver::shell_tool {WeaverShell.impl, WeaverShell.fg_path, WeaverShell.request_background}
 use weaver::process_tools {ReadProcessTool.impl_with}
-use weaver::stop {Stop.predicate, Stop.request, Stop.reset}
+use std::concurrent::cancel {Cancel, Cancel.new, Cancel.fire, Cancel.as_stop}
 use weaver::trust {
     TrustOutcome, TrustStart, TrustAsk, Trust.dialog_lines, Trust.dialog_view, Trust.accept, Trust.declined,
 }
@@ -154,7 +154,6 @@ pub def Tui.run_resumed (log : Option Logger) (st : WeaverState) (tr : Transcrip
 def run_tui_with_size (log : Option Logger) (st : WeaverState) (tr : Transcript) (size : Pair I64 I64) : IO Bool :=
     match size {
         Pair.pair rows cols => do {
-            let _ <- Stop.reset st.store;
             let _ <- Overlay.reset st.store;
             // 100 ms: the tick is the spinner's frame clock AND the
             // async-turn poll cadence (a completed turn's result joins
@@ -218,7 +217,6 @@ def run_booting_with_size (log : Option Logger) (st : WeaverState) (start : Trus
 /// auto-start line, with its signal files reset (the placeholder had no
 /// store), bundled for the `booted` message.
 pub def Tui.booted (st : WeaverState) (tr : Transcript) (dispose : Unit -> IO Unit) : IO Booted := do {
-    let _ <- Stop.reset st.store;
     let _ <- Overlay.reset st.store;
     let older <- load_prompts st;
     let first <- if st.auto_start then AutoContinue.next st st.run else IO.pure Option.none;
@@ -1082,11 +1080,38 @@ def background_cmd (fg : Path) : Unit -> IO WeaverMsg :=
         IO.pure WeaverMsg.stop_sent
     }
 
-/// The Esc stop request's IO: write the generation into the signal file
-/// the running turn's `should_stop` seam reads.
-def stop_cmd (store : Option StoreState) (gen : I64) : Unit -> IO WeaverMsg :=
+/// Note the running turn's token where Esc and the monitor fire it. The
+/// turn's own `should_stop` seam reads the same token, so one `fire`
+/// reaches the model call, the tools and (through the seam) subagents.
+def set_cancel (slot : Option (Ref (Option Cancel))) (tok : Cancel) : IO Unit :=
+    match slot {
+        Option.none => IO.pure unit,
+        Option.some r => Ref.set r (Option.some tok),
+    }
+
+/// Fire whatever token the running turn left; nothing when none is set.
+/// (Split into helpers: a nested `match` inside a `do` does not parse.)
+def fire_cancel (slot : Option (Ref (Option Cancel))) : IO Unit :=
+    match slot {
+        Option.none => IO.pure unit,
+        Option.some r => fire_in r,
+    }
+
+def fire_in (r : Ref (Option Cancel)) : IO Unit := do {
+    let cur <- Ref.get r;
+    fire_token cur
+}
+
+def fire_token (cur : Option Cancel) : IO Unit :=
+    match cur {
+        Option.none => IO.pure unit,
+        Option.some tok => Cancel.fire tok,
+    }
+
+/// The Esc stop request's IO: fire the running turn's token.
+def stop_cmd (slot : Option (Ref (Option Cancel))) : Unit -> IO WeaverMsg :=
     fn (_ : Unit) => do {
-        Stop.request store gen;
+        fire_cancel slot;
         IO.pure WeaverMsg.stop_sent
     }
 
@@ -1102,7 +1127,7 @@ def escape_key (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     then
         let m2 : TuiModel := { m with live := Live.request_stop m.live } in
         Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m2)
-            (Cmd.inspect (stop_cmd m.state.store m.turn_gen))
+            (Cmd.inspect (stop_cmd m.state.cancel_slot))
     else Pair.pair (with_streak_reset (fn (mm : TuiModel) => mm) m) Cmd.none
 
 /// A screenful of CONTENT rows: the panel minus the indicator row it
@@ -1528,7 +1553,6 @@ def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :
     let block : List TLine := Transcript.next_block m.pane.transcript echo in
     let start : I64 := m.pane.transcript.total in
     let store : Option StoreState := m.state.store in
-    let gen : I64 := m.turn_gen + 1 in
     let m1 : TuiModel := with_streak_reset
         (fn (mm : TuiModel) => Model.append_block { mm with prompt := Prompt.submitted mm.prompt text, auto_start := Option.none } echo) m in
     let p1 : PaneModel := m1.pane in
@@ -1536,13 +1560,12 @@ def submit_line (m : TuiModel) (text : String) : Pair TuiModel (Cmd WeaverMsg) :
         { m1 with turn_pending := true, banner := Banner.hidden,
             state := if slash then m1.state else { (m1.state) with shell_notes := List.empty },
             live := Live.start (Option.some m.state.run.session.spent), pane := { p1 with scroll := 0 },
-            turn_gen := gen,
             modal := modal_command st text } in
     Pair.pair m2 (Cmd.perform_async
         (fn (_ : Unit) => do {
             persist_prompt store text;
             let _ <- write_echo store start block;
-            run_submitted_line m.log gen st text
+            run_submitted_line m.log st text
         })
         (turn_never_ran st.run))
 
@@ -1591,13 +1614,13 @@ def set_size (m : TuiModel) (rows : I64) (cols : I64) : TuiModel :=
 /// loop -- mirroring `dumb.mo`'s `route`/`command_turn`/`model_turn`,
 /// but folding a `WeaverMsg` back instead of writing through line
 /// seams.
-pub def run_submitted_line (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg := do {
+pub def run_submitted_line (log : Option Logger) (st : WeaverState) (text : String) : IO WeaverMsg := do {
     let t0 <- IO.current_time;
     let kind : String := if String.starts_with "/" text then "command" else "turn";
     Logs.info log (String.concat "ev=submit kind=" (String.concat kind
         (String.concat " bytes=" (I64.to_string (String.length text)))));
     Logs.log_rss log "submit";
-    let msg <- dispatch_submitted log gen st text;
+    let msg <- dispatch_submitted log st text;
     let msg2 <- with_auto_continue st msg;
     let t1 <- IO.current_time;
     Logs.info log (String.concat "ev=submit_end elapsed_ms=" (I64.to_string (t1 - t0)));
@@ -1753,7 +1776,7 @@ def settings_choose_action (i : I64) (st : WeaverState) : IO WeaverMsg := do {
     }
 }
 
-def dispatch_submitted (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg :=
+def dispatch_submitted (log : Option Logger) (st : WeaverState) (text : String) : IO WeaverMsg :=
     if text == "/resume"
     then resume_dialog_step st
     else if text == "/plans"
@@ -1765,17 +1788,17 @@ def dispatch_submitted (log : Option Logger) (gen : I64) (st : WeaverState) (tex
     else if plan_dialog_wanted st text
     then plan_dialog_step st text
     else if String.starts_with "/" text
-    then slash_step_tui log gen st text
-    else model_step_tui log gen st text
+    then slash_step_tui log st text
+    else model_step_tui log st text
 
 /// A `/` line: a skill's `/<name>` runs a turn with its instructions;
 /// anything else is a command.
-def slash_step_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg := do {
+def slash_step_tui (log : Option Logger) (st : WeaverState) (text : String) : IO WeaverMsg := do {
     let sk <- Commands.skill_turn st text;
     match sk {
         Option.none => command_step_tui st text,
         Option.some r => match r {
-            Result.ok prompt => model_step_tui log gen st prompt,
+            Result.ok prompt => model_step_tui log st prompt,
             Result.err e => IO.pure (WeaverMsg.command_result (Effect.ok st (String.concat "skill: " e))),
         },
     }
@@ -1892,12 +1915,12 @@ def command_msg (st : WeaverState) (r : Result WeaverError Effect) : WeaverMsg :
         Result.ok e => WeaverMsg.command_result e,
     }
 
-def model_step_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg :=
+def model_step_tui (log : Option Logger) (st : WeaverState) (text : String) : IO WeaverMsg :=
     if st.run.turns_left < 1
     then IO.pure (WeaverMsg.turn_result st.run [TLine.plain "turn budget spent -- raise it with /budget <n>, or /clear"] List.empty st.last_context Option.none)
-    else drive_turn_tui log gen st text
+    else drive_turn_tui log st text
 
-def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) : IO WeaverMsg := do {
+def drive_turn_tui (log : Option Logger) (st : WeaverState) (text : String) : IO WeaverMsg := do {
     // Autocompact before the user message lands: the post-turn deltas
     // assume append-only history, so compaction cannot happen mid-turn.
     let ac <- Commands.autocompact st;
@@ -1922,11 +1945,11 @@ def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
             let instr <- Instructions.take_notes st2.instr_seen;
             let spend <- Ref.new usage_zero;
             let line_text : String := Inbox.with_notes (List.append (List.append instr notes) st2.shell_notes) text;
-            let first <- ResultT.run (drive_tui log gen st2 line_text on_u spend);
+            let first <- ResultT.run (drive_tui log st2 line_text on_u spend);
             // A provider 400 that names a lower output limit re-clamps and
             // retries ONCE, exactly as dumb mode does; the note rides the
             // transcript with the turn.
-            let retried <- retry_clamped_tui log gen st2 line_text on_u spend first;
+            let retried <- retry_clamped_tui log st2 line_text on_u spend first;
             let r : Result WeaverError RunState := match retried { Pair.pair res _ => res };
             let clamp_note : Option String := match retried { Pair.pair _ n => n };
             let last <- UsageTracker.last tracker;
@@ -1950,7 +1973,7 @@ def drive_turn_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : 
 /// the turn once, from the PRE-turn state (the failed attempt's state is
 /// gone, and the user message was never persisted). The note travels back
 /// with the result so the transcript says what happened.
-def retry_clamped_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) (on_u : Usage -> IO Unit) (spend : Ref Usage) (r : Result WeaverError RunState) : IO (Pair (Result WeaverError RunState) (Option String)) :=
+def retry_clamped_tui (log : Option Logger) (st : WeaverState) (text : String) (on_u : Usage -> IO Unit) (spend : Ref Usage) (r : Result WeaverError RunState) : IO (Pair (Result WeaverError RunState) (Option String)) :=
     match r {
         Result.ok _ => IO.pure (Pair.pair r Option.none),
         Result.err e =>
@@ -1959,7 +1982,7 @@ def retry_clamped_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text
                 Option.some pr => match pr {
                     Pair.pair n note => do {
                         let st2 : WeaverState := set_max_tokens st n;
-                        let r2 <- ResultT.run (drive_tui log gen st2 text on_u spend);
+                        let r2 <- ResultT.run (drive_tui log st2 text on_u spend);
                         IO.pure (Pair.pair r2 (Option.some note))
                     },
                 },
@@ -2048,9 +2071,13 @@ def ask_seam (colors : Bool) (store : Option StoreState) : AskSeam :=
 /// screen mid-frame -- the recorded UI-repair finding). Drive the loop
 /// -- `append_user`/`drive_loop` are `dumb.mo`'s own halves, reused
 /// as-is (Phase 9: `drive_loop` is already `ResultT WeaverError IO`).
-def drive_tui (log : Option Logger) (gen : I64) (st : WeaverState) (text : String) (on_usage : Usage -> IO Unit) (spend : Ref Usage) : ResultT WeaverError IO RunState :=
+def drive_tui (log : Option Logger) (st : WeaverState) (text : String) (on_usage : Usage -> IO Unit) (spend : Ref Usage) : ResultT WeaverError IO RunState :=
     ResultT.mk (do {
-        let stop : Unit -> IO Bool := Stop.predicate st.store gen;
+        // One token per attempt: Esc fires it, the loop's seam reads it, and
+        // a retry after a re-clamp gets a token of its own.
+        let tok <- Cancel.new;
+        let _ <- set_cancel st.cancel_slot tok;
+        let stop : Unit -> IO Bool := Cancel.as_stop tok;
         let with_task : RunState := { (st.run) with reg := Instructions.attaching st.instr_seen st.place st.trusted
             (ToolRegistry.register (SkillTool.impl st.skills) (ToolRegistry.register (AskTool.impl st.mode (Option.some (ask_seam st.colors st.store))) (ToolRegistry.register (PlanTool.impl st.store st.plan_repo) (ToolRegistry.register (TodoTool.impl st.store)
                 (ToolRegistry.register (WeaverShell.impl log stop st.store)
@@ -3044,15 +3071,14 @@ def monitor_wanted (text : String) : Bool :=
 
 def open_monitor (m : TuiModel) : Pair TuiModel (Cmd WeaverMsg) :=
     let st : WeaverState := m.state in
-    let gen : I64 := m.turn_gen in
     let pending : Bool := m.turn_pending in
     let cleared : TuiModel := with_streak_reset (fn (mm : TuiModel) => { mm with prompt := Prompt.submitted mm.prompt "/tasks" }) m in
-    Pair.pair cleared (Cmd.perform (fn (_ : Unit) => monitor_run m.log st gen pending))
+    Pair.pair cleared (Cmd.perform (fn (_ : Unit) => monitor_run m.log st pending))
 
-def monitor_run (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) : IO WeaverMsg := do {
+def monitor_run (log : Option Logger) (st : WeaverState) (pending : Bool) : IO WeaverMsg := do {
     persist_prompt st.store "/tasks";
     Overlay.monitor_open st.store;
-    let notes <- monitor_loop log st gen pending (MonitorView.mon_list 0) false List.empty;
+    let notes <- monitor_loop log st pending (MonitorView.mon_list 0) false List.empty;
     Overlay.monitor_close st.store;
     clear_terminal;
     IO.pure (WeaverMsg.monitor_closed notes)
@@ -3069,24 +3095,24 @@ pub type MonitorView {
 /// One view per call, one self-call: a monitor left open polls nothing
 /// and nests nothing. `hide` is the list's "hide finished" toggle.
 #[partial]
-def monitor_loop (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) (view : MonitorView) (hide : Bool) (notes : List String) : IO (List String) :=
+def monitor_loop (log : Option Logger) (st : WeaverState) (pending : Bool) (view : MonitorView) (hide : Bool) (notes : List String) : IO (List String) :=
     match view {
         MonitorView.mon_closed => IO.pure notes,
         _ => do {
-            let step <- monitor_step log st gen pending view hide;
+            let step <- monitor_step log st pending view hide;
             match step {
                 Pair.pair next rest => match rest {
-                    Pair.pair hide2 more => monitor_loop log st gen pending next hide2 (List.append notes more),
+                    Pair.pair hide2 more => monitor_loop log st pending next hide2 (List.append notes more),
                 },
             }
         },
     }
 
-def monitor_step (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) (view : MonitorView) (hide : Bool) : IO (Pair MonitorView (Pair Bool (List String))) :=
+def monitor_step (log : Option Logger) (st : WeaverState) (pending : Bool) (view : MonitorView) (hide : Bool) : IO (Pair MonitorView (Pair Bool (List String))) :=
     match view {
         MonitorView.mon_list selected => monitor_list st selected hide,
         MonitorView.mon_detail id => do {
-            let r <- monitor_detail log st gen pending id;
+            let r <- monitor_detail log st pending id;
             match r {
                 Pair.pair v more => IO.pure (Pair.pair v (Pair.pair hide more)),
             }
@@ -3209,15 +3235,15 @@ def task_by_id (id : String) (ts : List TaskEntry) : Option TaskEntry :=
 
 /// One task: its facts and output (a process's log tail, a subagent's
 /// answer), with Kill/Stop while it runs, Refresh, and Back.
-def monitor_detail (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) (id : String) : IO (Pair MonitorView (List String)) := do {
+def monitor_detail (log : Option Logger) (st : WeaverState) (pending : Bool) (id : String) : IO (Pair MonitorView (List String)) := do {
     let ts <- Tasks.list st.store;
     match task_by_id id ts {
         Option.none => IO.pure (Pair.pair (MonitorView.mon_list 0) List.empty),
-        Option.some t => monitor_detail_of log st gen pending t,
+        Option.some t => monitor_detail_of log st pending t,
     }
 }
 
-def monitor_detail_of (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) (t : TaskEntry) : IO (Pair MonitorView (List String)) := do {
+def monitor_detail_of (log : Option Logger) (st : WeaverState) (pending : Bool) (t : TaskEntry) : IO (Pair MonitorView (List String)) := do {
     let now <- IO.current_time_nano;
     let output <- task_output t;
     let body : List String := List.append (TuiApp.task_facts now t) (List.cons "" output);
@@ -3225,7 +3251,7 @@ def monitor_detail_of (log : Option Logger) (st : WeaverState) (gen : I64) (pend
     let pr <- Dialog.modal_refresh 10 (detail_refresh st.store t.id) (paint_dialog st.colors) d;
     let step : DialogStep := match pr { Pair.pair _ s => s };
     match TuiApp.detail_action t step {
-        DetailAction.detail_kill => task_kill log st gen pending t,
+        DetailAction.detail_kill => task_kill log st pending t,
         DetailAction.detail_refresh => IO.pure (Pair.pair (MonitorView.mon_detail t.id) List.empty),
         DetailAction.detail_back => IO.pure (Pair.pair (MonitorView.mon_list 0) List.empty),
     }
@@ -3292,7 +3318,7 @@ pub def TuiApp.detail_action (t : TaskEntry) (step : DialogStep) : DetailAction 
     }
 
 /// Kill a process (its whole group), or ask the running turn to stop.
-def task_kill (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bool) (t : TaskEntry) : IO (Pair MonitorView (List String)) :=
+def task_kill (log : Option Logger) (st : WeaverState) (pending : Bool) (t : TaskEntry) : IO (Pair MonitorView (List String)) :=
     match t.proc {
         Option.some e => do {
             let r <- Procs.kill e;
@@ -3306,7 +3332,7 @@ def task_kill (log : Option Logger) (st : WeaverState) (gen : I64) (pending : Bo
         Option.none =>
             if pending
             then do {
-                let _ <- Stop.request st.store gen;
+                let _ <- fire_cancel st.cancel_slot;
                 IO.pure (Pair.pair (MonitorView.mon_detail t.id) ["asked the turn running the subagent to stop"])
             }
             else IO.pure (Pair.pair (MonitorView.mon_detail t.id) List.empty),
