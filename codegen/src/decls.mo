@@ -15,9 +15,10 @@ use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::list {List.filter_map}
 use lang::types {
     Attribute, Decl, DebugName, Def, Identifier, Inductive, Multiplicity, NamePath, Struct,
-    StructField, Term, Visibility, concrete, has_attr, id_eq, sentinel,
+    StructField, Term, Visibility, concrete, has_attr, id_eq, sentinel, show_name_path,
 }
 use lang::module {ModuleInfo}
+use lang::scope {struct_synthetic_inductive}
 use lib::symbols {def_symbol_name}
 use lang::name_text {unqualify_def_name}
 use lib::free_names {collect_referenced_names}
@@ -86,6 +87,29 @@ def struct_of_decl (d : Decl) : Option Struct := match d {
 #[partial]
 def extract_structs (decl_list : List Decl) : List Struct :=
     List.filter_map struct_of_decl decl_list
+
+/// Every inductive a `Term.elim` can name: the declared ones, and each
+/// struct's synthetic one-constructor inductive (`struct_synthetic_inductive`).
+#[partial]
+def elim_inductives (decl_list : List Decl) : List Inductive :=
+    List.append (extract_inductives decl_list) (List.map struct_synthetic_inductive (extract_structs decl_list))
+
+/// `inds` keyed the way `Elim.inductive` is looked up (`elim_inductive_find`).
+/// Emit (`CodegenCtx.inductives`) and the gate (`validate_elims_well_formed`)
+/// share it, so the gate accepts exactly the `Elim`s emit can compile.
+#[partial]
+def elim_inductive_table (inds : List Inductive) : HashMap String Inductive :=
+    elim_inductive_table_go inds str_map_empty
+
+#[partial]
+def elim_inductive_table_go (inds : List Inductive) (acc : HashMap String Inductive) : HashMap String Inductive :=
+    match inds {
+        List.empty => acc,
+        List.cons ind rest => elim_inductive_table_go rest (str_map_insert (show_name_path ind.name) ind acc),
+    }
+
+def elim_inductive_find (table : HashMap String Inductive) (name : NamePath) : Option Inductive :=
+    str_map_lookup (show_name_path name) table
 
 /// Restricts `decl_list` to the transitive closure of Defs reachable from a
 /// top-level `main`, plus every Inductive (kept unconditionally --

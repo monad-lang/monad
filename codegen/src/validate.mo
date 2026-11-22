@@ -19,8 +19,8 @@
 /// block a build that never touches it.
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use lang::types {
-    AttrArg, Attribute, Con, Decl, Def, Identifier, Literal, MatchCase, NamePath, Native,
-    StructLitField, Term, binder_is_explicit, has_attr, id_eq, show_identifier, term_peel,
+    AttrArg, Attribute, Con, Decl, Def, Identifier, Inductive, Literal, MatchCase, NamePath, Native,
+    StructLitField, Term, binder_is_explicit, has_attr, id_eq, show_identifier, show_name_path, term_peel,
 }
 use lang::scope {collect_classes, find_unresolved_class_calls_decls}
 use lib::ctors {CtorClaim, collect_ctor_claims_inds}
@@ -31,7 +31,9 @@ use llvm::ir {
     LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMInstruction, LLVMModule,
     LLVMValue, PhiPair,
 }
-use lib::decls {def_name_str, extract_defs, extract_inductives}
+use lib::decls {def_name_str, elim_inductive_find, elim_inductive_table, extract_defs, extract_inductives}
+use lang::elim_lower {elim_arms}
+use lang::typecheck::traverse {term_children}
 use runtime::natives {runtime_native_functions}
 use lib::natives {
     lookup_native_any, native_runtime_fn_name,
@@ -610,118 +612,58 @@ def cases_have_struct_lit (cases : List MatchCase) : Bool := match cases {
         },
 }
 
-/// Fail-fast gate for a `Term.elim` that survived the post-elaboration
-/// desugar (`desugar_elims_decls`, `codegen/emit.mo`). The normal
-/// pipeline cannot produce one -- the pass runs on every elaborated def body
-/// AND type -- so a hit means a pipeline entry point skipped the pass, and
-/// `compile_db_term_ir` has no `Term.elim` arm (it would be a bare
-/// non-exhaustive-match crash with no def name). Reachable decls only, same
-/// reasoning as the struct-literal gate above.
+/// Fail-fast gate for a `Term.elim` codegen cannot compile: its inductive is
+/// not among the program's decls, or its minors do not line up with that
+/// inductive's constructors (`elim_arms`). `compile_elim_ir` would otherwise
+/// reach `crash_elim_reached_codegen` with no def name. Reachable defs, body
+/// and declared type.
 #[partial]
-pub def validate_no_undesugared_elims (decl_list : List Decl) : Result CodegenError (List Decl) :=
-    validate_with decl_list (find_undesugared_elim_defs (extract_defs decl_list))
-
-/// One message per reachable def whose body or declared type still contains
-/// a `Term.elim` -- see `validate_no_undesugared_elims`.
-#[partial]
-def find_undesugared_elim_defs (defs : List Def) : List CodegenDiagnostic :=
-    List.reverse (find_undesugared_elim_defs_go defs List.empty)
+pub def validate_elims_well_formed (inds : List Inductive) (decl_list : List Decl) : Result CodegenError (List Decl) :=
+    validate_with decl_list (ill_formed_elim_defs (elim_inductive_table inds) (extract_defs decl_list) List.empty)
 
 #[partial]
-def find_undesugared_elim_defs_go (defs : List Def) (acc : List CodegenDiagnostic) : List CodegenDiagnostic :=
+def ill_formed_elim_defs (inds : HashMap String Inductive) (defs : List Def) (acc : List CodegenDiagnostic)
+    : List CodegenDiagnostic :=
     match defs {
-        List.empty => acc,
+        List.empty => List.reverse acc,
         List.cons d rest =>
-            match d {
-                Def.mk {name, typ := df_typ, term := term_, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
-                    if term_has_elim df_typ || term_has_elim term_
-                    then
-                        let def_name := name_path_to_str name in
-                        find_undesugared_elim_defs_go rest
-                            (List.cons (CodegenDiagnostic.undesugared_elim def_name) acc)
-                    else find_undesugared_elim_defs_go rest acc,
+            match first_ill_formed_elim inds [d.typ, d.term] {
+                Option.none => ill_formed_elim_defs inds rest acc,
+                Option.some reason =>
+                    ill_formed_elim_defs inds rest
+                        (List.cons (CodegenDiagnostic.ill_formed_elim (name_path_to_str d.name) reason) acc),
             },
     }
 
-/// Structural walk for a surviving `Term.elim` anywhere inside `t`. Mirrors
-/// `term_has_struct_lit`'s positions (including `quote_`/`ctx`/`cubical`), and
-/// returns `true` at the node itself rather than walking its fields.
-def term_has_elim (t : Term) : Bool := match t {
-    Term.elim _e => true,
-    Term.var _idx _dbg => false,
-    Term.lam _dbg typ body => term_has_elim typ || term_has_elim body,
-    Term.pi _b arg ret => term_has_elim arg || term_has_elim ret,
-    Term.app fun_ arg_ => term_has_elim fun_ || term_has_elim arg_,
-    Term.ntv native => native_has_elim native,
-    Term.con con_ => con_has_elim con_,
-    Term.lit lit_ => lit_has_elim lit_,
-    Term.sort _level => false,
-    Term.hole => false,
-    Term.var_macro _idx _dbg => false,
-    Term.quote_ inner => term_has_elim inner,
-    Term.ctx _loc inner => term_has_elim inner,
-    Term.cubical c => match c { { prim := _, args := args } => terms_have_elim args },
-}
-
+/// The first ill-formed `Elim` in `ts`, depth first, as a reason.
 #[partial]
-def lit_has_elim (l : Literal) : Bool := match l {
-    Literal.num _n _suffix => false,
-    Literal.flt _text _suffix => false,
-    Literal.str _s => false,
-    Literal.char _c => false,
-    Literal.if_ cond then_ else_ =>
-        term_has_elim cond || term_has_elim then_ || term_has_elim else_,
-    Literal.match_ scrutinee cases =>
-        term_has_elim scrutinee || cases_have_elim cases,
-    Literal.struct_lit fields _type_name => fields_have_elim fields,
-    Literal.struct_update base fields =>
-        term_has_elim base || fields_have_elim fields,
-}
+def first_ill_formed_elim (inds : HashMap String Inductive) (ts : List Term) : Option String :=
+    match ts {
+        List.empty => Option.none,
+        List.cons t rest =>
+            match elim_problem inds t {
+                Option.some reason => Option.some reason,
+                Option.none =>
+                    match first_ill_formed_elim inds (term_children t) {
+                        Option.some reason => Option.some reason,
+                        Option.none => first_ill_formed_elim inds rest,
+                    },
+            },
+    }
 
-#[partial]
-def native_has_elim (n : Native) : Bool := match n {
-    Native.mk _name _num_args args => opt_terms_have_elim args,
-}
-
-#[partial]
-def con_has_elim (c : Con) : Bool := match c {
-    Con.mk _name _typ_name _num_args args => opt_terms_have_elim args,
-}
-
-#[partial]
-def opt_terms_have_elim (args : List (Option Term)) : Bool := match args {
-    List.empty => false,
-    List.cons opt_ rest =>
-        match opt_ {
-            Option.some t => term_has_elim t || opt_terms_have_elim rest,
-            Option.none => opt_terms_have_elim rest,
-        },
-}
-
-#[partial]
-def cases_have_elim (cases : List MatchCase) : Bool := match cases {
-    List.empty => false,
-    List.cons c rest =>
-        match c {
-            MatchCase.mk _name _args body _fp _typ_name =>
-                term_has_elim body || cases_have_elim rest,
-        },
-}
-
-#[partial]
-def terms_have_elim (ts : List Term) : Bool := match ts {
-    List.empty => false,
-    List.cons x rest => term_has_elim x || terms_have_elim rest,
-}
-
-#[partial]
-def fields_have_elim (fields : List StructLitField) : Bool := match fields {
-    List.empty => false,
-    List.cons f rest =>
-        match f {
-            StructLitField.mk _name value => term_has_elim value || fields_have_elim rest,
-        },
-}
+def elim_problem (inds : HashMap String Inductive) (t : Term) : Option String :=
+    match t {
+        Term.elim e =>
+            match elim_inductive_find inds e.inductive {
+                Option.none => Option.some (String.concat "unknown inductive " (show_name_path e.inductive)),
+                Option.some ind =>
+                    match elim_arms ind e {
+                        Result.err reason => Option.some reason,
+                        Result.ok _ => Option.none,
+                    },
+            },
+        _ => Option.none,
+    }
 
 /// One message per LLVM symbol claimed by two or more reachable defs.
 #[partial]

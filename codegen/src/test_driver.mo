@@ -42,7 +42,7 @@
 /// `std/src/concurrent/{fiber,combine,poll}_test.mo` run through this
 /// driver; the gate remains the guard for any future unwired native.
 use std::path {Path}
-use lib::decls {filter_reachable_decls}
+use lib::decls {elim_inductives, filter_reachable_decls}
 open IO {get_env}
 use lib::qualify {qualified_def_name_str, qualify_modules}
 use lang::types {
@@ -65,7 +65,7 @@ use lib::symbols {
 use parsec::number {parse_i64}
 use lib::validate {
     report_elab_stats, validate_no_colliding_def_symbols,
-    validate_no_undesugared_struct_lits, validate_no_undesugared_elims,
+    validate_no_undesugared_struct_lits, validate_elims_well_formed,
     validate_no_unwired_natives
 }
 use llvm::ir {LLVMModule}
@@ -759,7 +759,7 @@ def test_driver_gates (elab_gate : Result CodegenError (List Decl)) (classes : L
             (gate_then elab_gate (class_gate_result (validate_no_unresolved_class_calls classes reachable)))
             (gate_then
                 (validate_no_undesugared_struct_lits reachable)
-                (validate_no_undesugared_elims reachable)))
+                (validate_elims_well_formed (elim_inductives reachable) reachable)))
         (validate_no_colliding_def_symbols reachable)
 
 /// Apply `rename_user_main` to the module whose path is `target_mp`,

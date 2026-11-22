@@ -18,7 +18,7 @@ use lib::symbols {
 use parsec::number {parse_i64}
 use lib::validate {
     report_elab_stats, validate_no_colliding_def_symbols,
-    validate_no_undesugared_struct_lits, validate_no_undesugared_elims,
+    validate_no_undesugared_struct_lits,
     validate_no_unwired_natives
 }
 use llvm::ir {LLVMModule}

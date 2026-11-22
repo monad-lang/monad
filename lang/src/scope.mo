@@ -853,35 +853,34 @@ def add_constructors_go (acc : ScopeData) (cns : List InductConstructor) (path :
 /// matching `add_builtin_type`'s and the constructor registrations
 /// above's own placeholder convention (nothing downstream inspects it).
 def build_scope_struct (s : Struct) (path : ModulePath) (acc : ScopeData) : ScopeData :=
-    match s {
-        // `attrs` is load-bearing: `#[linear]`/`#[proof]` on a struct
-        // must survive into the synthetic inductive, or
-        // `type_kinds.mo` classifies the struct as an ordinary type and
-        // every rule that keys on the kind silently stops applying.
-        Struct.mk name fields attrs vis =>
-            let type_np : NamePath := NamePath.mk (List.cons name List.empty) in
-            let type_sd : ScopeDef := {
-                name := type_np,
-                module := path,
-                sig := Term.hole,
-                body := Term.hole,
-                vis := vis,
-            } in
-            let with_type_def : ScopeData := scope_data_add_def acc type_sd in
-            let mk_np : NamePath := NamePath.mk (List.cons (Identifier.id "mk") List.empty) in
-            let mk_params : List Param := struct_fields_to_params fields in
-            let mk_con : InductConstructor := InductConstructor.mk mk_np mk_params Term.hole in
-            // A struct has no kind clause and lives at `Sort 1`, like a
-            // `type` declaration that omits one. The kind is what
-            // `free_var_declared_typ` reports for a bare type name and what
-            // the inductive-application rule checks arguments against; a
-            // hole here made every `Point`/`Lens Point A` annotation look
-            // like a non-type.
-            let struct_kind : Term := Term.sort (SortLevel.concrete 1) in
-            let synthetic_ind : Inductive :=
-                Inductive.mk type_np List.empty struct_kind (List.cons mk_con List.empty) attrs vis in
-            scope_data_add_inductive with_type_def synthetic_ind
-    }
+    let type_np : NamePath := NamePath.mk (List.cons s.name List.empty) in
+    let type_sd : ScopeDef := {
+        name := type_np,
+        module := path,
+        sig := Term.hole,
+        body := Term.hole,
+        vis := s.vis,
+    } in
+    let with_type_def : ScopeData := scope_data_add_def acc type_sd in
+    scope_data_add_inductive with_type_def (struct_synthetic_inductive s)
+
+/// The one-constructor inductive a struct stands for: `mk` over its fields.
+/// `attrs` is load-bearing: `#[linear]`/`#[proof]` on a struct must survive
+/// into the synthetic inductive, or `type_kinds.mo` classifies the struct as
+/// an ordinary type and every rule that keys on the kind silently stops
+/// applying.
+pub def struct_synthetic_inductive (s : Struct) : Inductive :=
+    let type_np : NamePath := NamePath.mk (List.cons s.name List.empty) in
+    let mk_np : NamePath := NamePath.mk (List.cons (Identifier.id "mk") List.empty) in
+    let mk_params : List Param := struct_fields_to_params s.fields in
+    let mk_con : InductConstructor := InductConstructor.mk mk_np mk_params Term.hole in
+    // A struct has no kind clause and lives at `Sort 1`, like a `type`
+    // declaration that omits one. The kind is what `free_var_declared_typ`
+    // reports for a bare type name and what the inductive-application rule
+    // checks arguments against; a hole here made every `Point`/`Lens Point A`
+    // annotation look like a non-type.
+    let struct_kind : Term := Term.sort (SortLevel.concrete 1) in
+    Inductive.mk type_np List.empty struct_kind (List.cons mk_con List.empty) s.attrs s.vis
 
 def struct_fields_to_params (fields : List StructField) : List Param :=
     match fields {

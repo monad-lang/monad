@@ -2057,7 +2057,7 @@ pub def binder_name (b : Binder) : DebugName :=
 /// everywhere one is actually constructed today.
 ///
 /// R3c wired the pipeline: `type_check_if`/`type_check_match` now RETURN a
-/// `Term.elim`, and both backends lower it back to a `Literal` before codegen
+/// `Term.elim`, and both backends compile it directly, one arm per minor
 /// (`lang/src/elim_lower.mo`). Every walker's `elim` arm is therefore live, not
 /// unreachable.
 pub struct Elim {
@@ -2192,7 +2192,7 @@ pub type Term {
     /// type's variants and nothing checks it for exhaustiveness.
     cubical (c : Cubical),
     /// The one eliminator -- see `Elim` above. R3c: `if`/`match` elaborate
-    /// into this; the backends lower it via `lang/src/elim_lower.mo`.
+    /// into this; the backends compile its arms (`lang/src/elim_lower.mo`).
     elim (e : Elim),
 }
 

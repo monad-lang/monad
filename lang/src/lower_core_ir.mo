@@ -15,7 +15,7 @@ use lang::types {
     show_module_path, show_name_path,
 }
 use lib::typecheck::infer {empty_locals, last_dotted_segment}
-use lib::elim_lower {elim_to_literal}
+use lib::elim_lower {ElimArm, elim_arms_in}
 
 /// Lowers Monad's checked, de-Bruijn `Term` (`lang/types.mo`) to
 /// `CoreIr` (`lang/core_ir.mo`), mirroring `rust/core/src/lower_core_ir.rs`
@@ -179,7 +179,7 @@ pub type LowerError {
     /// rather than reused, following `le_struct_lit_survived`'s own
     /// precedent -- this used to be a bare missing arm too.
     le_unresolved_macro_artifact,
-    /// A `Term.elim` that `elim_to_literal` could not lower: an unresolvable
+    /// A `Term.elim` that `elim_arms_in` could not lower: an unresolvable
     /// inductive, a minor with fewer lambdas than its constructor has fields,
     /// or a minor/constructor count mismatch. Every `Term.elim` the checker
     /// produces is well-formed, so this is a defensive diagnostic for a
@@ -732,6 +732,19 @@ def lower_match_arms_for_ctors
     }
 
 #[partial]
+def lower_elim_arms
+    (ctx : LowerCtx) (arms : List ElimArm) (acc : LowerAcc)
+    (k : List MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
+    : Pair (Result LowerError CoreIr) LowerAcc :=
+    match arms {
+        List.empty => k List.empty acc,
+        List.cons arm rest =>
+            lower_then (lower_term ctx arm.body acc) (fn bir => fn acc1 =>
+                lower_elim_arms ctx rest acc1 (fn irs => fn acc2 =>
+                    k (List.cons (MatchArm.arm (List.length arm.binders) bir) irs) acc2)),
+    }
+
+#[partial]
 def lower_match_arms
     (ctx : LowerCtx) (ind : Inductive) (cases : List MatchCase) (acc : LowerAcc)
     (k : List MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
@@ -954,16 +967,18 @@ def lower_term (ctx : LowerCtx) (t : Term) (acc : LowerAcc) : Pair (Result Lower
         // be here mid-macro-expansion.
         Term.quote_ _inner => lower_err LowerError.le_unresolved_macro_artifact acc,
         Term.var_macro _idx _dbg => lower_err LowerError.le_unresolved_macro_artifact acc,
-        // `core-term-simplification.md` R3c: the checker returns a `Term.elim`
-        // for `if`/`match`. Lower it through the same conversion codegen's
-        // whole-program pass uses (`elim_to_literal`), then re-enter this
-        // function on the `Literal` form -- `lower_term` is `#[partial]`, and the
-        // converted term is a `Term.lit`, so this is a representation step, not a
-        // new evaluation rule.
+        // The checker returns a `Term.elim` for `if`/`match`: one arm per
+        // constructor, in declaration order, binding the minor's fields.
         Term.elim e =>
-            match elim_to_literal (ctx_scope ctx) e {
+            match elim_arms_in (ctx_scope ctx) e {
                 Result.err reason => lower_err (LowerError.le_elim_ill_formed reason) acc,
-                Result.ok converted => lower_term ctx converted acc,
+                Result.ok found =>
+                    match found {
+                        Pair.pair _ind arms =>
+                            lower_then (lower_term ctx e.scrutinee acc) (fn vir => fn acc1 =>
+                                lower_elim_arms ctx arms acc1 (fn irs => fn acc2 =>
+                                    lower_ok (CoreIr.match_ vir irs) acc2)),
+                    },
             },
     }
 

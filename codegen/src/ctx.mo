@@ -14,8 +14,9 @@
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::list {}
 use lib::ownership {DropBinding, DropPlan, OwnershipTables}
+use lib::decls {elim_inductive_find, elim_inductive_table}
 use lang::types {
-    DebugName, Def, Identifier, Inductive, Location, ModulePath, Param, Struct, Term,
+    DebugName, Def, Identifier, Inductive, Location, ModulePath, NamePath, Param, Struct, Term,
     binder_is_explicit, binder_name, param_many, term_peel,
 }
 use llvm::ir {DbgLoc, LLVMInstruction, LLVMValue}
@@ -97,6 +98,9 @@ pub struct CodegenCtx {
     /// Values eligible for a drop at every reachable exit of the current
     /// function, innermost first.
     drops : List DropBinding,
+    /// The program's inductives, for compiling a `Term.elim`
+    /// (`elim_inductive_table`).
+    inductives : HashMap String Inductive,
 }
 
 pub struct CtxStrPair {
@@ -146,7 +150,7 @@ def resolve_call_name (c : CodegenCtx) (llvm_name : String) : String :=
 /// correct only for genuinely 0-arity defs).
 #[partial]
 def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (ctor_arities : HashMap String I64) (extern_wrappers : HashMap String String) (type_levels : HashMap String I64) : CodegenCtx :=
-    { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, current_loc := Option.none, extern_wrappers := extern_wrappers, type_levels := type_levels, ownership := Option.none, drop_plan := Option.none, branch_depth := 0, drops := List.empty }
+    { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, current_loc := Option.none, extern_wrappers := extern_wrappers, type_levels := type_levels, ownership := Option.none, drop_plan := Option.none, branch_depth := 0, drops := List.empty, inductives := str_map_empty }
 
 /// Turn ownership on for a module compile. The caller
 /// (`compile_loaded_modules_to_ir_with_debug`) computes the tables once for
@@ -154,6 +158,16 @@ def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (c
 #[partial]
 def ctx_with_ownership (c : CodegenCtx) (t : OwnershipTables) : CodegenCtx :=
     { c with ownership := Option.some t }
+
+/// Make the program's inductives available to `Term.elim` compilation.
+#[partial]
+def ctx_with_inductives (c : CodegenCtx) (inds : List Inductive) : CodegenCtx :=
+    { c with inductives := elim_inductive_table inds }
+
+/// The inductive an `Elim` names.
+#[partial]
+def ctx_find_inductive (c : CodegenCtx) (name : NamePath) : Option Inductive :=
+    elim_inductive_find c.inductives name
 
 /// Bind a local whose value the current def's plan says to drop at exit.
 #[partial]

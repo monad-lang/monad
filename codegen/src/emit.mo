@@ -10,7 +10,7 @@ use std::map {HashMap}
 use std::list {List.any, List.dedup_by, List.intercalate}
 use lang::mote {Mote.toolchain_root}
 use lang::types {
-    AttrArg, Attribute, Binder, Con, DebugName, Decl, Def, Identifier, InductConstructor,
+    AttrArg, Attribute, Binder, Con, DebugName, Decl, Def, Elim, Identifier, InductConstructor,
     Inductive, Literal, LocalScope, Location, MatchCase, ModulePath, Multiplicity,
     NamePath, Native, Param, Scope, ScopeData, Struct, StructField,
     StructLitField, Term, TypeConstraint, UseFilter, UseItem, Visibility,
@@ -30,7 +30,7 @@ use lib::validate {
     build_defined_symbol_set, collect_call_targets, missing_call_targets,
     strip_db_lams, validate_export_defs, validate_no_colliding_def_symbols,
     report_elab_stats, validate_no_undesugared_struct_lits,
-    validate_no_undesugared_elims,
+    validate_elims_well_formed,
     validate_no_monad_externs, validate_no_unwired_natives,
     validate_native_target_availability,
 }
@@ -48,21 +48,22 @@ use lib::natives {
 use llvm::target {TargetKind}
 use lib::decls {
     build_def_name_map, collect_all_decls_from_modules, def_name_str, export_names,
-    export_pairs, export_roots, extract_defs, extract_inductives, extract_structs,
+    elim_inductives, export_pairs, export_roots, extract_defs, extract_inductives, extract_structs,
     filter_reachable_decls, reachable_defs_from,
 }
 use lib::tco {apply_self_tco}
 use lib::qualify {qualified_def_name_str, qualify_modules}
 use lib::free_names {collect_referenced_names, free_names_of_term}
 use lang::typecheck::traverse {term_map_children}
-use lang::elim_lower {elim_to_literal}
+use lang::elim_lower {ElimArm, bool_branches, elim_arms}
 use lib::ctx {
     CodegenCtx, CtxInstrsVal, CtxInstrsVals, CtxStrPair, LocalBinding,
     build_arity_table, build_type_level_table, collect_db_params, ctx_bind_local,
     ctx_bind_local_drop, ctx_enter_branch, ctx_leave_branch, ctx_with_ownership,
     ctx_lookup_arity, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag, ctx_lookup_local,
     ctx_lookup_type_level, ctx_reset_locals, ctx_restore_locals, dbg_loc_of_location,
-    empty_ctx, fresh_label, fresh_temp, lookup_binding, resolve_call_name
+    ctx_find_inductive, ctx_with_inductives, empty_ctx, fresh_label, fresh_temp, lookup_binding,
+    resolve_call_name
 }
 use lib::ownership {
     DropBinding, DropPlan, OwnershipMode, OwnershipTables, alloc_fn_for_ctor,
@@ -633,6 +634,63 @@ def crash_struct_lit_reached_codegen (c : CodegenCtx) : CompileResult :=
 /// build_branch_block, ends_with_terminator).
 #[partial]
 def compile_match_ir (c : CodegenCtx) (scrutinee : Term) (cases : List MatchCase) : CompileResult :=
+    compile_case_arms_ir c scrutinee (case_arms_of_cases cases)
+
+/// One arm of a compiled match: the constructor it tests, the names its
+/// fields bind, its body, and the constructor's resolved owner when known.
+/// A source `MatchCase` and an `Elim` minor both compile through it.
+pub struct CaseArm {
+    name : Identifier,
+    args : List Identifier,
+    body : Term,
+    owner : Option NamePath,
+}
+
+#[partial]
+def case_arms_of_cases (cases : List MatchCase) : List CaseArm :=
+    match cases {
+        List.empty => List.empty,
+        List.cons mc rest =>
+            match mc {
+                MatchCase.mk name args body _fp typ_name =>
+                    let arm : CaseArm := { name := name, args := args, body := body, owner := typ_name } in
+                    List.cons arm (case_arms_of_cases rest),
+            },
+    }
+
+#[partial]
+def case_arms_of_elim (arms : List ElimArm) : List CaseArm :=
+    match arms {
+        List.empty => List.empty,
+        List.cons a rest =>
+            let arm : CaseArm := { name := a.ctor, args := a.binders, body := a.body, owner := Option.some a.owner } in
+            List.cons arm (case_arms_of_elim rest),
+    }
+
+/// A `Term.elim`: one arm per constructor, or an `if` for `Bool`. The
+/// elaborated-decl gate (`validate_elims_well_formed`) has already rejected
+/// an unknown inductive or a misaligned minor, so a failure here is the
+/// direct-`compile_db_module` case `crash_elim_reached_codegen` names.
+#[partial]
+def compile_elim_ir (c : CodegenCtx) (e : Elim) : CompileResult :=
+    match ctx_find_inductive c e.inductive {
+        Option.none => crash_elim_reached_codegen c,
+        Option.some ind =>
+            match elim_arms ind e {
+                Result.err _ => crash_elim_reached_codegen c,
+                Result.ok arms =>
+                    match bool_branches ind arms {
+                        Option.some branches =>
+                            match branches {
+                                Pair.pair then_ else_ => compile_db_if_ir c e.scrutinee then_ else_,
+                            },
+                        Option.none => compile_case_arms_ir c e.scrutinee (case_arms_of_elim arms),
+                    },
+            },
+    }
+
+#[partial]
+def compile_case_arms_ir (c : CodegenCtx) (scrutinee : Term) (cases : List CaseArm) : CompileResult :=
     match cases {
         List.empty =>
             // No cases - return void
@@ -707,7 +765,7 @@ pub struct MatchChainResult {
 /// tag comparison (or, for the last case, its own block directly -- no
 /// comparison needed there).
 #[partial]
-def build_match_chain (c : CodegenCtx) (tag_val : LLVMValue) (scrutinee_val : LLVMValue) (cases : List MatchCase) (merge_label : String) (check_label : String) : MatchChainResult :=
+def build_match_chain (c : CodegenCtx) (tag_val : LLVMValue) (scrutinee_val : LLVMValue) (cases : List CaseArm) (merge_label : String) (check_label : String) : MatchChainResult :=
     match cases {
         List.empty =>
             { ctx := c, blocks := List.empty, funcs := List.empty, globals := List.empty, phis := List.empty },
@@ -725,7 +783,7 @@ def build_match_chain (c : CodegenCtx) (tag_val : LLVMValue) (scrutinee_val : LL
                                     match fresh_temp ctx2 {
                                         CtxStrPair.mk ctx3 cmp_temp =>
                                             match this_case {
-                                                MatchCase.mk name args _body _fp typ_name =>
+                                                { name, args, owner := typ_name, .. } =>
                                                     // Owner-qualified when the checker resolved
                                                     // it (stage 11.4); composite bare#arity
                                                     // fallback otherwise -- see
@@ -840,9 +898,9 @@ def retarget_terminal_ret (blocks : List LLVMBasicBlock) (target_val : LLVMValue
 /// own doc comment describes for a different call site, here never
 /// migrated at all since this shape long predates `compose_seq`).
 #[partial]
-def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ : MatchCase) (case_label : String) (merge_label : String) : MatchChainResult :=
+def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ : CaseArm) (case_label : String) (merge_label : String) : MatchChainResult :=
     match case_ {
-        MatchCase.mk _name args body _fp _typ_name =>
+        { args, body, .. } =>
             match bind_match_fields c scrutinee_val args 0 {
                 { ctx := c1, instrs := field_instrs } =>
                     match compile_db_term_ir (ctx_enter_branch c1) body {
@@ -2307,7 +2365,7 @@ def literal_int_of (lit : Literal) : Option I64 :=
 // only ever runs on a term that passed `type_check` -- a def that fails
 // stays un-elaborated for `elaborate_module_decls_reporting`'s best-effort
 // caller, so its original, unchecked term never reaches this function.
-#[allow_incomplete_match "quote_/var_macro are rejected by type_check before codegen ever runs; Term.elim is lowered by desugar_elims_decls before codegen and guarded by validate_no_undesugared_elims"]
+#[allow_incomplete_match "quote_/var_macro are rejected by type_check before codegen ever runs"]
 #[partial]
 def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match term_ {
     Term.lit val => compile_lit_ir c val,
@@ -2546,19 +2604,15 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
     Term.hole => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     Term.ctx loc inner => compile_located_term_ir c loc inner,
     Term.cubical cub_ => compile_cubical_ir c cub_,
-    // See `crash_elim_reached_codegen`'s own doc comment: the normal pipeline
-    // lowers `Term.elim` in `compile_input_of_modules`, and the gate reports
-    // a miss before codegen; this arm only catches a direct
-    // `compile_db_module` caller that skips both.
-    Term.elim _e => crash_elim_reached_codegen c,
+    Term.elim e => compile_elim_ir c e,
 }
 
-/// Fail-fast backstop for `compile_db_term_ir`'s `Term.elim` arm: reachable
-/// only when a direct `compile_db_module` caller (which has no `Scope` to
-/// desugar against) hands codegen an elaborated `Elim`. The pipeline path
-/// desugars in `compile_input_of_modules` and is additionally guarded by
-/// `validate_no_undesugared_elims`. Same shape and rationale as
-/// `crash_struct_lit_reached_codegen` below.
+/// Fail-fast backstop for `compile_elim_ir`: an `Elim` whose inductive is not
+/// among the module's decls, or whose minors do not line up with its
+/// constructors. The pipeline rejects both before codegen
+/// (`validate_elims_well_formed`); this is reachable only from a direct
+/// `compile_db_module` caller that skips the gate. Same shape and rationale
+/// as `crash_struct_lit_reached_codegen` below.
 #[allow_incomplete_match "fail-fast backstop; see the doc comment above"]
 #[partial]
 def crash_elim_reached_codegen (c : CodegenCtx) : CompileResult :=
@@ -2833,13 +2887,60 @@ def view_binder_matches (scrutinee : DebugName) (binder : Binder) : Bool :=
 /// pattern variables. Anything else (a pass-through, a field pattern,
 /// several cases) keeps the boxed `Pair`.
 #[partial]
-def view_pair_arm (body : Term) (binder : Binder) : Option ViewPairArm :=
+def view_pair_arm (c : CodegenCtx) (body : Term) (binder : Binder) : Option ViewPairArm :=
     // Laddered: this grammar supports no nested constructor patterns
     // (`Term.lit (Literal.match_ ..)` is not a pattern).
     match term_peel body {
         Term.lit lit_ => view_pair_literal lit_ binder,
+        Term.elim e => view_pair_elim c e binder,
         _ => Option.none,
     }
+
+/// The `Elim` form of the same shape: an elimination of the bound variable
+/// with one arm, `pair` with two fields.
+#[partial]
+def view_pair_elim (c : CodegenCtx) (e : Elim) (binder : Binder) : Option ViewPairArm :=
+    match term_peel e.scrutinee {
+        Term.var _ dbg =>
+            if Bool.not (view_binder_matches dbg binder) then Option.none
+            else
+                match ctx_find_inductive c e.inductive {
+                    Option.none => Option.none,
+                    Option.some ind =>
+                        match elim_arms ind e {
+                            Result.err _ => Option.none,
+                            Result.ok arms =>
+                                match arms {
+                                    List.cons a rest =>
+                                        match rest {
+                                            List.empty => view_pair_elim_arm a,
+                                            List.cons _ _ => Option.none,
+                                        },
+                                    List.empty => Option.none,
+                                },
+                        },
+                },
+        _ => Option.none,
+    }
+
+#[partial]
+def view_pair_elim_arm (a : ElimArm) : Option ViewPairArm :=
+    if Bool.not (String.beq (extract_base_name (symbol_identifier a.ctor)) "pair") then Option.none
+    else
+        match a.binders {
+            List.cons payload_var rest =>
+                match rest {
+                    List.cons handle_var rest2 =>
+                        match rest2 {
+                            List.empty =>
+                                let arm : ViewPairArm := { payload_var := payload_var, handle_var := handle_var, body := a.body } in
+                                Option.some arm,
+                            List.cons _ _ => Option.none,
+                        },
+                    List.empty => Option.none,
+                },
+            List.empty => Option.none,
+        }
 
 #[partial]
 def view_pair_literal (lit_ : Literal) (binder : Binder) : Option ViewPairArm :=
@@ -3006,7 +3107,7 @@ def compile_view_bind_db (c : CodegenCtx) (plan : ViewBindPlan) : Option Compile
                                 ViewBindOp.view_get =>
                                     match cell {
                                         Option.some cell_arg =>
-                                            match view_pair_arm body binder {
+                                            match view_pair_arm c body binder {
                                                 Option.some arm => compile_view_get_bind_db c cell_arg arm,
                                                 Option.none => Option.none,
                                             },
@@ -5627,9 +5728,10 @@ def compile_db_module_ownership (decl_list : List Decl) (tables : Option Ownersh
     let arities := build_arity_table defs in
     let extern_wrappers := build_extern_wrapper_table defs in
     let type_levels := build_type_level_table inds structs in
+    let plain_ctx : CodegenCtx := ctx_with_inductives (empty_ctx arities ctor_tags ctor_arities extern_wrappers type_levels) (elim_inductives decl_list) in
     let base_ctx : CodegenCtx := match tables {
-        Option.none => empty_ctx arities ctor_tags ctor_arities extern_wrappers type_levels,
-        Option.some t => ctx_with_ownership (empty_ctx arities ctor_tags ctor_arities extern_wrappers type_levels) t,
+        Option.none => plain_ctx,
+        Option.some t => ctx_with_ownership plain_ctx t,
     } in
     let drop_funcs : List LLVMFunction := match tables {
         Option.none => List.empty,
@@ -6255,57 +6357,6 @@ def desugar_struct_lit_def (scope : Scope) (d : Def) : Def := match d {
         Def.mk name typ (desugar_struct_lit_term scope term_) constraints attrs vis params,
 }
 
-/// Post-elaboration Term→Term pass: lower every `Term.elim` back to the
-/// `Literal.if_`/`Literal.match_` form the backends still compile
-/// (`core-term-simplification.md` R3c, `lang/src/elim_lower.mo`). The checker
-/// RETURNS `Term.elim` once R3c is wired; this pass runs immediately after
-/// elaboration (inside `compile_input_of_modules`), so reachability, the
-/// validate gates and `compile_db_term_ir` only ever see `Literal` nodes.
-///
-/// Both the body and the declared TYPE are walked. This is the deliberate
-/// difference from `desugar_struct_lit_def` above (which maps only `.term`):
-/// a type-level function's body can be a match, and elaboration writes the
-/// checked `Elim` back into whichever position held it.
-///
-/// Mirrors `extract_defs`' scope: `def_d` only, no recursion into
-/// `scoped_open_d`, because that is exactly what codegen compiles -- the gate
-/// must not be stricter than the consumer.
-#[partial]
-def desugar_elims_decls (scope : Scope) (decl_list : List Decl) : List Decl := match decl_list {
-    List.empty => List.empty,
-    List.cons d rest =>
-        List.cons (desugar_elims_decl scope d) (desugar_elims_decls scope rest),
-}
-
-#[partial]
-def desugar_elims_decl (scope : Scope) (d : Decl) : Decl := match d {
-    Decl.def_d def_ => Decl.def_d (desugar_elims_def scope def_),
-    _ => d,
-}
-
-#[partial]
-def desugar_elims_def (scope : Scope) (d : Def) : Def := match d {
-    Def.mk {name, typ, term := term_, constraints, attrs, vis, params, ..} =>
-        Def.mk name (desugar_elims_term scope typ) (desugar_elims_term scope term_) constraints attrs vis params,
-}
-
-/// Children-first: `term_map_children` rebuilds the node with every child
-/// already desugared, then this node itself is lowered if it is an `Elim`.
-/// A conversion failure leaves the `Term.elim` in place for
-/// `validate_no_undesugared_elims` to report -- returning a half-lowered term
-/// would be worse than a loud gate failure.
-#[partial]
-def desugar_elims_term (scope : Scope) (t : Term) : Term :=
-    let mapped : Term := term_map_children (desugar_elims_term scope) t in
-    match mapped {
-        Term.elim e =>
-            match elim_to_literal scope e {
-                Result.err _reason => Term.elim e,
-                Result.ok lowered => lowered,
-            },
-        _ => mapped,
-    }
-
 /// The term-level rewrite. Structural traversal mirrors
 /// `term_has_struct_lit` (`codegen/validate.mo`) -- the same
 /// positions, but rebuilding instead of probing. `Term.ctx` wrappers
@@ -6686,7 +6737,7 @@ pub def compile_input_of_modules (target_mp : ModulePath) (qualified_mods : List
     let desugared_decls := elaborate_def_typs (desugar_struct_lits_decls scope dict_param_decls) (names_of_decls dict_param_decls);
     let t_elab : I64 <- bench_step verbose "  front end: desugar_struct_lits" t_desugar (List.length desugared_decls);
     let report : BestEffortElab := elaborate_module_decls_reporting scope desugared_decls empty_locs;
-    let elaborated : List Decl := desugar_elims_decls scope (best_effort_decls report);
+    let elaborated : List Decl := best_effort_decls report;
     let _t_done : I64 <- bench_step verbose "  front end: elaborate_module_decls" t_elab (List.length elaborated);
     let input : CompileInput := { scope := scope, decls := elaborated, report := report };
     return input
@@ -6875,9 +6926,9 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                             // `void_val` (see `validate_no_undesugared_struct_lits`).
                             match gate_then
                             (validate_no_undesugared_struct_lits reachable_decls)
-                            (validate_no_undesugared_elims reachable_decls) {
+                            (validate_elims_well_formed (elim_inductives reachable_decls) reachable_decls) {
                                 Result.err e => do {
-                                    if verbose then do { fail_line ("FAILED at stage: validate_no_undesugared_struct_lits/validate_no_undesugared_elims (" ++ CodegenError.render e ++ ")"); return unit } else return unit;
+                                    if verbose then do { fail_line ("FAILED at stage: validate_no_undesugared_struct_lits/validate_elims_well_formed (" ++ CodegenError.render e ++ ")"); return unit } else return unit;
                                     return (Result.err e)
                                 },
                                 Result.ok _ =>

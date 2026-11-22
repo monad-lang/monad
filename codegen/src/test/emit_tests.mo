@@ -26,7 +26,6 @@ use lib::validate {
     build_defined_symbol_set, collect_call_targets, missing_call_targets,
     strip_db_lams, validate_export_defs, validate_no_colliding_def_symbols,
     report_elab_stats, validate_no_undesugared_struct_lits,
-    validate_no_undesugared_elims,
     validate_no_monad_externs, validate_no_unwired_natives,
     validate_native_target_availability,
 }
@@ -51,7 +50,6 @@ use lib::tco {apply_self_tco}
 use lib::qualify {qualified_def_name_str, qualify_modules}
 use lib::free_names {collect_referenced_names, free_names_of_term}
 use lang::typecheck::traverse {term_map_children}
-use lang::elim_lower {elim_to_literal}
 use lib::ctx {
     CodegenCtx, CtxInstrsVal, CtxInstrsVals, CtxStrPair, LocalBinding,
     build_arity_table, build_type_level_table, collect_db_params, ctx_bind_local,

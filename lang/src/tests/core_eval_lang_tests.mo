@@ -6,7 +6,7 @@ use lang::core_value {
 }
 use lib::lower_core_ir {LowerCtx, lower_ctx_from_decls, lower_root}
 use lang::types {
-    Attribute, DebugName, Decl, InductConstructor, ModulePath, NamePath, Param,
+    Attribute, DebugName, Decl, Elim, InductConstructor, ModulePath, NamePath, Param,
     Term, binder_explicit, def_d, i64, id, ident, if_, inductive_d, many, match_, num,
     open_d, open_only, package_private,
 }
@@ -474,3 +474,40 @@ def type_arg_test_decls : List Decl :=
 #[test]
 def test_inductive_name_as_type_argument_end_to_end : Bool :=
     opt_value_num_is (lower_and_run (build_ctx type_arg_test_decls) "main") 5
+
+// ─── An `Elim` over a three-constructor type runs each arm ─────────────
+// The checker returns `Term.elim`; `lower_core_ir` compiles it to one arm per
+// constructor, binding each minor's fields (`elim_lower.elim_arms`).
+
+def tri_path : NamePath := np1 "Tri"
+def p_param : Param := Param.mk (Identifier.id "p") Term.hole Multiplicity.many Option.none List.empty
+def q_param : Param := Param.mk (Identifier.id "q") Term.hole Multiplicity.many Option.none List.empty
+def tri_decl : Decl :=
+    Decl.inductive_d (Inductive.mk tri_path List.empty Term.hole
+        [InductConstructor.mk (np1 "ta") List.empty Term.hole,
+            InductConstructor.mk (np1 "tb") [p_param] Term.hole,
+            InductConstructor.mk (np1 "tc") [p_param, q_param] Term.hole]
+        List.empty Visibility.package_private)
+
+/// `fn t => elim t { ta => 1, tb p => p, tc p q => q }`
+def pick_term : Term :=
+    let minors : List Term := [
+        num 1,
+        Term.lam (binder_explicit (named "p")) Term.hole (Term.var 0 (named "p")),
+        Term.lam (binder_explicit (named "p")) Term.hole
+            (Term.lam (binder_explicit (named "q")) Term.hole (Term.var 0 (named "q"))),
+    ] in
+    let e : Elim := Elim.mk tri_path List.empty List.empty List.empty Term.hole minors (Term.var 0 (named "t")) in
+    Term.lam (binder_explicit (named "t")) Term.hole (Term.elim e)
+
+def tri_con (name : String) (args : List Term) : Term :=
+    Term.con (Con.mk (Identifier.id name) tri_path (List.length args) (List.map (fn (a : Term) => Option.some a) args))
+
+def tri_decls (arg : Term) : List Decl :=
+    [tri_decl, def_decl "pick" pick_term, def_decl "main" (Term.app (free_var "pick") arg)]
+
+#[test]
+def test_elim_over_three_constructors_runs_each_arm : Bool :=
+    opt_value_num_is (lower_and_run (build_ctx (tri_decls (tri_con "ta" List.empty))) "main") 1
+        && opt_value_num_is (lower_and_run (build_ctx (tri_decls (tri_con "tb" [num 7]))) "main") 7
+        && opt_value_num_is (lower_and_run (build_ctx (tri_decls (tri_con "tc" [num 8, num 9]))) "main") 9

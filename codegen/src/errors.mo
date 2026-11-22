@@ -22,7 +22,7 @@ pub type CodegenDiagnostic {
     export_implicit (name : String),
     export_constraints (name : String),
     undesugared_struct_lit (def_name : String),
-    undesugared_elim (def_name : String),
+    ill_formed_elim (def_name : String) (reason : String),
     duplicate_symbol (symbol : String),
     runtime_symbol_collision (symbol : String),
     ambiguous_owner (name : String) (from : String) (candidates : String),
@@ -74,9 +74,8 @@ pub def CodegenDiagnostic.render (d : CodegenDiagnostic) : String :=
         CodegenDiagnostic.undesugared_struct_lit def_name =>
             String.concat "def `" (String.concat def_name
                 "` contains a struct literal that never desugared to a constructor -- it would silently compile to a void placeholder; give the literal an explicit `: StructName` annotation, or bind it to an annotated local before passing it"),
-        CodegenDiagnostic.undesugared_elim def_name =>
-            String.concat "def `" (String.concat def_name
-                "` contains a Term.elim that never desugared to a match -- codegen would crash; the elimination desugar pass (desugar_elims_decls) was skipped"),
+        CodegenDiagnostic.ill_formed_elim def_name reason =>
+            String.concat "def `" (String.concat def_name (String.concat "` contains an elimination codegen cannot compile: " reason)),
         CodegenDiagnostic.duplicate_symbol symbol =>
             String.concat "two definitions share the LLVM symbol `" (String.concat symbol
                 "` -- one of them would be silently dropped; give them distinct names or distinct modules"),

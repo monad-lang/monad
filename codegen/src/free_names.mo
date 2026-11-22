@@ -15,7 +15,7 @@
 ///   reach for it where precision matters -- that is the other one.
 use lang::types {
     Con, DebugName, FieldPattern, FieldPatternEntry, Identifier, Literal, MatchCase,
-    Native, StructLitField, Term, binder_is_explicit, binder_name,
+    Native, StructLitField, Term, binder_is_explicit, binder_name, term_peel,
     union_ids,
 }
 use lib::symbols {symbol_identifier}
@@ -52,17 +52,12 @@ def free_names_of_term (bound : List Identifier) (t : Term) : List Identifier :=
     // A cubical primitive binds nothing, so its arguments are walked under
     // the same `bound` set.
     Term.cubical c => match c { { prim := _, args := args } => free_names_of_terms bound args },
-    // `elim` itself binds nothing (unlike `lam`/`pi`): `params`/`indices`/
-    // `motive`/`scrutinee` are walked under the same `bound` set, and so are
-    // `minors` -- each minor is its own self-contained lambda chain
-    // (`Term.lam` nodes), whose own binders the `lam` arm above already
-    // adds when this recurses into one.
-    Term.elim e =>
-        union_ids (free_names_of_terms bound e.params)
-            (union_ids (free_names_of_terms bound e.indices)
-                (union_ids (free_names_of_term bound e.motive)
-                    (union_ids (free_names_of_terms bound e.minors)
-                        (free_names_of_term bound e.scrutinee)))),
+    // Codegen compiles an `Elim` as its scrutinee and one arm per minor
+    // (`compile_elim_ir`); the motive, params and indices are erased, so
+    // they capture nothing. A minor's leading lambdas are the arm's field
+    // binders: bound in its body, their (erased) types not walked -- the
+    // same names a source `match` case contributes.
+    Term.elim e => List.append (free_names_of_term bound e.scrutinee) (free_names_of_minors bound e.minors),
 }
 
 #[partial]
@@ -214,16 +209,11 @@ def collect_referenced_names (t : Term) (acc : List String) : List String := mat
     // referenced only under a cubical argument would be invisible to
     // `filter_reachable_decls` and the link would fail with `undefined @X`.
     Term.cubical c => match c { { prim := _, args := args } => collect_referenced_names_terms args acc },
-    // MUST recurse into every term-bearing field, same failure shape
-    // as `ctx`/`cubical` above: a name referenced only in a dependent
-    // `motive`, an inductive `param`/`index`, a minor, or the scrutinee
-    // would otherwise be invisible to `filter_reachable_decls`.
-    Term.elim e =>
-        collect_referenced_names e.scrutinee
-            (collect_referenced_names_terms e.minors
-                (collect_referenced_names e.motive
-                    (collect_referenced_names_terms e.indices
-                        (collect_referenced_names_terms e.params acc)))),
+    // MUST recurse into what codegen compiles (`compile_elim_ir`): the
+    // scrutinee and every minor's body, or a name referenced only there is
+    // invisible to `filter_reachable_decls`. The motive, params, indices and
+    // the minors' binder types are erased.
+    Term.elim e => collect_referenced_names_minors e.minors (collect_referenced_names e.scrutinee acc),
 }
 
 #[partial]
@@ -287,4 +277,29 @@ def collect_referenced_names_opt_list (args : List (Option Term)) (acc : List St
             Option.some t => collect_referenced_names_opt_list rest (collect_referenced_names t acc),
             Option.none => collect_referenced_names_opt_list rest acc,
         },
+}
+
+/// Each minor's body under its leading lambda binders (see the `elim` arm).
+#[partial]
+def free_names_of_minors (bound : List Identifier) (minors : List Term) : List Identifier := match minors {
+    List.empty => List.empty,
+    List.cons m rest => List.append (free_names_of_minor bound m) (free_names_of_minors bound rest),
+}
+
+#[partial]
+def free_names_of_minor (bound : List Identifier) (t : Term) : List Identifier := match term_peel t {
+    Term.lam b _typ body_ => free_names_of_minor (add_bound_name bound (binder_name b)) body_,
+    _ => free_names_of_term bound t,
+}
+
+#[partial]
+def collect_referenced_names_minors (minors : List Term) (acc : List String) : List String := match minors {
+    List.empty => acc,
+    List.cons m rest => collect_referenced_names_minors rest (collect_referenced_names (minor_body m) acc),
+}
+
+#[partial]
+def minor_body (t : Term) : Term := match term_peel t {
+    Term.lam _b _typ body_ => minor_body body_,
+    _ => t,
 }
