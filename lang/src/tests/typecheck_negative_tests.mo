@@ -713,6 +713,19 @@ def test_an_instance_method_return_of_the_wrong_type_is_rejected : IO Bool :=
     rejected_with "Sh.sh" sig_needle
         (sh_class ++ "instance Sh Bool {\n    def sh (a : Bool) : I64 := 1\n}\n")
 
+/// An unannotated method has no written signature, so its BODY is checked
+/// against the class's. The parser's untyped fallback drops the parameters,
+/// so `def sh (a : Bool) := "x"` is the constant `"x"`, not a function.
+#[test]
+def test_an_unannotated_instance_method_body_is_checked_against_the_class : IO Bool :=
+    rejected_with "Sh.sh" "type mismatch"
+        (sh_class ++ "instance Sh Bool {\n    def sh (a : Bool) := \"x\"\n}\n")
+
+#[test]
+def test_an_unannotated_constant_method_of_the_wrong_type_is_rejected : IO Bool :=
+    rejected_with "Df.df" "type mismatch"
+        ("class Df A {\n    def df : A\n}\n" ++ "instance Df I64 {\n    def df := \"s\"\n}\n")
+
 #[test]
 def test_an_instance_method_the_class_does_not_declare_is_rejected : IO Bool :=
     rejected_with "Sh.extra" "is not a method of class"

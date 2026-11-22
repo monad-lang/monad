@@ -69,7 +69,7 @@ use lib::scope {
 }
 use lib::termination {check_termination_all}
 use lib::typecheck::diagnostic {render_type_error, render_type_warning}
-use lib::typecheck::instance_sig {instance_signature_errors}
+use lib::typecheck::instance_sig {instance_signature_errors, unannotated_methods}
 use lib::typecheck::infer {body_type_error, empty_local_types, empty_locals, type_check}
 // `--affine` (Phase 5 of the enforcement plan): the M2 usage rule as
 // real diagnostics. Built once per module by the affine walk below,
@@ -2166,10 +2166,10 @@ def locals_with_inductive_params ({ params, .. } : Inductive) (scope : Scope) (l
 /// targets are already resolved (or rejected) upstream during
 /// dependency/scope loading (`build_scope_with_deps_and_prelude`), so
 /// there's nothing left for a per-decl pass to add; `infix_d` has no
-/// body of its own to type-check. `instance_d` also stays skipped —
-/// matching the Rust reference `core_check_module.rs`'s own documented
-/// limitation ("`Decl::Ins` (instance) bodies are NOT checked by this
-/// path"), not a self-hosted-specific shortfall to close here.
+/// body of its own to type-check. `instance_d`'s method bodies are
+/// checked as the promoted defs; this pass checks each method's signature
+/// against its class's, and an unannotated method's body against the
+/// class's type (ISSUE-14, `typecheck/instance_sig.mo`).
 ///
 /// Note: class method signatures routinely reference the class's own
 /// implicit type parameter (e.g. `class Show A { def show (a : A) :
@@ -2488,10 +2488,7 @@ def is_dict_value_def (df : Def) : Bool :=
 
 /// `use_d`/`open_d`/`infix_d` genuinely have nothing to type-check (no
 /// term/type of their own) — the `_ => List.empty` catch-all is correct
-/// for those. `instance_d` is the real remaining gap here: instance
-/// method BODIES aren't checked at all (tracked separately — see
-/// `lang/typecheck/infer.mo`'s `resolve_class_method`, which doesn't
-/// even resolve a concrete method body to check in the first place).
+/// for those.
 def check_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match d {
         Decl.def_d df =>
@@ -2505,8 +2502,9 @@ def check_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) (path
         // (`open X {...} in def f := ...` would register `f` in scope
         // via scope-building but never actually check `f`'s own body).
         Decl.scoped_open_d _ _ inner => check_decl_with_scope inner scope locals path verbose,
-        // The method BODIES are checked as the promoted defs; here only their
-        // signatures against the class (ISSUE-14).
+        // Annotated method bodies are checked as the promoted defs; here,
+        // each signature against the class, and an unannotated body against
+        // the class's type (ISSUE-14).
         Decl.instance_d ins => do { return (instance_signature_diagnostics ins scope locals path) },
         _ => do { return List.empty }
     }
@@ -2519,8 +2517,29 @@ def instance_signature_diagnostics (ins : Instance) (scope : Scope) (locals : Lo
     match scope_find_class ins.cls scope {
         Option.none => List.empty,
         Option.some cls =>
-            render_instance_errors (show_name_path ins.cls) path
-                (instance_signature_errors cls ins scope locals),
+            list_append
+                (render_instance_errors (show_name_path ins.cls) path
+                    (instance_signature_errors cls ins scope locals))
+                (unannotated_body_diagnostics (show_name_path ins.cls) (unannotated_methods cls ins)
+                    scope locals path),
+    }
+
+/// An unannotated method's body, checked as a def whose declared type is
+/// the class's (`instance_sig.unannotated_methods`), named `<Class>.<method>`.
+#[partial]
+def unannotated_body_diagnostics (cls_name : String) (methods : List (Pair Def Term)) (scope : Scope)
+    (locals : LocalScope) (path : Option String) : List String :=
+    match methods {
+        List.empty => List.empty,
+        List.cons p rest =>
+            match p {
+                Pair.pair d expected =>
+                    let qualified : NamePath :=
+                        NamePath.mk [Identifier.id (cls_name ++ "." ++ show_name_path d.name)] in
+                    let as_def : Def := { d with name := qualified, typ := expected } in
+                    list_append (def_body_diagnostics as_def scope locals path)
+                        (unannotated_body_diagnostics cls_name rest scope locals path),
+            },
     }
 
 #[partial]

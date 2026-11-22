@@ -142,8 +142,9 @@ def method_error (cls : Class) (ins : Instance) (ivars : List Identifier) (d : D
                 },
     }
 
-/// An unannotated method (`def show a := ...`) has nothing written to
-/// compare; its body is checked against the class signature separately.
+/// An unannotated method (`def df := 5`) has nothing written to compare;
+/// its body is checked against the class signature instead
+/// (`unannotated_methods`).
 #[partial]
 def is_whole_hole (t : Term) : Bool :=
     match t {
@@ -163,4 +164,26 @@ def def_bare_name (d : Def) : Identifier :=
                     },
                 List.empty => Identifier.id (show_name_path d.name),
             },
+    }
+
+/// Each unannotated method that names a class method, with the class's
+/// type for it at this instance: the type its body must check against.
+/// The parser's untyped fallback discards an unannotated method's
+/// parameters (`def nm (a : Bool) := "x"` is the constant `"x"`), so the
+/// body alone is what an instance supplies.
+pub def unannotated_methods (cls : Class) (ins : Instance) : List (Pair Def Term) :=
+    unannotated_go cls ins ins.defs
+
+#[partial]
+def unannotated_go (cls : Class) (ins : Instance) (defs : List Def) : List (Pair Def Term) :=
+    match defs {
+        List.empty => List.empty,
+        List.cons d rest =>
+            let tail := unannotated_go cls ins rest in
+            if Bool.not (is_whole_hole d.typ) then tail
+            else
+                match class_method_for cls.methods d {
+                    Option.none => tail,
+                    Option.some cd => List.cons (Pair.pair d (expected_method_type cls ins cd)) tail,
+                },
     }

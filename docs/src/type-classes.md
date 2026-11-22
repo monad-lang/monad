@@ -33,8 +33,10 @@ Two limitations to be aware of today:
   there is no way to write "use all the defaults". The prelude's `MonadState` is
   the first shipped class with real defaults, and `examples/state_monad.mo`
   duly spells out all five of its methods, `modify` and `get_map` included.
-- Instance methods need full type annotations. `def describe x := "int"` does not
-  parse; write `def describe (x : I64) : String := "int"`.
+- Instance methods with parameters need full type annotations. Without a `:`
+  return type the parameters are dropped, so `def describe x := "int"` is the
+  constant `"int"`, and it is rejected against the class's `I64 -> String`.
+  Write `def describe (x : I64) : String := "int"`.
 
 ```monad
 class Describe A {
@@ -43,6 +45,23 @@ class Describe A {
 
 instance Describe I64 {
     def describe (x : I64) : String := "int"
+}
+```
+
+## Instances Are Checked Against Their Class
+
+Each instance method's signature must be the class's, with the instance's
+arguments substituted for the class parameters. Its own type variables may be
+renamed (`map (f : X -> Y)` for the class's `map (f : A -> B)`). An unannotated
+method (`def default := 0`) has its body checked against that type instead. A
+def the class does not declare is an error, not a private helper; put helpers
+at the top level.
+
+```monad,ignore
+class Show A { def show (a : A) : String }
+
+instance Show Bool {
+    def show (a : I64) : String := "x"   // error: the class declares Bool -> String
 }
 ```
 
