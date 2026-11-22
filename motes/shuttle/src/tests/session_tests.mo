@@ -5,7 +5,7 @@
 /// accumulated usage all survive. A missing file is a named error.
 use std::test {Test.read_fixture_or}
 use shuttle::session {Session}
-use shuttle::provider {ProviderConfig, Wire}
+use shuttle::provider {ProviderConfig, Wire, Effort, Effort.text}
 use shuttle::tool {ToolSpec}
 use shuttle::message {Message, Usage}
 use shuttle::message_types {Role, Content}
@@ -146,21 +146,33 @@ def test_config_codec_drops_direct_key : Bool :=
         },
     }
 
-/// `effort` round-trips, and a config saved before the field existed
-/// decodes as "" (the model's default).
+/// `effort` round-trips, and a config saved before the field existed --
+/// or with a value this build does not know -- decodes as none (the
+/// model's default).
 #[test]
 def test_config_codec_effort : Bool :=
-    let high : ProviderConfig := { keyed_config with effort := "high" } in
+    let high : ProviderConfig := { keyed_config with effort := Option.some Effort.high } in
     let round : Bool := match ProviderConfig.deserialize_json (ProviderConfig.serialize_json high) {
         Result.err _ => false,
-        Result.ok c => c.effort == "high",
+        Result.ok c => match c.effort {
+            Option.none => false,
+            Option.some e => Effort.text e == "high",
+        },
     } in
     let legacy_text : String := r#"{"base_url":"x","model":"m","api_key_env":"K","max_tokens":8,"wire":"mock"}"# in
     let legacy : Bool := match Json.parse legacy_text {
         Result.err _ => false,
         Result.ok j => match ProviderConfig.deserialize_json j {
             Result.err _ => false,
-            Result.ok c => String.is_empty c.effort,
+            Result.ok c => match c.effort { Option.none => true, Option.some _ => false },
         },
     } in
-    round && legacy
+    let junk_text : String := r#"{"base_url":"x","model":"m","api_key_env":"K","max_tokens":8,"wire":"mock","effort":"loud"}"# in
+    let junk : Bool := match Json.parse junk_text {
+        Result.err _ => false,
+        Result.ok j => match ProviderConfig.deserialize_json j {
+            Result.err _ => false,
+            Result.ok c => match c.effort { Option.none => true, Option.some _ => false },
+        },
+    } in
+    round && legacy && junk

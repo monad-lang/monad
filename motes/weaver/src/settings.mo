@@ -13,6 +13,7 @@
 /// arbitrary code, so the override is an explicit, per-server trust
 /// decision the file records.
 use shuttle::gate {Capability}
+use shuttle::provider {Effort, Effort.parse, Effort.text}
 use weaver::policy {Mode, Mode.parse}
 use weaver::error {WeaverError}
 use weaver::plan_file {PlanSettings, PlanSettings.empty}
@@ -37,8 +38,9 @@ pub struct Settings {
     model : Option String,
     max_turns : Option I64,
     thinking : Option Bool,
-    /// The reasoning effort (low | medium | high | xhigh | max).
-    effort : Option String := Option.none,
+    /// The reasoning effort; an absent (or unknown) value leaves the
+    /// choice to the model.
+    effort : Option Effort := Option.none,
     max_tokens : Option I64,
     context_window : Option I64,
     compact_at : Option I64,
@@ -402,7 +404,7 @@ def settings_of (root : BTreeMap String Toml.Value) : Settings := {
     model := str_at "model" root,
     max_turns := int_at "max_turns" root,
     thinking := bool_at "thinking" root,
-    effort := str_at "effort" root,
+    effort := opt_effort (str_at "effort" root),
     max_tokens := int_at "max_tokens" root,
     context_window := int_at "context_window" root,
     compact_at := int_at "compact_at" root,
@@ -464,6 +466,17 @@ def str_at (key : String) (root : BTreeMap String Toml.Value) : Option String :=
             Result.err _ => Option.none,
         },
     }
+
+/// A file string as an effort level: an unknown name is the same as an
+/// absent one (the model's default), never a parse failure.
+def opt_effort (v : Option String) : Option Effort :=
+    match v {
+        Option.none => Option.none,
+        Option.some s => Effort.parse (String.trim s),
+    }
+
+/// An effort level as the string a settings file stores.
+def effort_out (e : Option Effort) : Option String := Option.map Effort.text e
 
 def bool_at (key : String) (root : BTreeMap String Toml.Value) : Option Bool :=
     match Toml.table_get key root {
@@ -537,7 +550,7 @@ pub struct SettingsUpdate {
     model : Option String,
     max_turns : Option I64,
     thinking : Option Bool,
-    effort : Option String := Option.none,
+    effort : Option Effort := Option.none,
     max_tokens : Option I64,
     context_window : Option I64,
     compact_at : Option I64,
@@ -634,7 +647,7 @@ def apply_update (u : SettingsUpdate) (root : BTreeMap String Toml.Value) : BTre
     let r8 : BTreeMap String Toml.Value := put_integer "compact_at" u.compact_at r7 in
     let r9 : BTreeMap String Toml.Value := put_integer "resume_fold" u.resume_fold r8 in
     let r10 : BTreeMap String Toml.Value := put_string "auto_on_danger" u.auto_on_danger r9 in
-    let r11 : BTreeMap String Toml.Value := put_string "effort" u.effort r10 in
+    let r11 : BTreeMap String Toml.Value := put_string "effort" (effort_out u.effort) r10 in
     put_boolean "auto_safety" u.auto_safety r11
 
 def write_update (path : String) (target : String) (out : String) : IO (Result String String) := do {

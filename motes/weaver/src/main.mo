@@ -220,7 +220,7 @@ def warnings_note (ws : List WeaverError) : Option String :=
 def effective_cfg (s : Settings) (cfg : ProviderConfig) : ProviderConfig :=
     let cfg0 : ProviderConfig := match s.effort {
         Option.none => cfg,
-        Option.some e => { cfg with effort := e },
+        Option.some e => { cfg with effort := Option.some e },
     } in
     let cfg1 : ProviderConfig := match s.thinking {
         Option.none => cfg0,

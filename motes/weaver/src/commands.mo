@@ -23,7 +23,7 @@ use weaver::tasks {TaskEntry, Tasks.list, Tasks.line}
 use weaver::todo {Todo.read, Todo.write, Todo.summary, Todo.lines}
 use weaver::btw {Btw.ask}
 use weaver::place {SessionPlace, Place.cwd_of}
-use shuttle::provider {ProviderConfig}
+use shuttle::provider {ProviderConfig, Effort, Effort.text, Effort.parse, Effort.all}
 use shuttle::registry {ToolRegistry}
 use shuttle::session {Session, Session.save, Session.load}
 use shuttle::message {Message, Usage}
@@ -1514,32 +1514,43 @@ pub def Commands.setting_rows (st : WeaverState) : List SettingRow :=
         kind := SettingKind.setting_cycle } in
     [r0, r1, r2, r3, r4, r5, r6, r7, r8, r9]
 
-/// The effort levels `/settings effort` accepts, in cycle order; ""
-/// (shown as "default") leaves the choice to the model.
-pub def Commands.effort_levels : List String := ["", "low", "medium", "high", "xhigh", "max"]
+/// The `/settings` cycle: the model's default first, then every level.
+pub def Commands.effort_choices : List (Option Effort) :=
+    List.append [Option.none] (List.map (fn (e : Effort) => Option.some e) Effort.all)
 
-pub def Commands.effort_text (e : String) : String := if String.is_empty e then "default" else e
+pub def Commands.effort_text (e : Option Effort) : String :=
+    match e {
+        Option.none => "default",
+        Option.some level => Effort.text level,
+    }
 
-/// A typed effort value, or none when it is not a level.
-pub def Commands.parse_effort (v : String) : Option String :=
+/// A typed effort value, or none when it names neither a level nor the
+/// default. The inner `Option` is "no level", the outer "not a value at
+/// all" -- `/settings effort default` is a choice, `/settings effort loud`
+/// is not.
+pub def Commands.parse_effort (v : String) : Option (Option Effort) :=
     let t : String := String.trim v in
-    if Bool.or (t == "default") (Bool.or (t == "off") (String.is_empty t)) then Option.some ""
-    else if List.any (fn (l : String) => l == t) Commands.effort_levels then Option.some t
-    else Option.none
+    if Bool.or (t == "default") (Bool.or (t == "off") (String.is_empty t)) then Option.some Option.none
+    else match Effort.parse t {
+        Option.none => Option.none,
+        Option.some level => Option.some (Option.some level),
+    }
 
-/// The level after `e` in the cycle (wrapping to "default").
-pub def Commands.next_effort (e : String) : String := next_effort_in e Commands.effort_levels
+/// The choice after `e` in the cycle, wrapping to the default.
+pub def Commands.next_effort (e : Option Effort) : Option Effort :=
+    next_effort_in e Commands.effort_choices
 
 #[partial]
-def next_effort_in (e : String) (ls : List String) : String :=
+def next_effort_in (e : Option Effort) (ls : List (Option Effort)) : Option Effort :=
     match ls {
-        List.empty => "",
+        List.empty => Option.none,
         List.cons l rest =>
-            if l == e then (match rest { List.cons n _ => n, List.empty => "" })
+            if Commands.effort_text l == Commands.effort_text e
+            then (match rest { List.cons n _ => n, List.empty => Option.none })
             else next_effort_in e rest,
     }
 
-def set_effort (st : WeaverState) (e : String) : WeaverState :=
+def set_effort (st : WeaverState) (e : Option Effort) : WeaverState :=
     let cfg : ProviderConfig := st.run.session.config in
     let cfg2 : ProviderConfig := { cfg with effort := e } in
     let cur : Session := st.run.session in
@@ -1666,7 +1677,7 @@ def settings_update (st : WeaverState) : SettingsUpdate :=
         resume_fold := st.resume_fold,
         auto_on_danger := Option.some (AutoDanger.show st.auto_on_danger),
         auto_safety := Option.some st.auto_safety,
-        effort := if String.is_empty cfg.effort then Option.none else Option.some cfg.effort,
+        effort := cfg.effort,
     } in
     u
 

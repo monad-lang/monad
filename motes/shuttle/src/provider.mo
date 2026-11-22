@@ -32,6 +32,43 @@ pub type Wire {
     mock,
 }
 
+/// Anthropic's `output_config.effort` levels, weakest first. "Default" is
+/// not a level: the config field is an `Option Effort`, absent meaning the
+/// model's own default. The names avoid the bare words other inductives
+/// already use as constructors (`max` is a nullary constructor twice over,
+/// and a shared nullary name makes a qualified match fall through).
+pub type Effort {
+    low,
+    medium,
+    high,
+    xhigh,
+    maximum,
+}
+
+/// The level's wire spelling (also the `/settings` spelling).
+pub def Effort.text (e : Effort) : String :=
+    match e {
+        Effort.low => "low",
+        Effort.medium => "medium",
+        Effort.high => "high",
+        Effort.xhigh => "xhigh",
+        Effort.maximum => "max",
+    }
+
+/// The level `s` names, or none when it names no level. Callers treat none
+/// as "leave it to the model" -- a settings file's unknown value is not an
+/// error, just an absent choice.
+pub def Effort.parse (s : String) : Option Effort :=
+    if s == "low" then Option.some Effort.low
+    else if s == "medium" then Option.some Effort.medium
+    else if s == "high" then Option.some Effort.high
+    else if s == "xhigh" then Option.some Effort.xhigh
+    else if s == "max" then Option.some Effort.maximum
+    else Option.none
+
+/// Every level, weakest first: the `/settings` cycle order.
+pub def Effort.all : List Effort := [Effort.low, Effort.medium, Effort.high, Effort.xhigh, Effort.maximum]
+
 pub struct ProviderConfig {
     base_url : String,
     model : String,
@@ -47,9 +84,9 @@ pub struct ProviderConfig {
     /// session with a legacy weaver cap is raised on resume only when this
     /// is true, so a deliberate small budget survives.
     max_tokens_auto : Bool := true,
-    /// The reasoning effort (Anthropic `output_config.effort`: low, medium,
-    /// high, xhigh, max); "" leaves it to the model's default.
-    effort : String := "",
+    /// The reasoning effort (Anthropic `output_config.effort`); none leaves
+    /// it to the model's default.
+    effort : Option Effort := Option.none,
 }
 
 def wire_tag (w : Wire) : String :=
@@ -81,15 +118,24 @@ pub def Wire.deserialize_json (j : Json) : Result String Wire :=
 /// `session_tests.mo::test_session_save_omits_direct_api_key`, not by
 /// this comment.
 pub def ProviderConfig.serialize_json (c : ProviderConfig) : Json :=
-    Json.make_object_pairs
+    Json.make_object_pairs (config_json_pairs c)
+
+/// The saved fields. `effort` is written only when chosen, the same way
+/// the decoder treats its absence (the model's default) -- an empty string
+/// would be a third state `Option Effort` does not have.
+def config_json_pairs (c : ProviderConfig) : List (Pair String Json) :=
+    let base : List (Pair String Json) :=
         [Pair.pair "base_url" (Json.make_str c.base_url),
             Pair.pair "model" (Json.make_str c.model),
             Pair.pair "api_key_env" (Json.make_str c.api_key_env),
             Pair.pair "max_tokens" (Json.make_num_int c.max_tokens),
             Pair.pair "wire" (Wire.serialize_json c.wire),
             Pair.pair "thinking" (Json.make_bool c.thinking),
-            Pair.pair "max_tokens_auto" (Json.make_bool c.max_tokens_auto),
-            Pair.pair "effort" (Json.make_str c.effort)]
+            Pair.pair "max_tokens_auto" (Json.make_bool c.max_tokens_auto)] in
+    match c.effort {
+        Option.none => base,
+        Option.some e => List.append base [Pair.pair "effort" (Json.make_str (Effort.text e))],
+    }
 
 def config_field (obj : BTreeMap String Json) (name : String) : Result String Json :=
     match Json.object_get name obj {
@@ -174,14 +220,14 @@ def config_of_object (obj : BTreeMap String Json) : Result String ProviderConfig
     }
 
 /// `effort` is OPTIONAL: a session saved before the field existed, or a
-/// junk value, decodes as "" (the model's default).
+/// value this build does not know, decodes as none (the model's default).
 def config_with_effort (obj : BTreeMap String Json) (r : Result String ProviderConfig) : Result String ProviderConfig :=
     match r {
         Result.err e => Result.err e,
         Result.ok c =>
-            let e : String := match config_str_field obj "effort" {
-                Result.ok v => v,
-                Result.err _ => "",
+            let e : Option Effort := match config_str_field obj "effort" {
+                Result.ok v => Effort.parse v,
+                Result.err _ => Option.none,
             } in
             let out : ProviderConfig := { c with effort := e } in
             Result.ok out,
@@ -226,9 +272,16 @@ def anthropic_send_step (cfg : ProviderConfig) (key_opt : Option String) (req : 
         Option.some key => Anthropic.complete_stream cfg.base_url key req stop emit,
     }
 
+/// The wire's own spelling: "" leaves it unset.
+def effort_wire_text (e : Option Effort) : String :=
+    match e {
+        Option.none => "",
+        Option.some level => Effort.text level,
+    }
+
 def send_anthropic (cfg : ProviderConfig) (system : String) (tools : List ToolSpec) (history : List Message) (stop : Unit -> IO Bool) (emit : String -> IO Unit) : ResultT String IO Turn := do {
     let key_opt <- ResultT.lift (ProviderConfig.effective_key cfg);
-    let req : MessagesRequest := Anthropic.with_effort cfg.effort
+    let req : MessagesRequest := Anthropic.with_effort (effort_wire_text cfg.effort)
         (Anthropic.encode_request cfg.model cfg.max_tokens cfg.thinking system tools history);
     let resp <- anthropic_send_step cfg key_opt req stop emit;
     ResultT.mk (return (Anthropic.decode_response resp))
