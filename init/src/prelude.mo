@@ -107,10 +107,10 @@ pub class Comonad (W : Type -> Type) {
     def extend (f : W A -> B) (W A) : W B
 }
 
-/// State monad: thread state S through a monad M. S is a class parameter
-/// because each instance fixes it (`instance MonadState (State I64) I64`);
-/// M stays first so `KnownInstances` keys on the monad's concrete head.
-pub class MonadState (M : Type -> Type) (S : Type) {
+/// State monad: thread state S through a monad M. Each instance fixes S once
+/// (`instance MonadState (State I64)`, whose methods choose `S := I64`), so it
+/// is an instance-determined binder, not a class argument.
+pub class MonadState {S : Type} (M : Type -> Type) {
     def get : M S
     def set (s : S) : M Unit
     def modify_get (f : S -> Pair S A) : M A

@@ -49,10 +49,11 @@ slot wants. A `Ptr` is untyped: passing an `SSL_CTX*` where an `SSL*` belongs
 type-checks and segfaults, so wrap handles in a newtype (`motes/tls`'s
 `Tls.Stream` is the worked example).
 
-`MonadState` and `IndexedMonadState` take the monad as their only parameter —
-the state type is an implicit forall — so that instance resolution can key on a
-concrete monad head. `examples/state_monad.mo` and `examples/indexed_monads.mo`
-show both in use.
+`MonadState` and `IndexedMonadState` take the monad as their only class
+parameter, so that instance resolution can key on a concrete monad head.
+`MonadState`'s state type is instance-determined (`{S : Type}`): each instance
+fixes it through its methods. `IndexedMonadState`'s is an implicit forall.
+`examples/state_monad.mo` and `examples/indexed_monads.mo` show both in use.
 
 Functions: `Bool.not/and/or`, `List.is_empty/append/first/last/flatten/tail/map`,
 `Option.get_or_default`, `Nat.add/sub/mul/eq`, `fun_apply`/`apply_fun`.

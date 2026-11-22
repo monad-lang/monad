@@ -23,7 +23,7 @@ pub instance Monad (State S) {
         State.state (State.bind_step ma f)
 }
 
-pub instance MonadState (State I64) I64 {
+pub instance MonadState (State I64) {
     def get : State I64 I64 :=
         State.state (fn s => Pair.pair s s)
     def set (new_s : I64) : State I64 Unit :=
