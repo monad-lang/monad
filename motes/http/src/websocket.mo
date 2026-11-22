@@ -759,12 +759,14 @@ def Ws.parse_header2 (rules : WsRules) (frag_len : I64) (b0 : U8) (b1 : U8) (res
                 else
                     match Ws.split_at ext rest List.empty {
                         Pair.pair ext_bytes after_ext =>
-                            let mask : Option WsMask := if masked then Option.some (WsMask.of_bytes after_ext) else Option.none in
+                            let mask : Option WsMask :=
+                                if masked then Option.some (WsMask.of_bytes after_ext) else Option.none in
                             let plen : I64 := Ws.payload_length len7 ext_bytes in
                             if I64.lt plen 0 then Ws.protocol_error "64-bit length with the top bit set"
                             else if Bool.and (Bool.not control) (I64.gt (I64.add frag_len plen) rules.max_message)
                             then Result.err (WsClose.of Ws.close_too_big "message exceeds the size limit")
-                            else if I64.lt blen (I64.add hdr_len plen) then Result.ok (WsStep.more (I64.add hdr_len plen))
+                            else if I64.lt blen (I64.add hdr_len plen)
+                            then Result.ok (WsStep.more (I64.add hdr_len plen))
                             else Result.ok (WsStep.frame hdr_len mask plen fin op)
                     }
         }

@@ -131,7 +131,7 @@ def Runtime.install_socket {Msg : Type} (url : String) (protocols : List String)
 def Runtime.add_socket {S : Type} {Msg : Type} (entry : WsSocket Msg)
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
             RuntimeState.st root last model queue stopped handlers subs timers focus paint
                 (List.cons entry sockets),
     }
@@ -159,7 +159,7 @@ def Runtime.socket_for_id {Msg : Type} (id : I64)
         List.empty => Option.none,
         List.cons e rest =>
             match e {
-                WsSocket.ws_socket key _url ws handler =>
+                { key, ws, handler, .. } =>
                     if U32.beq (Runtime.socket_id key) (I64.to_u32 id)
                     then Option.some (Pair.pair ws handler)
                     else Runtime.socket_for_id id rest
@@ -188,23 +188,21 @@ def Runtime.fold_enqueue {S : Type} {Msg : Type} (msgs : List Msg) (state : Runt
 def Runtime.set_sockets {S : Type} {Msg : Type} (sockets : List (WsSocket Msg))
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs timers focus paint _old =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, .. } =>
             RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets,
     }
 
 /// The live sockets of a state value (pure).
 def Runtime.state_sockets {S : Type} {Msg : Type} (st : RuntimeState S Msg) : List (WsSocket Msg) :=
     match st {
-        RuntimeState.st _root _last _model _queue _stopped _handlers _subs _timers _focus _paint sockets =>
-            sockets,
+        { sockets, .. } => sockets,
     }
 
 def Runtime.sockets_of_state {S : Type} {Msg : Type} (state : Ref (RuntimeState S Msg))
     : IO (List (WsSocket Msg)) := do {
-    let st <- Ref.get state;
+    let st : RuntimeState S Msg <- Ref.get state;
     match st {
-        RuntimeState.st _root _last _model _queue _stopped _handlers _subs _timers _focus _paint sockets =>
-            IO.pure sockets,
+        { sockets, .. } => IO.pure sockets,
     }
 }
 
@@ -228,7 +226,7 @@ def Runtime.find_socket {Msg : Type} (url : String) (sockets : List (WsSocket Ms
         List.empty => Option.none,
         List.cons e rest =>
             match e {
-                WsSocket.ws_socket _key entry_url ws _handler =>
+                { url := entry_url, ws, .. } =>
                     if String.beq entry_url url then Option.some ws else Runtime.find_socket url rest
             }
     }
@@ -237,7 +235,7 @@ def Runtime.find_socket {Msg : Type} (url : String) (sockets : List (WsSocket Ms
 def Runtime.drop_socket {S : Type} {Msg : Type} (key : String)
     (state : RuntimeState S Msg) : IO (RuntimeState S Msg) := do {
     match state {
-        RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
             match Runtime.take_socket key sockets {
                 Pair.pair gone rest => do {
                     let _ <- Runtime.close_gone gone;
@@ -252,7 +250,7 @@ def Runtime.close_gone {Msg : Type} (gone : Option (WsSocket Msg)) : IO Unit :=
         Option.none => IO.pure unit,
         Option.some e =>
             match e {
-                WsSocket.ws_socket _key _url ws _handler => do {
+                { ws, .. } => do {
                     let _ <- WebSocket.unwatch ws;
                     WebSocket.free ws
                 }
@@ -270,7 +268,7 @@ def Runtime.take_socket_go {Msg : Type} (key : String) (sockets : List (WsSocket
         List.empty => Pair.pair Option.none (List.reverse acc),
         List.cons e rest =>
             match e {
-                WsSocket.ws_socket k _url _ws _handler =>
+                { key := k, .. } =>
                     if String.beq k key
                     then Pair.pair (Option.some e) (List.append (List.reverse acc) rest)
                     else Runtime.take_socket_go key rest (List.cons e acc)
@@ -449,9 +447,9 @@ pub def Runtime.mount {S : Type} {Msg : Type} {E : Type}
 /// pure handler sees a complete `WebEvent`.
 pub def Runtime.dispatch {S : Type} {Msg : Type} (handler : I64) : IO Unit := do {
     let state <- Runtime.load_state;
-    let snapshot <- Ref.get state;
+    let snapshot : RuntimeState S Msg <- Ref.get state;
     match snapshot {
-        RuntimeState.st _root _last _model _queue stopped handlers _subs timers _focus _paint sockets =>
+        { stopped, handlers, timers, sockets, .. } =>
             if stopped
             then IO.pure unit
             else if Timer.is_id (I64.to_u32 handler)
@@ -538,7 +536,7 @@ def Runtime.lookup_handler {Msg : Type} (id : U32)
 /// landed in one frame.
 def Runtime.enqueue {S : Type} {Msg : Type} (msg : Msg) (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
             RuntimeState.st root last model (List.append queue (List.cons msg List.empty))
                 stopped handlers subs timers focus paint sockets,
     }
@@ -546,14 +544,14 @@ def Runtime.enqueue {S : Type} {Msg : Type} (msg : Msg) (state : RuntimeState S 
 def Runtime.set_timers {S : Type} {Msg : Type} (timers : List (Pair I64 Msg))
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs _old focus paint sockets =>
+        { root, last, model, queue, stopped, handlers, subs, focus, paint, sockets, .. } =>
             RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets,
     }
 
 def Runtime.add_timer {S : Type} {Msg : Type} (id : I64) (msg : Msg)
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
             RuntimeState.st root last model queue stopped handlers subs
                 (List.append timers (List.cons (Pair.pair id msg) List.empty)) focus paint sockets,
     }
@@ -561,7 +559,7 @@ def Runtime.add_timer {S : Type} {Msg : Type} (id : I64) (msg : Msg)
 def Runtime.add_focus {S : Type} {Msg : Type} (selector : String)
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
             RuntimeState.st root last model queue stopped handlers subs timers
                 (List.append focus (List.cons selector List.empty)) paint sockets,
     }
@@ -569,7 +567,7 @@ def Runtime.add_focus {S : Type} {Msg : Type} (selector : String)
 def Runtime.add_paint {S : Type} {Msg : Type} (effect : Unit -> IO (Option Msg))
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
             RuntimeState.st root last model queue stopped handlers subs timers focus
                 (List.append paint (List.cons effect List.empty)) sockets,
     }
@@ -608,9 +606,9 @@ def Runtime.apply_focus (selectors : List String) : IO Unit :=
 pub def Runtime.tick {S : Type} {Msg : Type} {E : Type}
     (prog : Program S Msg E) (host : Host IO E Msg) : IO Unit := do {
     let state <- Runtime.load_state;
-    let snapshot <- Ref.get state;
+    let snapshot : RuntimeState S Msg <- Ref.get state;
     match snapshot {
-        RuntimeState.st root last model queue stopped handlers subs timers _focus _paint _sockets =>
+        { root, last, model, queue, stopped, handlers, subs, timers, .. } =>
             if stopped
             then IO.pure unit
             else if List.is_empty queue
@@ -683,22 +681,22 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
 /// The messages dispatched while the batch ran.
 def Runtime.pending_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List Msg :=
     match state {
-        RuntimeState.st _root _last _model queue _stopped _handlers _subs _timers _focus _paint _sockets => queue,
+        { queue, .. } => queue,
     }
 
 def Runtime.timers_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List (Pair I64 Msg) :=
     match state {
-        RuntimeState.st _root _last _model _queue _stopped _handlers _subs timers _focus _paint _sockets => timers,
+        { timers, .. } => timers,
     }
 
 def Runtime.focus_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List String :=
     match state {
-        RuntimeState.st _root _last _model _queue _stopped _handlers _subs _timers focus _paint _sockets => focus,
+        { focus, .. } => focus,
     }
 
 def Runtime.paint_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List (Unit -> IO (Option Msg)) :=
     match state {
-        RuntimeState.st _root _last _model _queue _stopped _handlers _subs _timers _focus paint sockets => paint,
+        { paint, .. } => paint,
     }
 
 /// The state slot, typed for the caller. `Keep.load` is generic because the

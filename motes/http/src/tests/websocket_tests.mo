@@ -112,18 +112,21 @@ def test_select_protocol_server_preference : Bool :=
 def test_accept_response_round_trip : Bool :=
     let key := "dGhlIHNhbXBsZSBub25jZQ==" in
     let r := Ws.accept_response key (Option.some "chat") in
+    let picked := accepted (Ws.check_accept key (Shared.of ["chat", "v2"]) r.status (Shared.of r.headers)) in
     r.status == Status.switching_protocols
         && Headers.get "Sec-WebSocket-Accept" r.headers == Option.some "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
-        && accepted (Ws.check_accept key (Shared.of ["chat", "v2"]) r.status (Shared.of r.headers)) == Option.some "chat"
+        && picked == Option.some "chat"
 
 #[test]
 def test_check_accept_rejects : Bool :=
     let key := "dGhlIHNhbXBsZSBub25jZQ==" in
     let good := Ws.accept_response key Option.none in
+    let protos := Headers.set "Sec-WebSocket-Protocol" "x" good.headers in
+    let exts := Headers.set "Sec-WebSocket-Extensions" "permessage-deflate" good.headers in
     refused (Ws.check_accept key (Shared.of []) 200u16 (Shared.of good.headers))
         && refused (Ws.check_accept "AAAAAAAAAAAAAAAAAAAAAA==" (Shared.of []) good.status (Shared.of good.headers))
-        && refused (Ws.check_accept key (Shared.of []) good.status (Shared.of (Headers.set "Sec-WebSocket-Protocol" "x" good.headers)))
-        && refused (Ws.check_accept key (Shared.of []) good.status (Shared.of (Headers.set "Sec-WebSocket-Extensions" "permessage-deflate" good.headers)))
+        && refused (Ws.check_accept key (Shared.of []) good.status (Shared.of protos))
+        && refused (Ws.check_accept key (Shared.of []) good.status (Shared.of exts))
 
 #[test]
 def test_client_headers : Bool :=
@@ -189,7 +192,8 @@ def test_decode_unmasked_hello : Bool :=
 
 #[test]
 def test_decode_masked_hello : Bool :=
-    one_text (decode_all true [0x81u8, 0x85u8, 0x37u8, 0xfau8, 0x21u8, 0x3du8, 0x7fu8, 0x9fu8, 0x4du8, 0x51u8, 0x58u8]) "Hello"
+    let wire := [0x81u8, 0x85u8, 0x37u8, 0xfau8, 0x21u8, 0x3du8, 0x7fu8, 0x9fu8, 0x4du8, 0x51u8, 0x58u8] in
+    one_text (decode_all true wire) "Hello"
 
 #[test]
 def test_decode_fragmented_with_interleaved_ping : Bool :=
@@ -209,9 +213,11 @@ def test_decode_fragmented_with_interleaved_ping : Bool :=
 
 #[test]
 def test_decode_byte_at_a_time : Bool :=
+    let mask : WsMask := WsMask.of_bytes mask_key in
+    let body := Ws.message_frame (WsMessage.binary (fill 300 9u8 List.empty)) in
     let wire :=
         List.append [0x81u8, 0x85u8, 0x37u8, 0xfau8, 0x21u8, 0x3du8, 0x7fu8, 0x9fu8, 0x4du8, 0x51u8, 0x58u8]
-            (Ws.encode_frame (Option.some (WsMask.of_bytes mask_key)) (Ws.message_frame (WsMessage.binary (fill 300 9u8 List.empty)))) in
+            (Ws.encode_frame (Option.some mask) body) in
     match feed_bytes (WsDecoder.new true 1048576) wire List.empty {
         Option.some us => match us {
             List.cons a rest => match rest {
@@ -234,7 +240,8 @@ def test_decode_two_frames_one_push : Bool :=
 
 #[test]
 def test_decode_close_frame : Bool :=
-    match decode_all false (Ws.encode_frame Option.none (Ws.control_frame WsOpcode.close (Ws.encode_close (WsClose.of 1001 "away")))) {
+    let frame := Ws.control_frame WsOpcode.close (Ws.encode_close (WsClose.of 1001 "away")) in
+    match decode_all false (Ws.encode_frame Option.none frame) {
         Option.some us => match us {
             List.cons u _ => match u { WsInbound.close c => c.code == 1001 && c.reason == "away", _ => false },
             _ => false

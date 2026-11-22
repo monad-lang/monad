@@ -86,8 +86,10 @@ def serve_one (sock : FdStream) : IO Unit := do {
                     Option.none => Stream.close sock,
                     Option.some key => do {
                         let accept := Ws.accept_key key;
-                        let head := String.concat "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "
-                            (String.concat accept "\r\n\r\n");
+                        let head :=
+                            String.concat "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                                (String.concat "Connection: Upgrade\r\nSec-WebSocket-Accept: "
+                                    (String.concat accept "\r\n\r\n"));
                         let _ <- Transport.write_bytes t (String.to_list head);
                         let started <- Ws.start cfg WsRole.server t rest;
                         match started {
@@ -135,7 +137,11 @@ def test_echo : IO Bool := do {
                 let f <- spawn_server listener;
                 let c <- MooseWs.connect (url_for port) [] Headers.empty cfg;
                 match c {
-                    Result.err e => do { let _ <- IO.println (String.concat "connect: " e); Stream.close listener; IO.pure false },
+                    Result.err e => do {
+                        let _ <- IO.println (String.concat "connect: " e);
+                        Stream.close listener;
+                        IO.pure false
+                    },
                     Result.ok conn => do {
                         let _ <- Ws.send_text conn "over the wire";
                         let got <- Ws.recv_timeout conn 2000i64;

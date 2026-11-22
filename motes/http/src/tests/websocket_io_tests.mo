@@ -76,13 +76,20 @@ def test_text_both_ways : IO Bool := do {
                             let got <- Ws.recv s;
                             let w2 <- Ws.send_binary s [1u8, 2u8, 3u8];
                             let got2 <- Ws.recv c;
-                            let ok1 := match got { Result.ok m => text_of m == Option.some "hello", Result.err _ => false };
-                            let ok2 := match got2 { Result.ok m => match m { WsMessage.binary b => b == [1u8, 2u8, 3u8], _ => false }, Result.err _ => false };
+                            let ok1 : Bool :=
+                                match got { Result.ok m => text_of m == Option.some "hello", Result.err _ => false };
+                            let ok2 : Bool :=
+                                match got2 {
+                                    Result.ok m => match m { WsMessage.binary b => b == [1u8, 2u8, 3u8], _ => false },
+                                    Result.err _ => false
+                                };
+                            let wrote1 : Bool := match w { Result.ok _ => true, Result.err _ => false };
+                            let wrote2 : Bool := match w2 { Result.ok _ => true, Result.err _ => false };
                             let _ <- Ws.close c 1000i64 "done";
                             let _ <- Ws.recv s;
                             Stream.close client_sock;
                             Stream.close server_sock;
-                            IO.pure (ok1 && ok2 && (match w { Result.ok _ => true, Result.err _ => false }) && (match w2 { Result.ok _ => true, Result.err _ => false }))
+                            IO.pure (ok1 && ok2 && wrote1 && wrote2)
                         }
                     }
                 }
@@ -232,7 +239,8 @@ def test_leftover_frames_are_kept : IO Bool := do {
             Pair.pair client_sock server_sock => do {
                 // Write one unmasked text frame from the client side before
                 // the server session starts.
-                let frame := Ws.encode_frame (Option.some (WsMask.of_bytes [1u8, 2u8, 3u8, 4u8])) (Ws.message_frame (WsMessage.text "early"));
+                let mask : WsMask := WsMask.of_bytes [1u8, 2u8, 3u8, 4u8];
+                let frame := Ws.encode_frame (Option.some mask) (Ws.message_frame (WsMessage.text "early"));
                 let t : Transport := Transport.plain client_sock;
                 let _ <- Transport.write_bytes t frame;
                 let sc <- Ws.start cfg WsRole.server (Transport.plain server_sock) frame;

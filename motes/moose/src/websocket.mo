@@ -107,7 +107,8 @@ def MooseWs.connect_uri (key : String) (u : Uri) (protocols : List String) (head
     }
 }
 
-def MooseWs.write_and_read (key : String) (u : Uri) (protocols : List String) (headers : Headers) (cfg : WsConfig) (t : Transport) : IO (Result String WsConn) := do {
+def MooseWs.write_and_read (key : String) (u : Uri) (protocols : List String)
+    (headers : Headers) (cfg : WsConfig) (t : Transport) : IO (Result String WsConn) := do {
     let req := MooseWs.request u key protocols headers;
     match Wire.format_request req {
         Result.err e => IO.pure (Result.err e),
@@ -127,7 +128,8 @@ def MooseWs.write_and_read (key : String) (u : Uri) (protocols : List String) (h
     }
 }
 
-def MooseWs.finish_upgrade (key : String) (protocols : List String) (cfg : WsConfig) (t : Transport) (pr : Pair (Pair U16 Headers) (List U8)) : IO (Result String WsConn) := do {
+def MooseWs.finish_upgrade (key : String) (protocols : List String) (cfg : WsConfig)
+    (t : Transport) (pr : Pair (Pair U16 Headers) (List U8)) : IO (Result String WsConn) := do {
     match pr {
         Pair.pair head rest =>
             match head {
@@ -150,7 +152,7 @@ def MooseWs.finish_upgrade (key : String) (protocols : List String) (cfg : WsCon
 /// authority, path and query; the fragment is dropped).
 pub def MooseWs.url_of (u : Uri) : String :=
     match u {
-        Uri.uri scheme _ host port path query _ =>
+        { scheme, host, port, path, query, .. } =>
             let authority :=
                 match port {
                     Option.none => host,
@@ -161,7 +163,8 @@ pub def MooseWs.url_of (u : Uri) : String :=
     }
 
 #[terminating]
-def MooseWs.read_response_head (t : Transport) (acc : List U8) : IO (Result String (Pair (Pair U16 Headers) (List U8))) := do {
+def MooseWs.read_response_head (t : Transport) (acc : List U8)
+    : IO (Result String (Pair (Pair U16 Headers) (List U8))) := do {
     let r <- Transport.read_bytes t 4096i64;
     match r {
         Result.err e => IO.pure (Result.err e),
@@ -174,7 +177,8 @@ def MooseWs.read_response_head (t : Transport) (acc : List U8) : IO (Result Stri
                     match Wire.parse_response head {
                         Result.err e => IO.pure (Result.err e),
                         Result.ok res =>
-                            IO.pure (Result.ok (Pair.pair (Pair.pair res.status res.headers) (Strings.drop_bytes end all)))
+                            let sh : Pair U16 Headers := Pair.pair res.status res.headers in
+                            IO.pure (Result.ok (Pair.pair sh (Strings.drop_bytes end all)))
                     }
                 }
             }

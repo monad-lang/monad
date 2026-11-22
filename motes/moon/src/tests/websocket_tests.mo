@@ -46,7 +46,8 @@ def echo_loop (conn : WsConn) : IO Unit := do {
 }
 
 def start (router : HandlerT IO Response) : IO (Result String (Pair ServerHandleT U16)) := do {
-    let started <- Server.start_t (ServerConfig.with_timeouts 5000i64 5000i64 15000i64 5000i64 (ServerConfig.on 0u16)) router;
+    let cfg := ServerConfig.with_timeouts 5000i64 5000i64 15000i64 5000i64 (ServerConfig.on 0u16);
+    let started <- Server.start_t cfg router;
     start_ok started
 }
 
@@ -68,8 +69,8 @@ def stop (h : ServerHandleT) : IO Unit := do {
 /// The HTTP upgrade handshake, written by hand; returns whatever the server
 /// sent past the head.
 def upgrade_request : String :=
-    "GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
-     Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    "GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+        ++ "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
 
 def write_text (sock : FdStream) (s : String) : IO Bool := do {
     let t : Transport := Transport.plain sock;

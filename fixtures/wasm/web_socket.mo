@@ -36,7 +36,8 @@ def update (m : I64) (msg : Msg) : Pair I64 (Command Unit Msg) :=
         Msg.ws ev =>
             match ev {
                 WsEvent.opened protocol =>
-                    Pair.pair (m + bump ev) (Command.ws_send "ws://example.test/game" (WsData.text (String.concat "hello " protocol))),
+                    let sent := WsData.text (String.concat "hello " protocol) in
+                    Pair.pair (m + bump ev) (Command.ws_send "ws://example.test/game" sent),
                 _ => Pair.pair (m + bump ev) Command.none,
             },
     }
