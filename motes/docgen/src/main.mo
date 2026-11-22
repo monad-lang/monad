@@ -52,7 +52,7 @@ def decode_motes (out : String) (motes : List String) : Result String BuildArgs 
     let shared : Shared (List String) := Shared.of motes in
     match Shared.get shared {
         List.empty => Result.err "name at least one mote: docgen build <mote>...",
-        List.cons _ rest => Result.ok { out := out, motes := Shared.get shared },
+        List.cons _ rest => Result.ok { out := out, motes := motes },
     }
 
 /// An option's value, or the fallback when it was not given.

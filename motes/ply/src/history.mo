@@ -126,11 +126,13 @@ def History.undo_from (revisions : BTreeMap I64 Revision) (current : I64) (next_
                 { parent, .. } =>
                     if I64.beq parent (0 - 1)
                     then Option.none
-                    else Option.some
-                        { revisions := Shared.get shared,
-                            current := parent,
-                            next_id := next_id,
-                            saved := saved }
+                    else
+                        // The rebuilt history OWNS the map; `Shared.get shared`
+                        // would store a view of it (`borrowed_value_escapes`).
+                        let rebuilt : History :=
+                            { revisions := revisions, current := parent,
+                                next_id := next_id, saved := saved } in
+                        Option.some rebuilt
             },
         Option.none => Option.none
     }

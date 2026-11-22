@@ -407,6 +407,80 @@ def test_allow_non_affine_exempts_a_def : IO Bool :=
             ++ "#[allow_non_affine \"test: the opt-out must compile\"]\n"
             ++ "def dup_allowed (x : NoCopyA) : Pair NoCopyA NoCopyA := Pair.pair x x\n")
 
+// --- Inline `Shared.get` views at owning positions (S1) -------------------
+//
+// The binder rule (`affine.mo`) sees a view bound to a NAME. An inline
+// `Shared.get` has no binder, so `Pair.pair (Shared.get (Shared.of t)) t`
+// stored a view beside its owner unchecked (probe 2 and P36 of
+// `plans/type-system/shared-soundness.md`). These pins cover the inline
+// shape, its bound twin, the Copy exemption, and the argument position S2
+// still owns.
+
+def store_inline_source : String :=
+    "type Thing { thing (n : I64) }\n"
+        ++ "def store_inline (t : Thing) : Pair Thing Thing := Pair.pair (Shared.get (Shared.of t)) t\n"
+
+def store_inline_list_source : String :=
+    "type Thing { thing (n : I64) }\n"
+        ++ "def store_inline_list (t : Thing) : List Thing := [Shared.get (Shared.of t)]\n"
+
+def return_inline_source : String :=
+    "type Thing { thing (n : I64) }\n"
+        ++ "def return_inline (t : Thing) : Thing := Shared.get (Shared.of t)\n"
+
+/// The same escape through a BOUND view. The binder rule has caught these
+/// since M2; the pins keep the inline rule from being mistaken for the
+/// whole rule.
+def return_bound_source : String :=
+    "type Thing { thing (n : I64) }\n"
+        ++ "def return_bound (t : Thing) : Thing := let v : Thing := Shared.get (Shared.of t) in v\n"
+
+def store_bound_source : String :=
+    "type Thing { thing (n : I64) }\n"
+        ++ "def store_bound (t : Thing) : Pair Thing Thing := "
+        ++ "let v : Thing := Shared.get (Shared.of t) in Pair.pair v t\n"
+
+/// The copy half: a `Copy` payload may be copied out of the view, so the
+/// rule must not reject every inline `Shared.get`.
+def store_inline_copy_source : String :=
+    "def store_inline_copy (n : I64) : Pair I64 I64 := Pair.pair (Shared.get (Shared.of n)) n\n"
+
+/// An inline view PASSED to a function is a read, and stays accepted until
+/// S2 judges arguments by the callee's parameter. Pinning the limit means
+/// S2 has to move this pin deliberately rather than silently widen S1.
+def pass_inline_source : String :=
+    "type Thing { thing (n : I64) }\n"
+        ++ "def read_it (t : Thing) : I64 := match t { thing n => n }\n"
+        ++ "def pass_inline (t : Thing) : I64 := read_it (Shared.get (Shared.of t))\n"
+
+#[test]
+def test_an_inline_view_stored_in_a_constructor_is_rejected : IO Bool :=
+    rejected_with "store_inline" "is a borrowed view" store_inline_source
+
+#[test]
+def test_an_inline_view_in_a_list_literal_is_rejected : IO Bool :=
+    rejected_with "store_inline_list" "is a borrowed view" store_inline_list_source
+
+#[test]
+def test_an_inline_view_returned_is_rejected : IO Bool :=
+    rejected_with "return_inline" "is a borrowed view" return_inline_source
+
+#[test]
+def test_a_bound_view_returned_is_rejected : IO Bool :=
+    rejected_with "return_bound" "is a borrowed view" return_bound_source
+
+#[test]
+def test_a_bound_view_stored_in_a_constructor_is_rejected : IO Bool :=
+    rejected_with "store_bound" "is a borrowed view" store_bound_source
+
+#[test]
+def test_a_copy_payload_view_stored_inline_is_accepted : IO Bool :=
+    accepted store_inline_copy_source
+
+#[test]
+def test_an_inline_view_passed_as_an_argument_stays_accepted : IO Bool :=
+    accepted pass_inline_source
+
 // --- ISSUE-8: dependent types across a binder ------------------------------
 //
 // `expected (B a0), found (B a0)`: two producers placed a type written in the

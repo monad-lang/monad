@@ -183,24 +183,31 @@ def BTreeMap.to_list_asc (m : BTreeMap K V) (acc : List (Pair K V)) : List (Pair
             BTreeMap.to_list_asc left acc2
     }
 
-/// Recursive insert helper. The comparators and the key/value travel as
-/// `Shared` handles so the recursive self-calls never move them; the
-/// `Map BTreeMap` instance binds `BOrd.lt`/`gt` to locals and wraps each
-/// ONCE per operation.
+/// Recursive insert helper. The key/value are OWNED: the leaf stores them
+/// directly, and the one borrow handle is for the comparisons only -- a
+/// search key is compared at every level before it is stored, so the
+/// handle keeps those mentions free while the store itself stays a move
+/// (`borrowed_value_escapes`, S1).
+///
+/// Written as a direct `match` rather than `with_node`: `with_node`'s
+/// default argument is evaluated on every call, which would build the leaf
+/// node (and move the key/value) even when the tree is not empty.
 #[terminating]
-def BTreeMap.insert_loop {K V : Type} (lt : Shared (K -> K -> Bool)) (gt : Shared (K -> K -> Bool)) (key : Shared K) (val : Shared V) (m : BTreeMap K V) : BTreeMap K V :=
+def BTreeMap.insert_loop {K V : Type} (lt : Shared (K -> K -> Bool)) (gt : Shared (K -> K -> Bool)) (key : K) (val : V) (m : BTreeMap K V) : BTreeMap K V :=
     let lf : K -> K -> Bool := Shared.get lt in
     let gf : K -> K -> Bool := Shared.get gt in
-    BTreeMap.with_node m
-        (fn k v left right h =>
-            let insert_left : BTreeMap K V := BTreeMap.insert_loop lt gt key val left in
-            let insert_right : BTreeMap K V := BTreeMap.insert_loop lt gt key val right in
-            if lf (Shared.get key) k
-            then BTreeMap.balance k v insert_left right
-            else if gf (Shared.get key) k
-            then BTreeMap.balance k v left insert_right
-            else BTreeMap.node (Shared.get key) (Shared.get val) left right h)
-        (BTreeMap.node (Shared.get key) (Shared.get val) BTreeMap.empty BTreeMap.empty 1)
+    let kk := Shared.of key in
+    match m {
+        BTreeMap.empty =>
+            BTreeMap.node key val BTreeMap.empty BTreeMap.empty 1,
+        BTreeMap.node k v left right h =>
+            let sk := Shared.of k in
+            if lf (Shared.get kk) (Shared.get sk)
+            then BTreeMap.balance k v (BTreeMap.insert_loop lt gt key val left) right
+            else if gf (Shared.get kk) (Shared.get sk)
+            then BTreeMap.balance k v left (BTreeMap.insert_loop lt gt key val right)
+            else BTreeMap.node key val left right h,
+    }
 
 /// Recursive lookup helper.
 #[terminating]
@@ -256,7 +263,7 @@ pub instance [BOrd K] Map BTreeMap {
     def insert (key : K) (val : V) (m : BTreeMap K V) : BTreeMap K V :=
         let lt : K -> K -> Bool := BOrd.lt in
         let gt : K -> K -> Bool := BOrd.gt in
-        BTreeMap.insert_loop (Shared.of lt) (Shared.of gt) (Shared.of key) (Shared.of val) m
+        BTreeMap.insert_loop (Shared.of lt) (Shared.of gt) key val m
 
     #[terminating]
     def lookup (key : K) (m : BTreeMap K V) : Option V :=
@@ -280,7 +287,7 @@ pub instance [BOrd K] Map BTreeMap {
 /// old 16 was badly under-provisioned for how this codebase actually
 /// uses `HashMap`: the compiler keeps ~4,200 def names and ~2,700
 /// reachability entries in one map, which at 16 buckets is ~260 entries
-/// per bucket, and `bucket_lookup_eq` scans a bucket LINEARLY. That made
+/// per bucket, and `HashMap.bucket_lookup_str` scans a bucket LINEARLY. That made
 /// every lookup ~130 key comparisons on the hottest paths in the
 /// backend. At 256 the same maps sit at ~16 per bucket.
 pub def HashMap.bucket_of (hash : U64) : U64 := U64.mod hash 256u64
@@ -408,10 +415,12 @@ pub instance [Hashable K, BOrd K] Map HashMap {
         match m {
             HashMap.map buckets =>
                 let s := Shared.of buckets in
-                let idx : U64 := HashMap.bucket_of (Hashable.hash key) in
+                // The hash borrows the key; the bucket insert then owns it.
+                let kk := Shared.of key in
+                let idx : U64 := HashMap.bucket_of (Hashable.hash (Shared.get kk)) in
                 let bucket : List (Pair K V) := HashMap.get_bucket (Shared.get s) idx in
                 let new_bucket : List (Pair K V) :=
-                    HashMap.bucket_insert (Shared.of lt) (Shared.of gt) (Shared.of key) (Shared.of val) bucket in
+                    HashMap.bucket_insert (Shared.of lt) (Shared.of gt) key val bucket in
                 HashMap.map (HashMap.set_bucket (Shared.get s) idx new_bucket)
         }
 
@@ -441,61 +450,25 @@ pub instance [Hashable K, BOrd K] Map HashMap {
         }
 }
 
-def HashMap.bucket_insert {K V : Type} (lt : Shared (K -> K -> Bool)) (gt : Shared (K -> K -> Bool)) (key : Shared K) (val : Shared V) (bucket : List (Pair K V)) : List (Pair K V) :=
+/// Same shape as `bucket_insert_str`: the key/value are OWNED and stored
+/// into the `Pair` directly; the handle is for the comparisons only.
+def HashMap.bucket_insert {K V : Type} (lt : Shared (K -> K -> Bool)) (gt : Shared (K -> K -> Bool)) (key : K) (val : V) (bucket : List (Pair K V)) : List (Pair K V) :=
     let lf : K -> K -> Bool := Shared.get lt in
     let gf : K -> K -> Bool := Shared.get gt in
+    let kk := Shared.of key in
     match bucket {
-        List.empty => List.cons (Pair.pair (Shared.get key) (Shared.get val)) List.empty,
+        List.empty => List.cons (Pair.pair key val) List.empty,
         List.cons pair rest =>
             match pair {
                 Pair.pair k v =>
                     let sk := Shared.of k in
-                    if Bool.not (lf (Shared.get key) (Shared.get sk)) && Bool.not (gf (Shared.get key) (Shared.get sk))
-                    then List.cons (Pair.pair (Shared.get key) (Shared.get val)) rest
+                    if Bool.not (lf (Shared.get kk) (Shared.get sk)) && Bool.not (gf (Shared.get kk) (Shared.get sk))
+                    then List.cons (Pair.pair key val) rest
                     else List.cons pair (HashMap.bucket_insert lt gt key val rest)
             }
     }
 
-/// Equality-predicate variants of `bucket_insert`/`bucket_lookup`.
-///
-/// The lt/gt versions above use `!lt(k1,k2) && !gt(k1,k2)` purely as an
-/// EQUALITY test -- the chain is not kept sorted (insert appends at the
-/// end; only an existing equal key is replaced in place), so ordering is
-/// never relied on. That costs TWO comparator calls per chain step, and
-/// for a key whose comparator renders a string (`lang/scope.mo`'s
-/// `modpath_lt`/`modpath_gt` both call `show_module_path`, which rebuilds
-/// the path via `List.map` + `intercalate`) that is four string
-/// constructions per step. These variants take a single `eq` instead.
-#[terminating]
-def HashMap.bucket_insert_eq {K V : Type} (eq : Shared (K -> K -> Bool)) (key : Shared K) (val : Shared V) (bucket : List (Pair K V)) : List (Pair K V) :=
-    let ef : K -> K -> Bool := Shared.get eq in
-    match bucket {
-        List.empty => List.cons (Pair.pair (Shared.get key) (Shared.get val)) List.empty,
-        List.cons pair rest =>
-            match pair {
-                Pair.pair k v =>
-                    let sk := Shared.of k in
-                    if ef (Shared.get key) (Shared.get sk)
-                    then List.cons (Pair.pair (Shared.get key) (Shared.get val)) rest
-                    else List.cons pair (HashMap.bucket_insert_eq eq key val rest)
-            }
-    }
-
-#[terminating]
-def HashMap.bucket_lookup_eq {K V : Type} (eq : Shared (K -> K -> Bool)) (key : Shared K) (bucket : List (Pair K V)) : Option V :=
-    let ef : K -> K -> Bool := Shared.get eq in
-    match bucket {
-        List.empty => Option.none,
-        List.cons pair rest =>
-            match pair {
-                Pair.pair k v =>
-                    let sk := Shared.of k in
-                    if ef (Shared.get key) (Shared.get sk) then Option.some v
-                    else HashMap.bucket_lookup_eq eq key rest
-            }
-    }
-
-/// `bucket_lookup_eq`/`bucket_insert_eq` specialised to `String` keys,
+/// `HashMap.bucket_lookup`/`bucket_insert` specialised to `String` keys,
 /// calling `String.beq` directly instead of taking it as a parameter.
 ///
 /// Passing a comparator is what a compiled binary pays dearly for. A

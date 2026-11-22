@@ -66,15 +66,18 @@
 /// - **`borrowed_value_escapes`** — a `Shared.get` view stored, returned,
 ///   or (once call signatures are consulted) passed to an owning
 ///   parameter. The view aliases a payload its handle points at; handing
-///   it out as an owner would give one value two owners.
+///   it out as an owner would give one value two owners. Two shapes earn
+///   it: a view bound to a NAME (`BinderUse.view`, `check_binder_with`)
+///   and an INLINE `Shared.get` in an owning position, which has no
+///   binder for that rule to see (`inline_escape_errors`).
 ///
 /// An erased `%x` used in runtime position reports through
 /// `TypeError.custom`: it is real but has no corpus instances at all
 /// (the whole corpus carries zero multiplicity annotations), so it does
 /// not earn its own variant yet.
-use lib::types {DebugName, Def, Identifier, ModulePath, Multiplicity, Scope, Term, TypeConstraint, TypeError, binder_explicit, binder_named, has_attr, id_member, show_identifier}
+use lib::types {DebugName, Def, Identifier, ModulePath, Multiplicity, Scope, Term, TypeConstraint, TypeError, binder_explicit, binder_named, has_attr, id_member, show_identifier, term_peel}
 use lib::scope {scope_data_empty}
-use lib::typecheck::usage {BinderKind, BinderUse, attribute_binder_types, collect_binder_uses, collect_binder_uses_with_params, typ_is_function}
+use lib::typecheck::usage {BinderKind, BinderUse, InlineViewEscape, attribute_binder_types, collect_binder_uses, collect_binder_uses_with_params, inline_view_escapes, typ_is_function}
 use lib::typecheck::copy_class {is_copy}
 use lib::typecheck::type_kinds {
     TypeKinds, is_linear_type, is_proof_type, type_kinds_empty,
@@ -362,7 +365,55 @@ def check_def_with (kinds : TypeKinds) (scope : Scope) (ctors : HashMap String B
             collect_binder_uses_with_params d.params ctors borrows (def_body d) in
         let attributed : List BinderUse := attribute_binder_types scope raw in
         let copy_vars : List Identifier := copy_vars_of_def d in
-        List.reverse (check_binders_go kinds scope copy_vars strict attributed List.empty)
+        let binder_errors : List TypeError :=
+            List.reverse (check_binders_go kinds scope copy_vars strict attributed List.empty) in
+        // The inline half of the escape rule: a `Shared.get` with no binder
+        // to hang `BinderUse.view` on, reaching an owning position. The
+        // binder rule above cannot see it, which is why `Pair.pair
+        // (Shared.get (Shared.of t)) t` was accepted while the bound form
+        // was rejected (`plans/type-system/shared-soundness.md`, S1/P36).
+        let inline_errors : List TypeError :=
+            inline_escape_errors kinds scope copy_vars strict (inline_view_escapes ctors borrows (def_body d)) in
+        List.append binder_errors inline_errors
+
+/// The `borrowed_value_escapes` diagnostics among the inline views.
+///
+/// The payload exemption is the binder rule's own judgement: a payload
+/// which may be SHARED (a `Copy` instance, or the def's `[Copy A]`) can be
+/// copied out of the view, which is sound.
+///
+/// **An unattributable payload fails OPEN under enforcement and CLOSED in
+/// the report**, the same split `check_binder_with` makes for an
+/// unattributable binder and for the same reason -- a false positive is
+/// worse than a missed one while nothing frees memory yet. The positional
+/// walk cannot name the type of a value bound by a `let` (a redex binder
+/// arrives with a hole), so every `let h := Shared.of x` idiom reports a
+/// hole; rejecting all of them would reject most of `std`'s shared-list
+/// code for a reason unrelated to escaping. This is a KNOWN GAP, not a
+/// soundness argument: S6 condition 2 of
+/// `plans/type-system/shared-soundness.md` (close attribution, or make the
+/// type `#[linear]`) is what has to turn it into a rejection before the
+/// type may be freed.
+#[partial]
+pub def inline_escape_errors (kinds : TypeKinds) (scope : Scope) (copy_vars : List Identifier) (strict : Bool) (vs : List InlineViewEscape) : List TypeError :=
+    match vs {
+        List.empty => List.empty,
+        List.cons v rest =>
+            let payload : Term := InlineViewEscape.payload v in
+            let shareable : Bool :=
+                permits_sharing (effective_mult_with_kinds kinds scope copy_vars Multiplicity.many payload) in
+            if shareable || (Bool.not strict && payload_unattributable payload)
+            then inline_escape_errors kinds scope copy_vars strict rest
+            else List.cons (TypeError.borrowed_value_escapes (InlineViewEscape.name v) payload)
+                (inline_escape_errors kinds scope copy_vars strict rest),
+    }
+
+/// The positional walk's "I cannot name this type" answer.
+def payload_unattributable (t : Term) : Bool :=
+    match term_peel t {
+        Term.hole => true,
+        _ => false,
+    }
 
 /// Does this term end its leading lambda chain in a hole -- i.e. is the
 /// def a declaration rather than a definition?
@@ -849,4 +900,53 @@ def test_unattributable_binder_is_counted_by_the_report : Bool :=
                 _ => false,
             },
         Option.none => false,
+    }
+
+// ─── Inline views at owning positions (S1) ─────────────────────────
+//
+// `usage.mo`'s `inline_view_escapes` finds them and names their payload;
+// the Copy judgement is this module's, the same one the binder rule uses.
+
+#[test]
+def test_an_inline_view_escape_is_reported : Bool :=
+    let v : InlineViewEscape := { name := Identifier.id "x", payload := a_type } in
+    match inline_escape_errors type_kinds_empty probe_scope List.empty false (List.cons v List.empty) {
+        List.cons e _rest =>
+            match e {
+                TypeError.borrowed_value_escapes _n _t => true,
+                _ => false,
+            },
+        List.empty => false,
+    }
+
+#[test]
+def test_an_inline_view_of_a_copy_constrained_payload_is_fine : Bool :=
+    // `[Copy A]` licenses copying the payload out of the view, exactly as
+    // it licenses the bound form (`Clone`'s instances rely on this).
+    let v : InlineViewEscape := { name := Identifier.id "x", payload := a_type_var } in
+    match inline_escape_errors type_kinds_empty probe_scope [Identifier.id "A"] false (List.cons v List.empty) {
+        List.empty => true,
+        List.cons _ _ => false,
+    }
+
+#[test]
+def test_an_unnamable_inline_payload_fails_open_under_enforcement : Bool :=
+    // A `let h := Shared.of x` binder arrives with a hole type, so most
+    // inline views have an unattributable payload. Enforcement leaves them
+    // alone -- a false positive is worse than a missed one while nothing
+    // frees memory -- and S6 condition 2 is what closes the gap.
+    let v : InlineViewEscape := { name := Identifier.id "x", payload := Term.hole } in
+    match inline_escape_errors type_kinds_empty probe_scope List.empty false (List.cons v List.empty) {
+        List.empty => true,
+        List.cons _ _ => false,
+    }
+
+#[test]
+def test_an_unnamable_inline_payload_fails_closed_in_the_report : Bool :=
+    // The strict report must not let "unknown" read as "Copy", or its
+    // migration cost would be understated.
+    let v : InlineViewEscape := { name := Identifier.id "x", payload := Term.hole } in
+    match inline_escape_errors type_kinds_empty probe_scope List.empty true (List.cons v List.empty) {
+        List.cons _ _ => true,
+        List.empty => false,
     }

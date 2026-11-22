@@ -150,6 +150,19 @@ def h (s : String) : I64 :=               // ok: String is Copy
     String.length s + String.length s
 ```
 
+A `Shared.get` result is a borrowed VIEW, not an owner: storing it,
+returning it, or handing it to an owning parameter is
+`borrowed_value_escapes` unless the payload is `Copy`. That holds for the
+INLINE form too — `Pair.pair (Shared.get (Shared.of x)) x` is rejected
+exactly like the bound `let v := Shared.get (Shared.of x)` — and a
+closure's body counts as a value position, so `fn _ => Shared.get h`
+escapes as well. The fix is to OWN the value at the store — take it as an
+owned parameter and move it in (`Sha256.expand_loop`), or `Clone.clone`
+the view deliberately — rather than laundering it through an inline
+`Shared.get (Shared.of x)`. A view whose payload type the walk cannot name
+(a `let h := Shared.of x` binder) is currently exempt under enforcement;
+do not rely on that — it is a migration gap, not a licence.
+
 ## Building and Running
 
 `monad` is the standard binary: `monadup` installs a nightly at

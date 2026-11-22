@@ -403,10 +403,12 @@ def plain_run_on (cfg : LanguageConfig) (bytes : List U8) (head : U8) (tail : Li
     let grown : List U8 := List.cons head acc in
     match (Shared.get shared) {
         List.empty => Pair.pair (bytes_to_string (List.reverse grown)) List.empty,
+        // The stop returns the OWNER `tail`; `Shared.get shared` would store
+        // a view of it (`borrowed_value_escapes`).
         List.cons b rest =>
             if Bool.not (plain_same_kind head b)
-            then Pair.pair (bytes_to_string (List.reverse grown)) (Shared.get shared)
-            else plain_body cfg (Shared.get shared) grown
+            then Pair.pair (bytes_to_string (List.reverse grown)) tail
+            else plain_body cfg tail grown
     }
 
 /// Two plain bytes are the same kind: both spaces, or the same byte.

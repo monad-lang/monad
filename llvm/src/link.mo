@@ -197,26 +197,29 @@ pub def map_export_flags (syms : List String) : List String := match syms {
 /// path may still find the libs, and when it does not, ld's
 /// `cannot find -l...` follows a line saying why.
 #[partial]
-pub def pkg_config_link_flags (pkgs : List String) : IO (List String) := match pkgs {
-    List.empty => do { return List.empty },
-    List.cons _ _ => do {
-        // The error path names the packages while the success path passes
-        // them to `pkg-config`; the handle makes the second mention a borrow
-        // instead of a second move.
-        let names : Shared (List String) := Shared.of pkgs;
-        let r <- Proc.capture "pkg-config" (List.cons "--libs-only-L" (Shared.get names));
-        match r {
-            Pair.pair code out =>
-                if code == 0
-                then return (split_ws_bytes (String.to_list out) List.empty)
-                else do {
-                    fail_line ("pkg-config could not resolve [link] pkg-config = " ++ ws_join (Shared.get names)
-                        ++ "; linking with the toolchain's default search path");
-                    return List.empty
-                }
+pub def pkg_config_link_flags (pkgs : List String) : IO (List String) :=
+    // The match reads the HANDLE, not `pkgs`: the handle is `Copy`, so the
+    // scrutinee is free, and the arm spends the one owning use `pkgs` has
+    // (the move into the argv list). The error path's name list is a
+    // borrow through the same handle, taken before that move.
+    let sh : Shared (List String) := Shared.of pkgs in
+    match Shared.get sh {
+        List.empty => do { return List.empty },
+        List.cons _ _ => do {
+            let msg := ws_join (Shared.get sh);
+            let r <- Proc.capture "pkg-config" (List.cons "--libs-only-L" pkgs);
+            match r {
+                Pair.pair code out =>
+                    if code == 0
+                    then return (split_ws_bytes (String.to_list out) List.empty)
+                    else do {
+                        fail_line ("pkg-config could not resolve [link] pkg-config = " ++ msg
+                            ++ "; linking with the toolchain's default search path");
+                        return List.empty
+                    }
+            }
         }
     }
-}
 
 /// Whitespace-separated words, empty ones dropped. `cur` is the word
 /// being read, reversed.

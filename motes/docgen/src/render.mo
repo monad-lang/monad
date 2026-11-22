@@ -152,8 +152,16 @@ pub def DocRender.mote_pages (cfg : SiteConfig) (base : String) (m : DocMote) : 
     match m {
         { mote, modules, .. } =>
             let shared : Shared (List DocModule) := Shared.of modules in
-            List.map (fn (md : DocModule) => DocRender.module_page cfg base shared mote md.module) (Shared.get shared),
+            DocRender.pages_for_modules cfg base mote shared,
     }
+
+/// The module pages for a mote whose module list the caller already holds
+/// as a handle. A `Shared` handle is `Copy`, so `mote_site` can hand the
+/// SAME one to this and to the home page; storing `Shared.get` of it into a
+/// rebuilt record instead is `borrowed_value_escapes`.
+def DocRender.pages_for_modules
+    (cfg : SiteConfig) (base : String) (mote : String) (shared : Shared (List DocModule)) : List Built :=
+    List.map (fn (md : DocModule) => DocRender.module_page cfg base shared mote md.module) (Shared.get shared)
 
 /// One module's page, given the mote's whole module list so its sidebar can
 /// link every sibling. Its `root` climbs from its base-relative path:
@@ -176,10 +184,10 @@ pub def DocRender.module_page (cfg : SiteConfig) (base : String) (mods : Shared 
 /// A mote's whole site: its module pages, then its home page.
 pub def DocRender.mote_site (cfg : SiteConfig) (base : String) (m : DocMote) : List Built :=
     match m {
-        { mote, modules } =>
+        { mote, modules, .. } =>
             let shared : Shared (List DocModule) := Shared.of modules in
-            List.append (DocRender.mote_pages cfg base { mote := mote, modules := Shared.get shared })
-                [DocRender.mote_home_page cfg base { mote := mote, modules := Shared.get shared }],
+            List.append (DocRender.pages_for_modules cfg base mote shared)
+                [DocRender.home_page_for_modules cfg base mote shared],
     }
 
 /// The module a path names, from a mote's own list.
@@ -253,20 +261,26 @@ def sidebar_item (e : NavModule) (mote : String) (module : String) (root : Strin
 pub def DocRender.mote_home_page (cfg : SiteConfig) (base : String) (m : DocMote) : Built :=
     match m {
         { mote, modules, .. } =>
-            let rel : String := DocRender.mote_home_path mote in
-            let root : String := root_for rel in
             let shared : Shared (List DocModule) := Shared.of modules in
-            let spec : PageSpec :=
-                { title := mote, root := root, book := Option.none,
-                    body := [element "div" [attr "class" "hub"]
-                        (List.append
-                            [element "h1" List.empty [text mote],
-                                element "p" [attr "class" "mote-meta"] [text (module_count_text (Shared.get shared))]]
-                            (List.append
-                                (module_doc_nodes (lib_doc mote (Shared.get shared)))
-                                [module_links root mote (Shared.get shared)]))] } in
-            Built.page (at_base base rel) (Layout.document_with cfg (Shared.of (doc_shell (Option.some mote))) spec),
+            DocRender.home_page_for_modules cfg base mote shared,
     }
+
+/// The home page for a mote whose module list the caller already holds as
+/// a handle (see `pages_for_modules`).
+def DocRender.home_page_for_modules
+    (cfg : SiteConfig) (base : String) (mote : String) (shared : Shared (List DocModule)) : Built :=
+    let rel : String := DocRender.mote_home_path mote in
+    let root : String := root_for rel in
+    let spec : PageSpec :=
+        { title := mote, root := root, book := Option.none,
+            body := [element "div" [attr "class" "hub"]
+                (List.append
+                    [element "h1" List.empty [text mote],
+                        element "p" [attr "class" "mote-meta"] [text (module_count_text (Shared.get shared))]]
+                    (List.append
+                        (module_doc_nodes (lib_doc mote (Shared.get shared)))
+                        [module_links root mote (Shared.get shared)]))] } in
+    Built.page (at_base base rel) (Layout.document_with cfg (Shared.of (doc_shell (Option.some mote))) spec)
 
 /// The doc comment of a mote's `lib` module, its overview by convention.
 def lib_doc (mote : String) (mods : List DocModule) : Option String :=

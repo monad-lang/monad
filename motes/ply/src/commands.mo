@@ -1330,11 +1330,13 @@ def quit_on_save (cmd : Cmd EditorMsg) : Cmd EditorMsg :=
     let shared : Shared (Cmd EditorMsg) := Shared.of cmd in
     match Shared.get shared {
         Cmd.perform action => Cmd.perform (fn (_ : Unit) => write_then_quit action),
-        Cmd.none => Shared.get shared,
-        Cmd.quit => Shared.get shared,
-        Cmd.dispatch _ => Shared.get shared,
-        Cmd.inspect _ => Shared.get shared,
-        Cmd.perform_async _ _ => Shared.get shared
+        // The untouched arms return the OWNER. Returning `Shared.get shared`
+        // here stores a view of `cmd` (`borrowed_value_escapes`).
+        Cmd.none => cmd,
+        Cmd.quit => cmd,
+        Cmd.dispatch _ => cmd,
+        Cmd.inspect _ => cmd,
+        Cmd.perform_async _ _ => cmd
     }
 
 /// Run the save and decide: success answers `EditorMsg.quit` (carrying the
@@ -1354,14 +1356,15 @@ def quit_msg_or (msg : EditorMsg) : EditorMsg :=
     let shared : Shared EditorMsg := Shared.of msg in
     match Shared.get shared {
         EditorMsg.save_result ok _ =>
-            if ok then ply_quit_msg else Shared.get shared,
-        EditorMsg.key _ => Shared.get shared,
-        EditorMsg.resize _ _ => Shared.get shared,
-        EditorMsg.tick => Shared.get shared,
-        EditorMsg.quit => Shared.get shared,
-        EditorMsg.lsp_frame _ => Shared.get shared,
-        EditorMsg.picker_files _ _ => Shared.get shared,
-        EditorMsg.file_opened _ _ => Shared.get shared
+            if ok then ply_quit_msg else msg,
+        // Untouched arms return the owner, not `Shared.get shared` (a view).
+        EditorMsg.key _ => msg,
+        EditorMsg.resize _ _ => msg,
+        EditorMsg.tick => msg,
+        EditorMsg.quit => msg,
+        EditorMsg.lsp_frame _ => msg,
+        EditorMsg.picker_files _ _ => msg,
+        EditorMsg.file_opened _ _ => msg
     }
 
 /// The quit message, built in its own def so the constructor is never

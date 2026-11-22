@@ -116,9 +116,13 @@ def every_page_reaches_the_stylesheet (base : String) : Bool :=
     let flat : DocModule := DocExtract.extract_source "std/src/list.mo" "pub def a : I64 := 1\n" in
     let nested : DocModule := DocExtract.extract_source "std/src/concurrent/channel.mo" "pub def b : I64 := 2\n" in
     let mote : Shared DocMote := Shared.of { mote := "std", modules := [flat, nested] } in
+    // The hub takes owners: a `Shared.get` view in the list literal would be
+    // a stored view (`borrowed_value_escapes`). The hub only lists motes, so
+    // a fresh record is enough.
+    let hub_mote : DocMote := { mote := "std", modules := List.empty } in
     let pages : Shared (List Built) :=
         Shared.of (List.append (DocRender.mote_site cfg base (Shared.get mote))
-            [DocRender.hub_page cfg base [Shared.get mote]]) in
+            [DocRender.hub_page cfg base [hub_mote]]) in
     Bool.and (I64.beq (List.length (Shared.get pages)) 4)
         (List.all (fn (b : Built) => reaches_stylesheet css b) (Shared.get pages))
 

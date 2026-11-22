@@ -188,18 +188,22 @@ def List.intercalate_rest (sep : String) (xs : List String) : String :=
 /// Drop later duplicates, keeping the first occurrence (left-biased).
 /// Replaces `union_ids`/`dedup_idents`/`dedup_funcs_by_name`.
 pub def List.dedup_by {A : Type} (eq : A -> A -> Bool) (xs : List A) : List A :=
-    List.dedup_by_go (Shared.of eq) xs (Shared.of (List.empty : List A))
+    List.dedup_by_go (Shared.of eq) xs (List.empty : List A)
 
-def List.dedup_by_go {A : Type} (eq : Shared (A -> A -> Bool)) (xs : List A) (seen : Shared (List A)) : List A :=
+/// `seen` is OWNED: the membership test borrows it through `sh`, then the
+/// element is consed onto it and the new list is passed on. Storing
+/// `Shared.get seen` into the cons instead would alias the same list from
+/// two owners (`borrowed_value_escapes`, S1).
+def List.dedup_by_go {A : Type} (eq : Shared (A -> A -> Bool)) (xs : List A) (seen : List A) : List A :=
     match xs {
         List.empty => List.empty,
         List.cons a tail =>
             let sa := Shared.of a in
-            if List.contains_by (Shared.get eq) (Shared.get sa) (Shared.get seen)
+            let sh := Shared.of seen in
+            if List.contains_by (Shared.get eq) (Shared.get sa) (Shared.get sh)
             then List.dedup_by_go eq tail seen
             else List.cons (Shared.get sa)
-                (List.dedup_by_go eq tail
-                    (Shared.of (List.cons (Shared.get sa) (Shared.get seen)))),
+                (List.dedup_by_go eq tail (List.cons (Shared.get sa) seen)),
         _ => List.empty
     }
 

@@ -134,10 +134,12 @@ def Transaction.apply_commit (path : Option String) (language : String) (version
     (rope : Rope) (selections : Selections) (history : History) (changes : List Change) : Document :=
     let shared_sel : Shared Selections := Shared.of selections in
     match History.commit history rope (Shared.get shared_sel) changes 0 {
+        // The new document OWNS the selections; `Shared.get shared_sel`
+        // would store a view of them (`borrowed_value_escapes`).
         Pair.pair grown _ =>
             { path := path,
                 rope := rope,
-                selections := Shared.get shared_sel,
+                selections := selections,
                 history := grown,
                 language := language,
                 version := version + 1 }

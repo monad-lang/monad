@@ -578,10 +578,12 @@ def add_one_parent (out : String) (p : String) (seen : List String) : List Strin
     else
         let dir : String := String.slice p 0 idx in
         let full : String := String.concat out (String.concat "/" dir) in
+        // The membership test borrows `seen`; the store below is a move of
+        // the owner, not of a view (`borrowed_value_escapes`).
         let shared : Shared (List String) := Shared.of seen in
         if List.any (fn (q : String) => String.beq q full) (Shared.get shared)
         then seen
-        else List.cons full (Shared.get shared)
+        else List.cons full seen
 
 /// The first output path two pages claim, if any.
 #[terminating]
@@ -616,7 +618,7 @@ def first_duplicate_in (paths : List String) (seen : List String) : Option Strin
             let hit : Bool := List.any (fn (q : String) => String.beq q p) (Shared.get shared) in
             if hit
             then Option.some p
-            else first_duplicate_in rest (List.cons p (Shared.get shared)),
+            else first_duplicate_in rest (List.cons p seen),
     }
 
 /// The first chapter's stem, the one the book's `index.html` repeats.

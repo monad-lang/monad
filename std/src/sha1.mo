@@ -38,19 +38,22 @@ def Sha1.rotl (x : U32) (n : U32) : U32 := U32.rotr x (U32.sub 32u32 n)
 
 // `rev_words` holds the words so far, most-recent first. For the next word:
 // rotl1(rev[2] ^ rev[7] ^ rev[13] ^ rev[15]) — W[t-3], W[t-8], W[t-14], W[t-16].
+// Same owned-list shape as `Sha256.expand_loop`: the list is moved into the
+// next iteration's cons, and the four lookbacks borrow it through one handle.
 #[terminating] // decreasing I64 counter, same idiom as Sha256.expand_loop
-def Sha1.expand_loop (rev_words : Shared (List U32)) (remaining : I64) : List U32 :=
-    if I64.beq remaining 0 then Shared.get rev_words
+def Sha1.expand_loop (rev_words : List U32) (remaining : I64) : List U32 :=
+    if I64.beq remaining 0 then rev_words
     else
-        let w3 := Sha256.at_or_zero (Shared.get rev_words) 2 in
-        let w8 := Sha256.at_or_zero (Shared.get rev_words) 7 in
-        let w14 := Sha256.at_or_zero (Shared.get rev_words) 13 in
-        let w16 := Sha256.at_or_zero (Shared.get rev_words) 15 in
+        let h := Shared.of rev_words in
+        let w3 := Sha256.at_or_zero h 2 in
+        let w8 := Sha256.at_or_zero h 7 in
+        let w14 := Sha256.at_or_zero h 13 in
+        let w16 := Sha256.at_or_zero h 15 in
         let new_w := Sha1.rotl (U32.xor (U32.xor w3 w8) (U32.xor w14 w16)) 1u32 in
-        Sha1.expand_loop (Shared.of (List.cons new_w (Shared.get rev_words))) (remaining - 1)
+        Sha1.expand_loop (List.cons new_w rev_words) (remaining - 1)
 
 def Sha1.schedule (block16 : List U32) : List U32 :=
-    List.reverse (Sha1.expand_loop (Shared.of (List.reverse block16)) 64)
+    List.reverse (Sha1.expand_loop (List.reverse block16) 64)
 
 // ── Compression ──
 

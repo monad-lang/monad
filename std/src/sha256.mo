@@ -189,25 +189,31 @@ def Sha256.sigma0 (x : U32) : U32 :=
 def Sha256.sigma1 (x : U32) : U32 :=
     U32.xor (U32.xor (U32.rotr x 17u32) (U32.rotr x 19u32)) (U32.shr x 10u32)
 
-def Sha256.at_or_zero (l : List U32) (i : I64) : U32 :=
-    Option.get_or_default 0u32 (List.get i l)
+def Sha256.at_or_zero (l : Shared (List U32)) (i : I64) : U32 :=
+    Option.get_or_default 0u32 (List.get i (Shared.get l))
 
 // `rev_words` holds the schedule words produced so far, most-recent
 // first (cons-accumulator, same idiom as List.reverse_append). For the
 // next word: sigma1(rev[1]) + rev[6] + sigma0(rev[14]) + rev[15].
+//
+// The list is OWNED here and moved into the next iteration's cons; the
+// four lookbacks borrow it through one handle. Storing `Shared.get` of a
+// `Shared` parameter into the cons instead would hand the same list two
+// owners (the `borrowed_value_escapes` rule, S1).
 #[terminating] // decreasing I64 counter over a 2-list-lookback window
-def Sha256.expand_loop (rev_words : Shared (List U32)) (remaining : I64) : List U32 :=
-    if I64.beq remaining 0 then Shared.get rev_words
+def Sha256.expand_loop (rev_words : List U32) (remaining : I64) : List U32 :=
+    if I64.beq remaining 0 then rev_words
     else
-        let w2 := Sha256.at_or_zero (Shared.get rev_words) 1 in
-        let w7 := Sha256.at_or_zero (Shared.get rev_words) 6 in
-        let w15 := Sha256.at_or_zero (Shared.get rev_words) 14 in
-        let w16 := Sha256.at_or_zero (Shared.get rev_words) 15 in
+        let h := Shared.of rev_words in
+        let w2 := Sha256.at_or_zero h 1 in
+        let w7 := Sha256.at_or_zero h 6 in
+        let w15 := Sha256.at_or_zero h 14 in
+        let w16 := Sha256.at_or_zero h 15 in
         let new_w := U32.add (U32.add (Sha256.sigma1 w2) w7) (U32.add (Sha256.sigma0 w15) w16) in
-        Sha256.expand_loop (Shared.of (List.cons new_w (Shared.get rev_words))) (remaining - 1)
+        Sha256.expand_loop (List.cons new_w rev_words) (remaining - 1)
 
 def Sha256.schedule (block16 : List U32) : List U32 :=
-    List.reverse (Sha256.expand_loop (Shared.of (List.reverse block16)) 48)
+    List.reverse (Sha256.expand_loop (List.reverse block16) 48)
 
 // ── Compression ──
 

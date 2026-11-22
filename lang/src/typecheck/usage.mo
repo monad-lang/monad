@@ -1387,6 +1387,339 @@ def view_push_args (args : List Identifier) (v : Bool) (e : ViewEnv) : ViewEnv :
         List.cons _ rest => view_push_args rest v (view_push v e),
     }
 
+// ─── Inline views at owning positions (S1) ──────────────────────────
+//
+// A view bound to a NAME is `affine.mo`'s `BinderUse.view` rule. An
+// inline `Shared.get` has no binder, so `Pair.pair (Shared.get
+// (Shared.of t)) t` stores a view beside its owner and nothing reports
+// it (P36 of `plans/type-system/shared-soundness.md`). This walk applies
+// the same escape judgement to an INLINE view that reaches an owning
+// position: a constructor field, a list-literal element, a struct
+// field, or the value a scope produces.
+//
+// The positions are `owning_at_mode`'s, verbatim -- the same `UsePos`
+// classification the affine budget uses, so the two cannot drift apart.
+// What this walk adds is the view's PAYLOAD TYPE: a `Copy` payload makes
+// the escape sound (copying it out is the copy), and that judgement
+// belongs to `affine.mo`, which owns Copy resolution. So the walk reports
+// the payload type it can NAME and leaves `Term.hole` where it cannot --
+// `affine.mo` then leaves a hole alone under enforcement and reports it in
+// the strict report (`inline_escape_errors` says why: a `let h :=
+// Shared.of x` binder arrives with a hole, so failing closed there would
+// reject most of `std` for a reason unrelated to escaping).
+
+/// One inline borrowed view found in an owning position.
+pub struct InlineViewEscape {
+    /// What a diagnostic reports: the variable the view borrows from
+    /// when the expression names one (`Shared.get (Shared.of x)` reports
+    /// `x`), otherwise the borrowed operation itself (`Shared.get`).
+    name : Identifier,
+    /// The payload type, when the walk can name it; `Term.hole` when it
+    /// cannot.
+    payload : Term,
+}
+
+pub def InlineViewEscape.name (v : InlineViewEscape) : Identifier := v.name
+
+pub def InlineViewEscape.payload (v : InlineViewEscape) : Term := v.payload
+
+/// Every inline borrowed view `t` hands to an owning position, in source
+/// order.
+///
+/// The walk starts in `up_value` -- a def body's result -- and resets to
+/// it at every binder, matching `owning_at_mode`: a closure's body is the
+/// value the closure produces, so a closure returning a view is caught
+/// too (`List.map (fn x => Shared.get h) xs` stores views).
+pub def inline_view_escapes (ctors : HashMap String Bool) (shareds : HashMap String Bool) (t : Term) : List InlineViewEscape :=
+    List.reverse (escape_at ctors shareds List.empty UsePos.up_value t List.empty)
+
+/// The annotation of the binder at de-Bruijn `idx`, innermost first. The
+/// environment is a list of binder annotations in scope order; a binder
+/// this walk cannot type (a match field) is pushed as a hole.
+#[partial]
+def type_env_at (env : List Term) (idx : I64) : Term :=
+    match env {
+        List.empty => Term.hole,
+        List.cons typ rest => if I64.beq idx 0 then typ else type_env_at rest (idx - 1),
+    }
+
+/// The `A` in a `Shared A`, or a hole when `t` is not that application.
+///
+/// The head spelling is checked through the SAME derived name
+/// `shared_name_set` registers (`<Ind>.of`), so a renamed shared type keeps
+/// working and no literal `"Shared"` is compared.
+def shared_payload_type (shareds : HashMap String Bool) (t : Term) : Term :=
+    match term_peel t {
+        Term.app f arg =>
+            match spine_head_name f {
+                Option.some n =>
+                    if name_is_shared shareds (String.concat n ".of") then arg else Term.hole,
+                Option.none => Term.hole,
+            },
+        _ => Term.hole,
+    }
+
+/// The type of a simple expression -- a variable, whose annotation the
+/// environment carries. Anything computed is a hole: naming its type is
+/// inference, not this walk.
+def simple_expr_type (env : List Term) (t : Term) : Term :=
+    match term_peel t {
+        Term.var idx _dbg => type_env_at env idx,
+        _ => Term.hole,
+    }
+
+/// The payload type of the value `arg` lends: the `A` in its `Shared A`,
+/// or -- for the re-wrap `Shared.of x` -- `x`'s own type.
+def borrowed_payload_type (shareds : HashMap String Bool) (env : List Term) (arg : Term) : Term :=
+    match term_peel arg {
+        Term.app callee inner =>
+            if head_is_shared_of shareds (app_spine_head callee)
+            then simple_expr_type env inner
+            else Term.hole,
+        _ => shared_payload_type shareds (simple_expr_type env arg),
+    }
+
+/// The name a diagnostic reports for an inline view: the variable it
+/// borrows from when the shape names one, else the borrowed operation.
+#[partial]
+def borrowed_owner_name (shareds : HashMap String Bool) (arg : Term) : Identifier :=
+    match term_peel arg {
+        Term.var _idx dbg =>
+            match dbg {
+                DebugName.named id => id,
+                DebugName.unnamed => Identifier.id "Shared.get",
+            },
+        Term.app callee inner =>
+            if head_is_shared_of shareds (app_spine_head callee)
+            then borrowed_owner_name shareds inner
+            else Identifier.id "Shared.get",
+        _ => Identifier.id "Shared.get",
+    }
+
+/// The escape `t` IS, when its root is an inline borrowed view.
+///
+/// A bare VARIABLE is deliberately not one: a view bound to a name is the
+/// binder rule's job, and reporting it here as well would turn every
+/// bound-view diagnostic into two. `Shared.of <view>` is a view of the
+/// same payload (`expr_is_view`'s rule), so a re-wrap that reaches an
+/// owning position escapes as its inner view does.
+#[partial]
+def inline_view_escape (shareds : HashMap String Bool) (env : List Term) (t : Term) : Option InlineViewEscape :=
+    match term_peel t {
+        Term.app callee arg =>
+            let head : Term := app_spine_head callee in
+            if head_is_shared_get shareds head then
+                let v : InlineViewEscape :=
+                    { name := borrowed_owner_name shareds arg,
+                        payload := borrowed_payload_type shareds env arg } in
+                Option.some v
+            else if head_is_shared_of shareds head then inline_view_escape shareds env arg
+            else Option.none,
+        _ => Option.none,
+    }
+
+/// Peel a `ctx` wrapper BEFORE classifying the term. `inline_view_escape`
+/// peels one internally, so flagging the wrapper and then walking its inner
+/// term reports the same escape twice -- and elaboration wraps nearly every
+/// node, which doubled every diagnostic until this was split out.
+#[partial]
+def escape_at
+    (ctors : HashMap String Bool)
+    (shareds : HashMap String Bool)
+    (env : List Term)
+    (ctx : UsePos)
+    (t : Term)
+    (acc : List InlineViewEscape) :
+    List InlineViewEscape :=
+    match t {
+        Term.ctx _loc inner => escape_at ctors shareds env ctx inner acc,
+        _ => escape_go ctors shareds env ctx t acc,
+    }
+
+#[partial]
+def escape_go
+    (ctors : HashMap String Bool)
+    (shareds : HashMap String Bool)
+    (env : List Term)
+    (ctx : UsePos)
+    (t : Term)
+    (acc : List InlineViewEscape) :
+    List InlineViewEscape :=
+    // `fn_mode` false: an ordinary call argument is a read, and the one
+    // position whose meaning depends on the binder's type is out of S1's
+    // scope (that is S2's callee-directed judgement).
+    let acc2 : List InlineViewEscape :=
+        if pos_is_owning false ctx then
+            match inline_view_escape shareds env t {
+                Option.some v => List.cons v acc,
+                Option.none => acc,
+            }
+        else acc in
+    match t {
+        Term.var _idx _dbg => acc2,
+        Term.var_macro _idx _dbg => acc2,
+        // A binder resets the position: its body is the value the closure
+        // produces, not the slot the closure itself fills.
+        Term.lam _b typ body => escape_at ctors shareds (List.cons typ env) UsePos.up_value body acc2,
+        // A non-explicit `pi` binds a TYPE variable: push a hole to keep
+        // the de-Bruijn indices aligned, then walk its body. An explicit
+        // `pi` is entirely a type position (rule 2 of this file).
+        Term.pi b _arg ret =>
+            if Bool.not (binder_is_explicit b)
+            then escape_at ctors shareds (List.cons Term.hole env) UsePos.up_value ret acc2
+            else acc2,
+        Term.app callee arg =>
+            let head : Term := app_spine_head callee in
+            let arg_pos : UsePos :=
+                // Same precedence as `owning_at_mode`: a `Shared.of`
+                // argument is a borrow before it is a constructor store,
+                // because `of` IS a registered constructor.
+                if head_is_shared_of shareds head then UsePos.up_shared_arg
+                else if head_is_ctor ctors head || head_is_list_literal_cons head then UsePos.up_con_field
+                else UsePos.up_app_arg in
+            escape_at ctors shareds env UsePos.up_app_head callee
+                (escape_at ctors shareds env arg_pos arg acc2),
+        Term.lit value => escape_literal ctors shareds env ctx value acc2,
+        Term.ntv n =>
+            match n {
+                Native.mk _name _num_args args => escape_opt_args ctors shareds env UsePos.up_app_arg args acc2,
+            },
+        Term.con c =>
+            match c {
+                Con.mk _name _typ_name _num_args args => escape_opt_args ctors shareds env UsePos.up_con_field args acc2,
+            },
+        Term.sort _level => acc2,
+        Term.hole => acc2,
+        Term.quote_ _inner => acc2,
+        // `escape_at` peels `ctx` before calling this, so this arm is only
+        // reachable through a caller that built the wrapper itself; pass the
+        // unclassified accumulator so the inner term is counted once.
+        Term.ctx _loc inner => escape_at ctors shareds env ctx inner acc,
+        Term.cubical c =>
+            match c { { prim := _, args := args } => escape_terms ctors shareds env UsePos.up_app_arg args acc2 },
+        // The scrutinee decides which minor runs (a read); the minor that
+        // does inherits whatever position the whole `elim` occupies.
+        Term.elim e =>
+            match e {
+                { inductive := _, levels := _, params := _, indices := _,
+                    motive := _, minors := minors, scrutinee := scrutinee } =>
+                        escape_terms ctors shareds env ctx minors
+                            (escape_at ctors shareds env UsePos.up_scrutinee scrutinee acc2),
+            },
+    }
+
+#[partial]
+def escape_literal
+    (ctors : HashMap String Bool)
+    (shareds : HashMap String Bool)
+    (env : List Term)
+    (ctx : UsePos)
+    (l : Literal)
+    (acc : List InlineViewEscape) :
+    List InlineViewEscape :=
+    match l {
+        Literal.str _v => acc,
+        Literal.char _v => acc,
+        Literal.num _n _suf => acc,
+        Literal.flt _t _suf => acc,
+        // Branches inherit the position the whole `if` occupies: whichever
+        // one runs is the value that slot receives.
+        Literal.if_ cond then_ else_ =>
+            escape_at ctors shareds env ctx else_
+                (escape_at ctors shareds env ctx then_
+                    (escape_at ctors shareds env UsePos.up_scrutinee cond acc)),
+        Literal.match_ scrut cases =>
+            escape_cases ctors shareds env ctx cases
+                (escape_at ctors shareds env UsePos.up_scrutinee scrut acc),
+        Literal.struct_lit fields _type_name => escape_fields ctors shareds env fields acc,
+        // The base of a struct update is consumed to build the new one.
+        Literal.struct_update base fields =>
+            escape_fields ctors shareds env fields
+                (escape_at ctors shareds env UsePos.up_con_field base acc),
+    }
+
+#[partial]
+def escape_cases
+    (ctors : HashMap String Bool)
+    (shareds : HashMap String Bool)
+    (env : List Term)
+    (ctx : UsePos)
+    (cases : List MatchCase)
+    (acc : List InlineViewEscape) :
+    List InlineViewEscape :=
+    match cases {
+        List.empty => acc,
+        List.cons c rest => escape_cases ctors shareds env ctx rest (escape_case ctors shareds env ctx c acc),
+    }
+
+#[partial]
+def escape_case
+    (ctors : HashMap String Bool)
+    (shareds : HashMap String Bool)
+    (env : List Term)
+    (ctx : UsePos)
+    (c : MatchCase)
+    (acc : List InlineViewEscape) :
+    List InlineViewEscape :=
+    match c {
+        MatchCase.mk _name args body _fp _typ_name =>
+            escape_at ctors shareds (push_hole_binders (List.length args) env) ctx body acc,
+    }
+
+#[partial]
+def push_hole_binders (n : I64) (env : List Term) : List Term :=
+    if I64.lt n 1 then env else push_hole_binders (n - 1) (List.cons Term.hole env)
+
+#[partial]
+def escape_fields
+    (ctors : HashMap String Bool)
+    (shareds : HashMap String Bool)
+    (env : List Term)
+    (fields : List StructLitField)
+    (acc : List InlineViewEscape) :
+    List InlineViewEscape :=
+    match fields {
+        List.empty => acc,
+        List.cons f rest =>
+            match f {
+                StructLitField.mk _name value =>
+                    escape_fields ctors shareds env rest
+                        (escape_at ctors shareds env UsePos.up_con_field value acc),
+            },
+    }
+
+#[partial]
+def escape_terms
+    (ctors : HashMap String Bool)
+    (shareds : HashMap String Bool)
+    (env : List Term)
+    (ctx : UsePos)
+    (ts : List Term)
+    (acc : List InlineViewEscape) :
+    List InlineViewEscape :=
+    match ts {
+        List.empty => acc,
+        List.cons t rest => escape_terms ctors shareds env ctx rest (escape_at ctors shareds env ctx t acc),
+    }
+
+#[partial]
+def escape_opt_args
+    (ctors : HashMap String Bool)
+    (shareds : HashMap String Bool)
+    (env : List Term)
+    (ctx : UsePos)
+    (args : List (Option Term))
+    (acc : List InlineViewEscape) :
+    List InlineViewEscape :=
+    match args {
+        List.empty => acc,
+        List.cons a rest =>
+            match a {
+                Option.some t => escape_opt_args ctors shareds env ctx rest (escape_at ctors shareds env ctx t acc),
+                Option.none => escape_opt_args ctors shareds env ctx rest acc,
+            },
+    }
+
 /// `Binder` -> a printable identifier. An unnamed binder reports as
 /// `_`, matching how the corpus already spells a binder nobody reads.
 def binder_ident (b : Binder) : Identifier :=
@@ -2867,4 +3200,132 @@ def test_borrowed_is_branch_consistent : Bool :=
         List.cons u _rest =>
             I64.beq (BinderUse.count u) 2 && I64.beq (BinderUse.borrowed u) 0,
         List.empty => false,
+    }
+
+// ─── Tests: inline view escapes (S1) ───────────────────────────────
+
+/// `Shared.get arg`, the projection whose result is a borrowed view.
+def get_of (arg : Term) : Term :=
+    Term.app (Term.var (0 - 1) (DebugName.named (Identifier.id "Shared.get"))) arg
+
+/// `Thing`, the payload type an escape test expects.
+def thing_type : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "Thing"))
+
+/// `Shared Thing`, the annotation a handle parameter carries.
+def shared_thing : Term :=
+    Term.app (Term.var (0 - 1) (DebugName.named (Identifier.id "Shared"))) thing_type
+
+def is_named_var (nm : String) (t : Term) : Bool :=
+    match term_peel t {
+        Term.var _idx dbg =>
+            match dbg {
+                DebugName.named id => String.beq (show_identifier id) nm,
+                DebugName.unnamed => false,
+            },
+        _ => false,
+    }
+
+/// `Pair.pair <first> x`, the store shape every probe below uses.
+def store_then_use (first : Term) : Term :=
+    con_of (List.cons (Option.some first) (List.cons (Option.some t_var0) List.empty))
+
+#[test]
+def test_an_inline_view_stored_in_a_constructor_escapes : Bool :=
+    // `Pair.pair (Shared.get (Shared.of x)) x`, x : Thing -- probe 2 of
+    // the plan. The binder rule has no binder to blame, so only this walk
+    // can report it.
+    let t : Term := Term.lam b_x thing_type (store_then_use (get_of (of_of t_var0))) in
+    match inline_view_escapes probe_ctors probe_shared_of t {
+        List.cons v rest =>
+            List.is_empty rest
+                && String.beq (show_identifier (InlineViewEscape.name v)) "x"
+                && is_named_var "Thing" (InlineViewEscape.payload v),
+        List.empty => false,
+    }
+
+#[test]
+def test_an_inline_get_of_a_bound_handle_escapes_with_its_payload : Bool :=
+    // `Shared.get h` where `h : Shared Thing`: the payload type comes from
+    // the handle's own annotation. A Copy payload is exempt, so getting
+    // this type right is what keeps `Clone`'s instances accepted.
+    let fields : List (Option Term) :=
+        List.cons (Option.some (get_of t_var0)) (List.cons (Option.some t_var0) List.empty) in
+    let t : Term := Term.lam b_x shared_thing (con_of fields) in
+    match inline_view_escapes probe_ctors probe_shared_of t {
+        List.cons v rest =>
+            List.is_empty rest && is_named_var "Thing" (InlineViewEscape.payload v),
+        List.empty => false,
+    }
+
+#[test]
+def test_an_inline_view_returned_is_an_escape : Bool :=
+    // The value a scope produces is an owning position.
+    let t : Term := Term.lam b_x thing_type (get_of (of_of t_var0)) in
+    match inline_view_escapes probe_ctors probe_shared_of t {
+        List.cons _ _ => true,
+        List.empty => false,
+    }
+
+#[test]
+def test_a_closure_returning_a_view_escapes : Bool :=
+    // `fn _ => Shared.get (Shared.of x)`: a closure's body is the value it
+    // produces, so `List.map` over it would store views. `x` sits at index
+    // 1 under the closure's own binder.
+    let x1 : Term := Term.var 1 dbg_x in
+    let closure : Term := Term.lam binder_anon Term.hole (get_of (of_of x1)) in
+    let t : Term := Term.lam b_x thing_type closure in
+    match inline_view_escapes probe_ctors probe_shared_of t {
+        List.cons v rest =>
+            List.is_empty rest && is_named_var "Thing" (InlineViewEscape.payload v),
+        List.empty => false,
+    }
+
+#[test]
+def test_an_inline_view_in_a_list_literal_escapes : Bool :=
+    // `[Shared.get (Shared.of x)]` desugars to a `FromListLiteral.cons`
+    // spine, whose arguments are owning stores (since #274).
+    let cons_head : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "FromListLiteral.cons")) in
+    let empty : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "FromListLiteral.empty")) in
+    let body : Term := Term.app (Term.app cons_head (get_of (of_of t_var0))) empty in
+    let t : Term := Term.lam b_x thing_type body in
+    match inline_view_escapes probe_ctors probe_shared_of t {
+        List.cons _ _ => true,
+        List.empty => false,
+    }
+
+#[test]
+def test_a_rewrapped_inline_view_escapes : Bool :=
+    // `Shared.of (Shared.get (Shared.of x))` names the same payload again
+    // (`expr_is_view`'s re-wrap rule), so storing it is still storing a
+    // view of that payload.
+    let t : Term := Term.lam b_x thing_type (store_then_use (of_of (get_of (of_of t_var0)))) in
+    match inline_view_escapes probe_ctors probe_shared_of t {
+        List.cons v rest =>
+            List.is_empty rest && is_named_var "Thing" (InlineViewEscape.payload v),
+        List.empty => false,
+    }
+
+#[test]
+def test_an_inline_view_passed_as_an_argument_is_not_an_owning_use : Bool :=
+    // An ordinary call argument is a read. Closing that (probe B, a write
+    // through an inline view) is S2's callee-directed judgement, not this
+    // walk's; pinning the limit keeps the two from drifting together.
+    let keep : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "keep")) in
+    let t : Term := Term.lam b_x thing_type (Term.app keep (get_of (of_of t_var0))) in
+    match inline_view_escapes probe_ctors probe_shared_of t {
+        List.empty => true,
+        List.cons _ _ => false,
+    }
+
+#[test]
+def test_a_bare_view_variable_is_left_to_the_binder_rule : Bool :=
+    // `Pair.pair x x` holds no inline `Shared.get`: the binder rule
+    // reports the escape once, and reporting it here as well would double
+    // every bound-view diagnostic.
+    let fields : List (Option Term) :=
+        List.cons (Option.some t_var0) (List.cons (Option.some t_var0) List.empty) in
+    let t : Term := Term.lam b_x shared_thing (con_of fields) in
+    match inline_view_escapes probe_ctors probe_shared_of t {
+        List.empty => true,
+        List.cons _ _ => false,
     }
