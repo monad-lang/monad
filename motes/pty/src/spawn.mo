@@ -26,6 +26,7 @@ use std::bytebuf {
 }
 use lib::ansi {Ansi.strip, Ansi.tight}
 use lib::grid {Grid}
+use std::concurrent::combine {sleepIO}
 use std::io {IO.get_env, IO.current_time_nano}
 use std::list {}
 use std::ref {Ref}
@@ -518,10 +519,36 @@ def read_once (fd : FdStream) (deadline : I64) (acc : List String) : IO String :
     }
 }
 
-/// Reap the child; returns the pid `waitpid` reported, or -1 on error.
+/// `waitpid` option: return at once instead of blocking for the child.
+def wnohang : I32 := 1
+
+/// How long `reap` waits for an exiting child; a failure to exit must
+/// surface as a failed assertion, not as a hung suite.
+def reap_wait_ms : I64 := 5000
+
+/// Reap the child, waiting up to `reap_wait_ms` for it; the pid `waitpid`
+/// `waitpid` reported, or -1 when it is still running (or on error). A
+/// blocking `waitpid` turned one failed exit gesture into a 30-minute
+/// watchdogged phase: the child stayed up and the suite never moved past
+/// the reap.
 pub def Pty.reap (m : Pty) : IO I64 := do {
-    let p <- IO.mk (waitpid m.pid Ptr.null zero_i32);
-    return (I32.to_i64 p)
+    let now <- IO.current_time_nano;
+    reap_until m.pid (now + reap_wait_ms * 1000000)
+}
+
+#[partial]
+def reap_until (pid : I32) (deadline : I64) : IO I64 := do {
+    let p <- IO.mk (waitpid pid Ptr.null wnohang);
+    let rc : I64 := I32.to_i64 p;
+    if Bool.not (I64.beq rc zero_i64) then IO.pure rc
+    else do {
+        let now <- IO.current_time_nano;
+        if I64.gt now deadline then IO.pure (0 - 1)
+        else do {
+            sleepIO 10;
+            reap_until pid deadline
+        }
+    }
 }
 
 /// The child's pid, for `/proc/<pid>` probes (RSS).
