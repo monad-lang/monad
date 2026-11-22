@@ -150,14 +150,36 @@ def Sha256.zero_bytes (n : I64) : List U8 :=
     if I64.beq n 0 then List.empty
     else List.cons 0u8 (Sha256.zero_bytes (n - 1))
 
+/// The number of bytes. The prelude's `List.length` recurses once per
+/// element (`I64.add 1 (List.length tail)`), so hashing a whole-file buffer
+/// overflowed the stack; the accumulator keeps the self-call in tail
+/// position and compiles to a loop.
+#[terminating]
+def Sha256.byte_count (bytes : List U8) (n : I64) : I64 :=
+    match bytes {
+        empty => n,
+        cons _ rest => Sha256.byte_count rest (I64.add n 1),
+    }
+
+/// `a ++ b` when `a_rev` is `List.reverse a`. `List.append` also recurses
+/// once per element of its first argument -- fine for the padding tail,
+/// fatal for the message itself.
+#[terminating]
+def Sha256.append_reversed (a_rev : List U8) (b : List U8) : List U8 :=
+    match a_rev {
+        empty => b,
+        cons x rest => Sha256.append_reversed rest (List.cons x b),
+    }
+
 def Sha256.pad (bytes : Shared (List U8)) : List U8 :=
-    let msg_len_bytes := List.length (Shared.get bytes) in
+    let msg_len_bytes := Sha256.byte_count (Shared.get bytes) 0i64 in
     let bit_len := I64.mul msg_len_bytes 8 in
-    let marked := List.append (Shared.get bytes) (List.singleton 128u8) in // 0x80
     let zeros := Sha256.zero_bytes (Sha256.pad_zeros_needed msg_len_bytes) in
     let len_hi := Sha256.unpack_word 0u32 in // high 32 bits of bit-length: see module doc
     let len_lo := Sha256.unpack_word (I64.to_u32 bit_len) in
-    List.append marked (List.append zeros (List.append len_hi len_lo))
+    // The message, then 0x80, then the zeros, then the bit length.
+    let tail := List.append (List.singleton 128u8) (List.append zeros (List.append len_hi len_lo)) in
+    Sha256.append_reversed (List.reverse (Shared.get bytes)) tail
 
 // ── Message schedule (W[0..63]) ──
 

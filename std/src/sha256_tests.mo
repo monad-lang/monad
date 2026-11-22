@@ -90,3 +90,18 @@ def test_sha256_two_block : Bool :=
 def test_sha256_quick_fox : Bool :=
     Sha256.hash "The quick brown fox jumps over the lazy dog"
         == "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592"
+
+/// `n` copies of `b`, most recent first (the order does not matter).
+#[terminating]
+def repeat_byte (n : I64) (b : U8) (acc : List U8) : List U8 :=
+    if I64.beq n 0 then acc else repeat_byte (I64.sub n 1) b (List.cons b acc)
+
+/// A whole-file-sized input must hash without exhausting the stack. `pad`
+/// used to measure and append the message with the prelude's per-element
+/// `List.length`/`List.append`, which overflowed on the megabytes of a
+/// static asset (`motes/moon`'s ETag is a SHA-256 of the file). The digest is
+/// that of 1 MiB of `'a'`, from `sha256sum`.
+#[test]
+def test_sha256_one_megabyte : Bool :=
+    Sha256.hash (String.from_list (repeat_byte 1048576 97u8 List.empty))
+        == "9bc1b2a288b26af7257a36277ae3816a7d4f16e89c1e7e77d0a5c48bad62b360"
