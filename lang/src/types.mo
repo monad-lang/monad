@@ -2295,6 +2295,9 @@ pub type TypeError {
     instance_method_signature (cls : NamePath) (method : Identifier) (expected : Term) (found : Term),
     /// An instance defines a method its class does not declare.
     instance_method_not_in_class (cls : NamePath) (method : Identifier),
+    /// A class's instance-determined variable (`{S : Type}`) that no
+    /// annotated method of the instance fixes.
+    instance_determined_unsolved (cls : NamePath) (name : Identifier),
 }
 
 /// `f #Named.Instance args`'s lowered marker argument: a sentinel `Term.var`

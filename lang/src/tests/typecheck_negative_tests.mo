@@ -779,3 +779,72 @@ def test_instance_methods_matching_their_class_are_accepted : IO Bool :=
             // method omitted.
             ++ "class Df A {\n    def df : A\n    def df2 : A := df\n}\n"
             ++ "instance Df I64 {\n    def df := 5\n}\n")
+
+// --- Instance-determined variables: `class C {S : Type} (M)` -----------------
+//
+// Each instance fixes S once, through its annotated methods' signatures; every
+// method is then checked against the class with that S.
+
+def ms_class : String :=
+    "type Bx T { bx (v : T) }\n"
+        ++ "class Ms {S : Type} (M : Type -> Type) {\n"
+        ++ "    def get : M S\n"
+        ++ "    def put (s : S) : M Unit\n"
+        ++ "    def dflt : S\n"
+        ++ "}\n"
+
+#[test]
+def test_an_instance_fixing_its_determined_variable_is_accepted : IO Bool :=
+    accepted
+        (ms_class
+            ++ "instance Ms Bx {\n"
+            ++ "    def get : Bx I64 := Bx.bx 1\n"
+            ++ "    def put (s : I64) : Bx Unit := Bx.bx Unit.unit\n"
+            ++ "    def dflt := 0\n"
+            ++ "}\n")
+
+#[test]
+def test_methods_disagreeing_on_a_determined_variable_are_rejected : IO Bool :=
+    rejected_with "Ms.put" sig_needle
+        (ms_class
+            ++ "instance Ms Bx {\n"
+            ++ "    def get : Bx I64 := Bx.bx 1\n"
+            ++ "    def put (s : String) : Bx Unit := Bx.bx Unit.unit\n"
+            ++ "    def dflt : I64 := 0\n"
+            ++ "}\n")
+
+#[test]
+def test_an_unannotated_method_is_checked_at_the_solved_variable : IO Bool :=
+    rejected_with "Ms.dflt" "type mismatch"
+        (ms_class
+            ++ "instance Ms Bx {\n"
+            ++ "    def get : Bx I64 := Bx.bx 1\n"
+            ++ "    def put (s : I64) : Bx Unit := Bx.bx Unit.unit\n"
+            ++ "    def dflt := \"s\"\n"
+            ++ "}\n")
+
+#[test]
+def test_an_instance_that_never_fixes_its_determined_variable_is_rejected : IO Bool :=
+    rejected_with "Ms.S" "does not determine"
+        ("type Bx T { bx (v : T) }\n"
+            ++ "class Ms {S : Type} (M : Type -> Type) {\n"
+            ++ "    def get : M S\n"
+            ++ "    def nop : M Unit\n"
+            ++ "}\n"
+            ++ "instance Ms Bx {\n"
+            ++ "    def get := Bx.bx 1\n"
+            ++ "    def nop : Bx Unit := Bx.bx Unit.unit\n"
+            ++ "}\n")
+
+/// A method polymorphic in its own variable (`put (s : A)`) does not fix S:
+/// the binding `S := A` would let every method pick its own S.
+#[test]
+def test_a_method_local_variable_does_not_determine_a_class_variable : IO Bool :=
+    rejected_with "Ms.S" "does not determine"
+        ("type Bx T { bx (v : T) }\n"
+            ++ "class Ms {S : Type} (M : Type -> Type) {\n"
+            ++ "    def put (s : S) : M Unit\n"
+            ++ "}\n"
+            ++ "instance Ms Bx {\n"
+            ++ "    def put (s : A) : Bx Unit := Bx.bx Unit.unit\n"
+            ++ "}\n")

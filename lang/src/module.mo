@@ -2520,7 +2520,7 @@ def instance_signature_diagnostics (ins : Instance) (scope : Scope) (locals : Lo
             list_append
                 (render_instance_errors (show_name_path ins.cls) path
                     (instance_signature_errors cls ins scope locals))
-                (unannotated_body_diagnostics (show_name_path ins.cls) (unannotated_methods cls ins)
+                (unannotated_body_diagnostics (show_name_path ins.cls) (unannotated_methods cls ins scope locals)
                     scope locals path),
     }
 

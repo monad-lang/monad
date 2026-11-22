@@ -139,6 +139,10 @@ pub def type_error_message (e : TypeError) : String :=
             String.concat "`" (String.concat (show_identifier method)
                 (String.concat "` is not a method of class `" (String.concat (show_name_path cls)
                     "`; an instance may only define its class's methods"))),
+        TypeError.instance_determined_unsolved cls name =>
+            String.concat "this instance of `" (String.concat (show_name_path cls)
+                (String.concat "` does not determine `" (String.concat (show_identifier name)
+                    "`: annotate a method whose class signature mentions it"))),
     }
 
 /// Render a full diagnostic for a type error — same visual family as

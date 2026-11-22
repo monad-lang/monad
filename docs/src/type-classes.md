@@ -118,8 +118,13 @@ class MonadState {S : Type} (M : Type -> Type) {
 ```
 
 `S` is not a class argument: an instance is still written
-`instance MonadState (State I64)`, and its methods choose `S := I64`. A
-`{u : Universe}` or bare `{u}` binder remains a universe-level binder.
+`instance MonadState (State I64)`, and its methods choose `S := I64`. The
+checker solves `S` once per instance from the annotated methods' signatures
+and then checks every method, annotated or not, against the class with that
+`S`. Two methods that choose different types are a signature error, and an
+instance whose annotated methods never mention `S` is rejected because it
+does not determine it. A `{u : Universe}` or bare `{u}` binder remains a
+universe-level binder.
 
 ## Type Class Constraints on Functions
 
