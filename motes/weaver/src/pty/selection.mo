@@ -4,7 +4,7 @@
 // Ported from pty_repro_selection.py (retired).
 use pty::spawn {Pty, Output}
 use pty::check {Check.report}
-use weaver::pty_support {run_gated, with_root, fixture_path, spawn, sgr, pos_row, pos_col}
+use weaver::pty_support {run_gated, with_root, fixture_path, spawn, sgr, pos_row, pos_col, status_turns}
 use std::base64 {B64.encode_std}
 use std::io {IO.println}
 
@@ -41,7 +41,14 @@ def selection_go (m : Pty) : IO Bool := do {
     let mouse <- Pty.wait_until m (fn (o : Output) => Output.contains o "\u{1b}[?1002h") 6000;
     let a <- Check.report "mouse drag reporting enabled (?1002h)" mouse;
     Pty.send_text m "go\n";
-    let rendered <- Pty.wait_until m (fn (o : Output) => found o "hello") 6000;
+    // Wait for the turn to finish, not just for the text: while the reply
+    // streams it is drawn live, and the transcript block that replaces it
+    // at turn end moves the row under the drag. A selection anchored on the
+    // live row is dropped when the block lands (the release then copies
+    // nothing). `turns 1/` in the status bar is the settled frame.
+    let rendered <- Pty.wait_until m (fn (o : Output) =>
+        Bool.and (found o "hello") (status_turns o 1)) 6000;
+    let _ <- Pty.wait_quiet m 150 3000;
     let b <- Check.report "reply rendered" rendered;
     let o0 <- Pty.output m;
     let spot := match Output.find o0 "hello" {
