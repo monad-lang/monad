@@ -65,10 +65,11 @@ use lib::scope {
     alias_map_empty, build_alias_map,
     resolve_infix_decl_groups, resolve_infix_decls, resolve_open_alias_decls,
     scope_data_add_def_sig, scope_data_empty, scope_data_find_def_sig,
-    scope_find_inductive, scope_push_local, scope_resolve_name,
+    scope_find_class, scope_find_inductive, scope_push_local, scope_resolve_name,
 }
 use lib::termination {check_termination_all}
 use lib::typecheck::diagnostic {render_type_error, render_type_warning}
+use lib::typecheck::instance_sig {instance_signature_errors}
 use lib::typecheck::infer {body_type_error, empty_local_types, empty_locals, type_check}
 // `--affine` (Phase 5 of the enforcement plan): the M2 usage rule as
 // real diagnostics. Built once per module by the affine walk below,
@@ -2504,7 +2505,35 @@ def check_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) (path
         // (`open X {...} in def f := ...` would register `f` in scope
         // via scope-building but never actually check `f`'s own body).
         Decl.scoped_open_d _ _ inner => check_decl_with_scope inner scope locals path verbose,
+        // The method BODIES are checked as the promoted defs; here only their
+        // signatures against the class (ISSUE-14).
+        Decl.instance_d ins => do { return (instance_signature_diagnostics ins scope locals path) },
         _ => do { return List.empty }
+    }
+
+/// The diagnostics for `ins`'s methods that disagree with their class,
+/// each named `<Class>.<method>`. A class that does not resolve reports
+/// nothing here, as `promote_instance_defs` does.
+def instance_signature_diagnostics (ins : Instance) (scope : Scope) (locals : LocalScope)
+    (path : Option String) : List String :=
+    match scope_find_class ins.cls scope {
+        Option.none => List.empty,
+        Option.some cls =>
+            render_instance_errors (show_name_path ins.cls) path
+                (instance_signature_errors cls ins scope locals),
+    }
+
+#[partial]
+def render_instance_errors (cls_name : String) (path : Option String)
+    (errs : List (Pair Identifier TypeError)) : List String :=
+    match errs {
+        List.empty => List.empty,
+        List.cons p rest =>
+            match p {
+                Pair.pair m e =>
+                    List.cons (render_type_error (cls_name ++ "." ++ identifier_to_string m) path e)
+                        (render_instance_errors cls_name path rest),
+            },
     }
 
 #[partial]

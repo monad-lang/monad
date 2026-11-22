@@ -692,3 +692,77 @@ def test_true_eliminator_proofs_are_accepted : IO Bool :=
             ++ "class Refl1 (M : Type -> Type) : Prop {\n"
             ++ "    def refl_m (m : M A) : Path (M A) m m\n"
             ++ "}\n")
+
+// --- Instance methods against their class (ISSUE-14) ------------------------
+//
+// An instance method's written signature was copied into the promoted def and
+// checked only against itself, so a method of the wrong type -- or a law
+// instance proving a weaker statement -- was accepted.
+
+def sh_class : String := "class Sh A {\n    def sh (a : A) : String\n}\n"
+
+def sig_needle : String := "but the class declares"
+
+#[test]
+def test_an_instance_method_parameter_of_the_wrong_type_is_rejected : IO Bool :=
+    rejected_with "Sh.sh" sig_needle
+        (sh_class ++ "instance Sh Bool {\n    def sh (a : I64) : String := \"x\"\n}\n")
+
+#[test]
+def test_an_instance_method_return_of_the_wrong_type_is_rejected : IO Bool :=
+    rejected_with "Sh.sh" sig_needle
+        (sh_class ++ "instance Sh Bool {\n    def sh (a : Bool) : I64 := 1\n}\n")
+
+#[test]
+def test_an_instance_method_the_class_does_not_declare_is_rejected : IO Bool :=
+    rejected_with "Sh.extra" "is not a method of class"
+        (sh_class
+            ++ "instance Sh Bool {\n    def sh (a : Bool) : String := \"x\"\n"
+            ++ "    def extra (a : Bool) : String := \"y\"\n}\n")
+
+/// A law class whose operations are TERM parameters, the `LawfulMonad`
+/// shape: the instance must prove the law at its own `bind`/`pure`.
+def law_class : String :=
+    path_prelude
+        ++ "def id_pure (A : Type) (a : A) : Id A := Id.id a\n"
+        ++ "def id_bind (A : Type) (B : Type) (m : Id A) (f : A -> Id B) : Id B := match m { Id.id a => f a }\n"
+        ++ "class Law1 (M : Type -> Type)\n"
+        ++ "    (bind : (A : Type) -> (B : Type) -> (a : M A) -> (f : A -> M B) -> M B)\n"
+        ++ "    (pure : (A : Type) -> (a : A) -> M A) : Prop {\n"
+        ++ "    def left_id (a : A) (f : A -> M B) : Path (M B) (bind A B (pure A a) f) (f a)\n"
+        ++ "}\n"
+
+#[test]
+def test_a_law_instance_proving_a_weaker_statement_is_rejected : IO Bool :=
+    rejected_with "Law1.left_id" sig_needle
+        (law_class
+            ++ "instance Law1 Id id_bind id_pure {\n"
+            ++ "    def left_id (a : A) (f : A -> Id B) : Path (Id B) (f a) (f a) := refl (f a)\n"
+            ++ "}\n")
+
+#[test]
+def test_instance_methods_matching_their_class_are_accepted : IO Bool :=
+    accepted
+        (law_class
+            ++ "instance Law1 Id id_bind id_pure {\n"
+            ++ "    def left_id (a : A) (f : A -> Id B) : Path (Id B) (id_bind A B (id_pure A a) f) (f a) :=\n"
+            ++ "        refl (f a)\n"
+            ++ "}\n"
+            ++ sh_class
+            ++ "instance Sh Bool {\n    def sh (a : Bool) : String := \"x\"\n}\n"
+            // Method type variables named differently from the class's.
+            ++ "class Mp (F : Type -> Type) {\n    def mp (f : A -> B) (m : F A) : F B\n}\n"
+            ++ "type Bx T { bx (v : T) }\n"
+            ++ "instance Mp Bx {\n"
+            ++ "    def mp (f : X -> Y) (m : Bx X) : Bx Y := match m { Bx.bx v => Bx.bx (f v) }\n"
+            ++ "}\n"
+            // An instance variable (`E`) shared by both signatures.
+            ++ "type Ei E T { lft (e : E), rgt (v : T) }\n"
+            ++ "instance Mp (Ei E) {\n"
+            ++ "    def mp (f : A -> B) (m : Ei E A) : Ei E B :=\n"
+            ++ "        match m { Ei.lft e => Ei.lft e, Ei.rgt v => Ei.rgt (f v) }\n"
+            ++ "}\n"
+            // Unannotated (nothing written to compare), and a defaulted
+            // method omitted.
+            ++ "class Df A {\n    def df : A\n    def df2 : A := df\n}\n"
+            ++ "instance Df I64 {\n    def df := 5\n}\n")
