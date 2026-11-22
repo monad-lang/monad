@@ -486,9 +486,13 @@ def show_struct_field (f : StructField) : String := match f {
 
 #[partial]
 pub def show_class (cls : Class) : String := match cls {
-    Class.mk name params constraints methods vis sort =>
+    Class.mk name params constraints methods vis sort determined =>
         let name_str := show_identifier name in
-        let header := String.concat (show_vis_prefix vis) (String.concat "class " name_str) in
+        let bare_header := String.concat (show_vis_prefix vis) (String.concat "class " name_str) in
+        let header := match determined {
+            List.empty => bare_header,
+            List.cons _ _ => String.concat bare_header (String.concat " " (show_class_determined determined)),
+        } in
         let with_params := match params {
             List.empty => header,
             List.cons x y =>
@@ -513,6 +517,10 @@ def show_class_param (p : Param) : String :=
 
 def show_class_params (ps : List Param) : String :=
     List.intercalate " " (List.map show_class_param ps)
+
+/// The head's instance-determined binders, braced: `{S : Type}`.
+def show_class_determined (ps : List Param) : String :=
+    List.intercalate " " (List.map (fn (p : Param) => String.concat (String.concat "{" (show_param p)) "}") ps)
 
 def show_class_defs (ms : List ClassDef) : String :=
     List.intercalate ",\n  " (List.map show_class_def ms)
@@ -998,7 +1006,7 @@ def test_show_decl_class : Bool :=
     let show_name := Identifier.id "show" in
     let cd := ClassDef.mk show_name (Term.sort (SortLevel.concrete 1)) Option.none in
     let methods := List.cons cd List.empty in
-    let cls := Class.mk name List.empty List.empty methods Visibility.package_private Option.none in
+    let cls := Class.mk name List.empty List.empty methods Visibility.package_private Option.none List.empty in
     let decl := Decl.class_d cls in
     show_decl decl == "class Show {\n  def show : Type\n}"
 

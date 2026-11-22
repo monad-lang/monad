@@ -86,6 +86,22 @@ class FromListLiteral (L : Type -> Type := List) {
 }
 ```
 
+## Instance-Determined Variables
+
+A braced binder in the class head names a variable that each instance
+fixes once, rather than one every method is polymorphic in:
+
+```monad,ignore
+class MonadState {S : Type} (M : Type -> Type) {
+    def get : M S
+    def set (s : S) : M Unit
+}
+```
+
+`S` is not a class argument: an instance is still written
+`instance MonadState (State I64)`, and its methods choose `S := I64`. A
+`{u : Universe}` or bare `{u}` binder remains a universe-level binder.
+
 ## Type Class Constraints on Functions
 
 Functions can require instances using bracket syntax:

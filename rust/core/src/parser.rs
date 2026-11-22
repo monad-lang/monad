@@ -2360,17 +2360,23 @@ fn class_parser(input: Span) -> Res<Inductive> {
   let (input, _) = ws0(input)?;
   let (input, name) = def_name(input)?;
   let (input, _) = ws0(input)?;
-  // `{u : Universe}` / `{u}` after the class name, then zero or more params.
-  // The level clause is dropped: `u` becomes a level binder only because a
-  // `Sort u` in the surviving params mentions it (mirrors the def parser's
-  // own implicit-clause handling).
-  let (input, _universe) = opt(delimited(
-    (tag("{"), ws0),
-    terminated(
-      identifier,
-      opt(preceded((ws0, tag(":")), preceded(ws0, tag("Universe")))),
+  // Zero or more `{u : Universe}` / `{u}` / `{S : Type}` groups after the
+  // class name, then zero or more params. All are dropped: `u` becomes a
+  // level binder only because a `Sort u` in the surviving params mentions
+  // it (mirrors the def parser's own implicit-clause handling), and an
+  // instance-determined `S` stays free in the methods, which is how the
+  // host already reads it. The self-hosted checker keeps `S`
+  // (`Class.determined`).
+  let (input, _head_binders) = many0(terminated(
+    delimited(
+      (tag("{"), ws0),
+      terminated(
+        identifier,
+        opt(preceded((ws0, tag(":")), preceded(ws0, type_expression))),
+      ),
+      (ws0, tag("}")),
     ),
-    (ws0, tag("}")),
+    ws0,
   ))
   .parse(input)?;
   let (input, _) = ws0(input)?;

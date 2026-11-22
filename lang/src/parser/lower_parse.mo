@@ -1107,6 +1107,7 @@ def lower_parse_class (ctx : ParseLowerCtx) (c : ParseClass) : Class :=
             Option.some s => Option.some (lower_parse_term_bare ctx s),
             Option.none => Option.none,
         })
+        (lower_parse_params ctx c.determined)
 
 #[partial]
 def lower_parse_instance (ctx : ParseLowerCtx) (i : ParseInstance) : Instance :=

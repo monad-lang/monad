@@ -2913,8 +2913,8 @@ def class_apply_constraints (dr : ParseResult ParseDecl) (constraints : List Typ
             match decl.kind {
                 class_d cls =>
                     match cls {
-                        ParseClass.mk name params _ methods vis sort =>
-                            success rem (pd_class_d (ParseClass.mk name params constraints methods vis sort))
+                        ParseClass.mk name params _ methods vis sort determined =>
+                            success rem (pd_class_d (ParseClass.mk name params constraints methods vis sort determined))
                     },
                 _ => success rem decl
             },
@@ -2925,49 +2925,102 @@ def class_apply_constraints (dr : ParseResult ParseDecl) (constraints : List Typ
 def class_name (r : ParseResult String) (vis : Visibility) : ParseResult ParseDecl :=
     match r {
         success rem name =>
-            let empty_params : List ParseParam := List.empty in
-            // `{u : Universe}` / `{u}` after the class name, the level
-            // analogue of the `def`/`type` parameter clause. Parsed and
-            // dropped: `u` becomes a level binder only because a `Sort u`
-            // in the surviving params mentions it (`free_level_vars`), the
-            // same rule `def_implicit_close` documents.
-            class_try_universe (tag "{" (skip_spaces rem)) rem (Identifier.id name) empty_params vis,
+            let no_determined : List ParseParam := List.empty in
+            class_heads rem (Identifier.id name) no_determined vis,
         fail e => fail e
     }
 
+/// Zero or more `{...}` groups after the class name. `{u : Universe}` and
+/// `{u}` are level binders, parsed and dropped: `u` becomes a level binder
+/// only because a `Sort u` in the surviving params mentions it
+/// (`free_level_vars`), the same rule `def_implicit_close` documents. Any
+/// other `{S : T}` is an instance-determined variable (`Class.determined`).
 #[partial]
-def class_try_universe (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+def class_heads (input : String) (name : Identifier)
+    (det : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+    class_head_open (tag "{" (skip_spaces input)) input name det vis
+
+#[partial]
+def class_head_open (r : ParseResult String) (orig : String) (name : Identifier)
+    (det : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
     match r {
-        success rem _ => class_universe_name (identifier (skip_spaces rem)) orig name params vis,
-        fail _ => class_params orig name params vis
+        success rem _ => class_head_name (identifier (skip_spaces rem)) orig name det vis,
+        fail _ => class_heads_done orig name det vis
     }
 
 #[partial]
-def class_universe_name (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+def class_head_name (r : ParseResult String) (orig : String) (name : Identifier)
+    (det : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
     match r {
-        success rem _ => class_universe_optional (tag ":" (skip_spaces rem)) rem orig name params vis,
-        fail _ => class_params orig name params vis
+        success rem var => class_head_colon (tag ":" (skip_spaces rem)) rem (Identifier.id var) orig name det vis,
+        fail _ => class_heads_done orig name det vis
     }
 
 #[partial]
-def class_universe_optional (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+def class_head_colon (r : ParseResult String) (rem : String) (var : Identifier) (orig : String) (name : Identifier)
+    (det : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
     match r {
-        success rem2 _ => class_universe_kw (tag_keyword "Universe" (skip_spaces rem2)) orig name params vis,
-        fail _ => class_universe_close (tag "}" (skip_spaces rem)) orig name params vis
+        success rem2 _ => class_head_kind (tag_keyword "Universe" (skip_spaces rem2)) rem2 var orig name det vis,
+        fail _ => class_head_close (tag "}" (skip_spaces rem)) orig name det vis
     }
 
 #[partial]
-def class_universe_kw (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+def class_head_kind (r : ParseResult String) (after_colon : String) (var : Identifier) (orig : String) (name : Identifier)
+    (det : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
     match r {
-        success rem _ => class_universe_close (tag "}" (skip_spaces rem)) orig name params vis,
-        fail _ => class_params orig name params vis
+        success rem _ => class_head_close (tag "}" (skip_spaces rem)) orig name det vis,
+        fail _ => class_head_type (type_expression (skip_spaces after_colon)) var name det vis
     }
 
 #[partial]
-def class_universe_close (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+def class_head_type (r : ParseResult ParseTerm) (var : Identifier) (name : Identifier)
+    (det : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
     match r {
-        success rem _ => class_params (skip_spaces rem) name params vis,
-        fail _ => class_params orig name params vis
+        success rem typ =>
+            let det2 : List ParseParam := List.cons (parse_param_many var typ) det in
+            class_head_close_determined (tag "}" (skip_spaces rem)) name det2 vis,
+        fail e => fail e
+    }
+
+/// A determined binder is new syntax with no legacy shape to fall back to:
+/// a missing `}` is an error, not a retry.
+#[partial]
+def class_head_close_determined (r : ParseResult String) (name : Identifier)
+    (det : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+    match r {
+        success rem _ => class_heads (skip_spaces rem) name det vis,
+        fail e => fail (ParseError.custom "expected } after a class head binder" (parse_error_remaining e))
+    }
+
+#[partial]
+def class_head_close (r : ParseResult String) (orig : String) (name : Identifier)
+    (det : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+    match r {
+        success rem _ => class_heads (skip_spaces rem) name det vis,
+        fail _ => class_heads_done orig name det vis
+    }
+
+#[partial]
+def class_heads_done (input : String) (name : Identifier)
+    (det : List ParseParam) (vis : Visibility) : ParseResult ParseDecl :=
+    let empty_params : List ParseParam := List.empty in
+    class_apply_determined (class_params input name empty_params vis) (list_reverse det)
+
+/// Patch the head's `{S : T}` binders onto the finished `ParseClass`, the
+/// same patch-afterward pattern as `class_apply_params`.
+#[partial]
+def class_apply_determined (dr : ParseResult ParseDecl) (det : List ParseParam) : ParseResult ParseDecl :=
+    match dr {
+        success rem decl =>
+            match decl.kind {
+                class_d cls =>
+                    match cls {
+                        ParseClass.mk name params constraints methods vis sort _ =>
+                            success rem (pd_class_d (ParseClass.mk name params constraints methods vis sort det))
+                    },
+                _ => success rem decl
+            },
+        fail e => fail e
     }
 
 /// Class-level params, same shape as `type_params_loop` (which fixed this
@@ -3036,8 +3089,8 @@ def class_apply_sort (dr : ParseResult ParseDecl) (sort : Option ParseTerm) : Pa
             match decl.kind {
                 class_d cls =>
                     match cls {
-                        ParseClass.mk name params constraints methods vis _ =>
-                            success rem (pd_class_d (ParseClass.mk name params constraints methods vis sort))
+                        ParseClass.mk name params constraints methods vis _ determined =>
+                            success rem (pd_class_d (ParseClass.mk name params constraints methods vis sort determined))
                     },
                 _ => success rem decl
             },
@@ -3105,8 +3158,8 @@ def class_apply_params (dr : ParseResult ParseDecl) (params : List ParseParam) :
             match decl.kind {
                 class_d cls =>
                     match cls {
-                        ParseClass.mk name _ constraints methods vis sort =>
-                            success rem (pd_class_d (ParseClass.mk name params constraints methods vis sort))
+                        ParseClass.mk name _ constraints methods vis sort determined =>
+                            success rem (pd_class_d (ParseClass.mk name params constraints methods vis sort determined))
                     },
                 _ => success rem decl
             },
@@ -3468,7 +3521,7 @@ def class_close (r : ParseResult String) (name : Identifier) (methods : List Par
             // Placeholders — class_apply_params/class_apply_constraints
             // patch the real values in afterward (see class_params's doc
             // comment; same pattern instance_close uses for vis).
-            success rem (pd_class_d (ParseClass.mk name empty_params empty_constraints rev_methods vis Option.none)),
+            success rem (pd_class_d (ParseClass.mk name empty_params empty_constraints rev_methods vis Option.none List.empty)),
         fail e => fail e
     }
 
@@ -8878,7 +8931,7 @@ def test_class_with_constraints : Bool :=
 #[partial]
 def class_has_one_functor_f_constraint (c : ParseClass) : Bool :=
     match c {
-        ParseClass.mk _name _params constraints _methods _vis _ =>
+        ParseClass.mk _name _params constraints _methods _vis _ _ =>
             match constraints {
                 List.cons tc rest => constraint_is_functor_f tc && list_is_empty_tc rest,
                 List.empty => false
@@ -9019,7 +9072,7 @@ def test_class_with_paren_params : Bool :=
 #[partial]
 def class_has_one_param_named_F (c : ParseClass) : Bool :=
     match c {
-        ParseClass.mk _name params _constraints _methods _vis _ =>
+        ParseClass.mk _name params _constraints _methods _vis _ _ =>
             match params {
                 List.cons p rest => param_named_F p && list_is_empty rest,
                 List.empty => false
@@ -9049,7 +9102,7 @@ def test_class_with_default_param : Bool :=
 #[partial]
 def class_has_one_param_L_with_default (c : ParseClass) : Bool :=
     match c {
-        ParseClass.mk _name params _constraints _methods _vis _ =>
+        ParseClass.mk _name params _constraints _methods _vis _ _ =>
             match params {
                 List.cons p rest => param_named_L_with_default p && list_is_empty rest,
                 List.empty => false

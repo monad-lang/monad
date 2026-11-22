@@ -1549,6 +1549,8 @@ pub struct ParseClass {
     /// The declared result sort (`: Sort (max 1 u)`, `: Prop`), or `None`
     /// when the class head omits it. Lowered into `Class.sort`.
     sort : Option ParseTerm,
+    /// The head's `{S : Type}` binders. Lowered into `Class.determined`.
+    determined : List ParseParam,
 }
 
 pub struct ParseInstance {
@@ -2362,6 +2364,11 @@ pub struct Class {
     /// `Sort 1`). Kept because the class is checked as a type former; the
     /// host represents the same clause in its `Inductive.typ`'s codomain.
     sort : Option Term,
+    /// Variables each instance fixes, written `{S : Type}` in the class
+    /// head (`class MonadState {S : Type} (M : Type -> Type)`). The methods
+    /// mention `S` free, but an instance chooses it once, so it is not an
+    /// argument and not quantified per method.
+    determined : List Param,
 }
 
 // Canonical StructField uses de Bruijn Term. StructFieldV0 is the legacy V0 variant.

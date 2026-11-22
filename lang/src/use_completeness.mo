@@ -675,7 +675,7 @@ def index_decl (owner : ModulePath) (d : Decl) (m : NameMap (List DeclRow)) : Na
             },
         Decl.class_d cls =>
             match cls {
-                Class.mk name _params _constraints methods vis _ =>
+                Class.mk name _params _constraints methods vis _ _ =>
                     let np : NamePath := npath_segments (NamePath.mk [name]) in
                     index_class_methods owner name vis methods
                         (index_add_row np
@@ -761,7 +761,7 @@ def own_keys_go (decls : List Decl) (m : NamePathSet) : NamePathSet :=
                     },
                 Decl.class_d cls =>
                     match cls {
-                        Class.mk name _params _constraints _methods _vis _ =>
+                        Class.mk name _params _constraints _methods _vis _ _ =>
                             own_keys_go rest (name_path_set_insert (NamePath.mk [name]) (name_path_set_insert (NamePath.mk [Identifier.id "mk"]) m)),
                     },
                 // The host's `own` set is `names_of_decls`, which is every
@@ -1062,7 +1062,7 @@ def collect_decl (d : Decl) (refs : Refs) : Refs :=
             },
         Decl.class_d cls =>
             match cls {
-                Class.mk _name params constraints methods _vis _ =>
+                Class.mk _name params constraints methods _vis _ _ =>
                     collect_class_methods methods (collect_constraints constraints (collect_params params refs)),
             },
         Decl.instance_d ins =>

@@ -1440,6 +1440,26 @@ fn test_class_universe_binder_and_result_sort_parse() {
   assert_eq!(pi_codomain(res.typ()), &Term::Sort { level: 0 });
 }
 
+/// An instance-determined `{S : Type}` binder in a class head parses and is
+/// dropped (the host reads `S` as free in the methods), next to a level
+/// binder; a parameterless class's body is not mistaken for a binder.
+#[test]
+fn test_class_determined_binder_parses_and_is_dropped() {
+  let s = r#"pub class MonadState {u} {S : Type} (M : Type -> Type) {
+      def get : M S
+    }"#
+    .into();
+  let (_, res) = class_parser(s).unwrap();
+  assert_eq!(res.name().last().as_str(), "MonadState");
+  assert_eq!(res.params().len(), 1);
+  assert_eq!(res.constructors().len(), 1);
+
+  let s = r#"pub class Marker { def mark : I64 }"#.into();
+  let (_, res) = class_parser(s).unwrap();
+  assert_eq!(res.params().len(), 0);
+  assert_eq!(res.constructors().len(), 1);
+}
+
 /// `type Box {u : Universe} (A : Sort u) : Sort u { mk (a : A) }` — the
 /// level clause is distinguishable from a constructor body by what follows
 /// the closing `}` (a param `(`, a kind `:`, or another `{`), so

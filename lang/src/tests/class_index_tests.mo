@@ -10,7 +10,7 @@ use lang::module {merge_scope_data}
 use std::list {List.all}
 
 def cls (name : String) : Class :=
-    Class.mk (Identifier.id name) List.empty List.empty List.empty Visibility.package_private Option.none
+    Class.mk (Identifier.id name) List.empty List.empty List.empty Visibility.package_private Option.none List.empty
 
 def query (name : String) : NamePath := NamePath.mk [Identifier.id name]
 

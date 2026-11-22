@@ -410,11 +410,8 @@ def first_some {A : Type} (a : Option A) (b : Option A) : Option A :=
         Option.none => b,
     }
 
-#[partial]
 def class_default_refs (names : HashMap String Bool) (cls : Class) : List TypeError :=
-    match cls {
-        Class.mk _name _params _constraints methods _vis _ => class_default_refs_go names methods,
-    }
+    class_default_refs_go names cls.methods
 
 #[partial]
 def class_default_refs_go (names : HashMap String Bool) (methods : List ClassDef) : List TypeError :=
@@ -469,9 +466,8 @@ def opt_ref_errors (names : HashMap String Bool) (t : Option Term) : List TypeEr
             },
     }
 
-#[partial]
 def class_name (cls : Class) : String :=
-    match cls { Class.mk name _params _constraints _methods _vis _ => show_identifier name }
+    show_identifier cls.name
 
 #[partial]
 def instance_name (ins : Instance) : String :=

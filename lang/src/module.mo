@@ -470,7 +470,7 @@ def decl_local_name (d : Decl) : Option String :=
                 Option.some (show_name_path name)
         },
         Decl.struct_d st => match st { Struct.mk nm _ _ _ => Option.some (show_identifier nm) },
-        Decl.class_d cls => match cls { Class.mk nm _ _ _ _ _ => Option.some (show_identifier nm) },
+        Decl.class_d cls => Option.some (show_identifier cls.name),
         Decl.instance_d ins => match ins { Instance.mk nm _ _ _ _ _ _ => Option.some (show_identifier nm) },
         Decl.decl_gen_d nm _ _ _ => Option.some (show_name_path nm),
         _ => Option.none
@@ -2542,7 +2542,7 @@ def check_struct_field_with_scope (f : StructField) (scope : Scope) (locals : Lo
 #[partial]
 def check_class_with_scope (cls : Class) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match cls {
-        Class.mk name _params constraints methods _vis sort => do {
+        Class.mk name _params constraints methods _vis sort _ => do {
             if verbose then println ("  checking class " ++ identifier_to_string name) else do { return unit };
             let locals_ : LocalScope := locals_with_class_typevars cls scope locals;
             let sort_diags : List String := class_sort_diagnostics name sort path;
@@ -7085,7 +7085,7 @@ def decl_all_names (d : Decl) : List Identifier :=
             },
         Decl.class_d c =>
             match c {
-                Class.mk _name _params _constraints methods _vis _sort =>
+                Class.mk _name _params _constraints methods _vis _sort _ =>
                     List.append own (method_names methods),
             },
         _ => own,

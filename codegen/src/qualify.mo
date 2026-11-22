@@ -72,9 +72,7 @@ def decl_def_name (d : Decl) : Option NamePath := match d {
             Struct.mk name _fields _attrs _vis => Option.some (bare_npath (show_identifier name)),
         },
     Decl.class_d cls =>
-        match cls {
-            Class.mk name _params _constraints _methods _vis _ => Option.some (bare_npath (show_identifier name)),
-        },
+        Option.some (bare_npath (show_identifier cls.name)),
     _ => Option.none,
 }
 
@@ -436,9 +434,9 @@ def qualify_one_decl_name (mpath : ModulePath) (renames : HashMap String String)
         },
     Decl.class_d cls =>
         match cls {
-            Class.mk name params constraints methods vis sort =>
+            Class.mk name params constraints methods vis sort determined =>
                 Decl.class_d (Class.mk (Identifier.id (qualified_def_name_str mpath (bare_npath (show_identifier name))))
-                    params constraints methods vis sort),
+                    params constraints methods vis sort determined),
         },
     // An instance carries the module it was declared in via its own
     // name, so `promote_instance_defs` (Stage 3, on the already-flat

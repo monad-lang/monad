@@ -426,7 +426,7 @@ def qtest_struct (name : String) (fields : List StructField) : Decl :=
 
 #[partial]
 def qtest_class (name : String) : Decl :=
-    Decl.class_d (Class.mk (Identifier.id name) List.empty List.empty List.empty Visibility.package_private Option.none)
+    Decl.class_d (Class.mk (Identifier.id name) List.empty List.empty List.empty Visibility.package_private Option.none List.empty)
 
 #[partial]
 def qtest_field (name : String) : StructField :=
@@ -507,9 +507,7 @@ def qtest_class_names_of_decls (decls : List Decl) : List String := match decls 
     List.cons d rest =>
         match d {
             Decl.class_d cls =>
-                match cls {
-                    Class.mk name _params _constraints _methods _vis _ => List.cons (show_identifier name) (qtest_class_names_of_decls rest),
-                },
+                List.cons (show_identifier cls.name) (qtest_class_names_of_decls rest),
             _ => qtest_class_names_of_decls rest,
         },
 }
