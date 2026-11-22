@@ -158,3 +158,17 @@ def test_insert_then_delete_all : Bool :=
     let m := map_insert_all insert_keys (Map.empty : BTreeMap String I64) in
     let m2 := map_delete_all delete_keys m in
     List.is_empty (BTreeMap.to_list m2)
+
+/// `BEq (BTreeMap K V)` is content equality: insertion order (and so the
+/// AVL shape) does not matter, and a superset is not equal in either
+/// direction.
+#[test]
+def test_btreemap_beq_is_content_equality : Bool :=
+    let ab := map_insert_all ["a", "b"] (Map.empty : BTreeMap String I64) in
+    let ba := map_insert_all ["b", "a"] (Map.empty : BTreeMap String I64) in
+    let abc := map_insert_all ["a", "b", "c"] (Map.empty : BTreeMap String I64) in
+    let s_ab := Shared.of ab in
+    let s_abc := Shared.of abc in
+    BEq.beq (Shared.get s_ab) ba
+        && Bool.not (BEq.beq (Shared.get s_ab) (Shared.get s_abc))
+        && Bool.not (BEq.beq (Shared.get s_abc) (Shared.get s_ab))

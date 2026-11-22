@@ -28,12 +28,20 @@ pub type BTreeMap K V {
     node (key : K) (val : V) (left : BTreeMap K V) (right : BTreeMap K V) (height : I64)
 }
 
-def BTreeMap.beq [BEq K, BEq V] (a b : BTreeMap K V) : Bool :=
+/// `a ⊆ b`: every key of `a` maps to the same value in `b`.
+def BTreeMap.subset [BOrd K, BEq V] (a b : BTreeMap K V) : Bool :=
     BTreeMap.fold (fn r ka va =>
         r && Map.lookup ka b == some va
     ) true a
 
-pub instance [BEq K, BEq V] BEq BTreeMap K V {
+/// Equal contents, as mutual inclusion: an AVL tree's shape depends on the
+/// insertion order, so the trees themselves are not compared.
+def BTreeMap.beq [BOrd K, BEq V] (a b : BTreeMap K V) : Bool :=
+    let sa := Shared.of a in
+    let sb := Shared.of b in
+    BTreeMap.subset (Shared.get sa) (Shared.get sb) && BTreeMap.subset (Shared.get sb) (Shared.get sa)
+
+pub instance [BOrd K, BEq V] BEq (BTreeMap K V) {
     def beq (a b : BTreeMap K V) : Bool := BTreeMap.beq a b
 }
 
