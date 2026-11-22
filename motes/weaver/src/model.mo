@@ -275,7 +275,7 @@ pub def Model.view (m : TuiModel) : Widget :=
     } in
     let transcript : SizedWidget := sized (LayoutSize.fill 1) frame in
     let status : SizedWidget := sized (LayoutSize.fixed 1) (with_style (theme_status_style_with colors mode) (label (status_line m))) in
-    let input : SizedWidget := sized (LayoutSize.fixed 3) (Prompt.view m.prompt) in
+    let input : SizedWidget := sized (LayoutSize.fixed 3) (Prompt.view m.state.colors m.prompt) in
     let head : List SizedWidget := if m.banner.shown then [sized (LayoutSize.fixed Banner.rows) (Banner.view (Model.banner_view m) m.banner)] else List.empty in
     let todo_rows : List String := Model.todo_rows m in
     let todos : List SizedWidget := if List.is_empty todo_rows then List.empty

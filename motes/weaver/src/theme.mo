@@ -80,6 +80,11 @@ pub def theme_running_style_with (colors : Bool) : TextStyle :=
 pub def theme_thinking_style_with (colors : Bool) : TextStyle :=
     if colors then class_style LineClass.class_thinking else style_default
 
+/// The prompt while it holds a `! cmd` shell line: the same yellow as a
+/// code span, so a shell line reads differently from a message to the model.
+pub def theme_shell_style_with (colors : Bool) : TextStyle :=
+    if colors then { style_default with fg := some Color.yellow } else style_default
+
 /// The scrollbar thumb: readable against the dim track without competing
 /// with the transcript text.
 pub def theme_scrollbar_thumb_style_with (colors : Bool) : TextStyle :=

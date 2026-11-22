@@ -25,7 +25,7 @@ use weaver::model {
     Model.scroll_step, Model.display_rows,
 }
 use weaver::overlay {OverlayState}
-use weaver::ui::prompt {Prompt.set_text}
+use weaver::ui::prompt {Prompt.set_text, Prompt.shell_mode}
 use weaver::store {StoreState, TLine, TLine.plain, TranscriptPage, SessionInfo, Transcript.empty}
 use weaver::trust {TrustOutcome}
 use weaver::diff_tool {DiffTool.sep}
@@ -1538,3 +1538,12 @@ def test_trust_decided_starts_the_boot : Bool :=
         Pair.pair _ cmd => cmd_is_main_perform cmd,
     } in
     started && failed
+
+/// A line starting with `!` is drawn in the shell color (Claude Code's bash
+/// mode); a message is not.
+#[test]
+def test_shell_mode_for_bang_lines : Bool :=
+    let bang : TuiModel := with_input (model_of Mode.manual) "! ls -l" in
+    let spaced : TuiModel := with_input (model_of Mode.manual) "  !echo hi" in
+    let plain : TuiModel := with_input (model_of Mode.manual) "list the files" in
+    Prompt.shell_mode bang.prompt && Prompt.shell_mode spaced.prompt && Bool.not (Prompt.shell_mode plain.prompt)

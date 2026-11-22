@@ -132,7 +132,8 @@ thinking collapses to a `[thinking · N chars · ctrl+o]` marker. The row refres
 and disappears when the result lands. The status bar separately shows
 the CONTEXT (`ctx 12.3k/128k (10%)`, from the last request's real
 prompt size) and cumulative `spent` — they are different quantities:
-cumulative input sums the whole prompt of every model call. Keys typed mid-turn
+cumulative input sums the whole prompt of every model call. A line starting with `!` is a shell command (drawn in yellow while you
+type it); anything else is a message to the model. Keys typed mid-turn
 land in the input box, and Enter QUEUES them: the line is echoed as
 `queued: ...` and runs as the next turn when the running one ends (a
 failed or stopped turn starts it too). Esc asks the turn to stop: the row says `stopping…`, and the running turn's

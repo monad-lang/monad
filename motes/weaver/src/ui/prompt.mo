@@ -5,7 +5,8 @@
 /// selection inside its own box.
 use tui::types {Key}
 use std::list {List.any}
-use tui::widget {Widget, text_input, padding}
+use tui::widget {Widget, text_input, padding, with_style}
+use weaver::theme {theme_shell_style_with}
 use tui::widgets::input {
     InputState, input_state, insert_text, handle_input_multiline_key,
     InputState.press, InputState.drag, InputState.finish_selection, InputState.clear_selection,
@@ -166,6 +167,13 @@ pub def Prompt.update (b : PromptBox) (p : PromptModel) (msg : PromptMsg) : Pair
             },
     }
 
-/// The box's content, inset one column on each side.
-pub def Prompt.view (p : PromptModel) : Widget :=
-    padding 1 0 1 0 (text_input p.input)
+/// Is the line a `! cmd` shell line? The same trim `Bang.command` uses.
+pub def Prompt.shell_mode (p : PromptModel) : Bool :=
+    String.starts_with "!" (String.trim p.input.value)
+
+/// The box's content, inset one column on each side. A shell line is drawn
+/// in the shell color, as Claude Code's bash mode does.
+pub def Prompt.view (colors : Bool) (p : PromptModel) : Widget :=
+    let field : Widget := text_input p.input in
+    let drawn : Widget := if Prompt.shell_mode p then with_style (theme_shell_style_with colors) field else field in
+    padding 1 0 1 0 drawn
