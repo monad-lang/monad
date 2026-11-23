@@ -24,7 +24,7 @@
 /// attempted here.
 
 use lang::types {
-    Identifier, NameRef, TypeError, concrete, id, show_identifier, show_name_path,
+    Identifier, NamePath, NameRef, TypeError, concrete, id, show_identifier, show_name_path,
     show_operator, show_qualified_name, sort,
 }
 use lib::pretty {show_term}
@@ -147,7 +147,45 @@ pub def type_error_message (e : TypeError) : String :=
             String.concat "constructor `" (String.concat (show_name_path ctor)
                 (String.concat "` of `" (String.concat (show_name_path ind)
                     "` can occur here, so its minor cannot be `impossible`"))),
+        TypeError.non_exhaustive_match ind missing => non_exhaustive_match_message ind missing,
     }
+
+/// `` `T.d` `` -- the constructor qualified by its OWN inductive's name.
+/// The qualifier is not decoration: a constructor's `NamePath` is never
+/// type-prefixed, so rendering it bare would print `` `d` `` for every type
+/// that has a `d` -- and the prelude declares both `List` and `Vec` with a
+/// `cons`.
+def quoted_ctor_path (ty : String) (np : NamePath) : String :=
+    let bare : String := match np {
+        NamePath.mk ids => match List.last ids {
+            Option.some last_id => show_identifier last_id,
+            Option.none => "",
+        },
+    } in
+    "`" ++ ty ++ "." ++ bare ++ "`"
+
+/// `` `T.d`, `T.e` `` -- the missing constructors backticked and comma
+/// separated, in the caller's order (which is the inductive's DECLARATION
+/// order). Determinism matters here: the check-plan cache keys on the
+/// diagnostic text, so the same file must render byte-identically.
+def missing_ctor_names_joined (ty : String) (missing : List NamePath) : String :=
+    match missing {
+        List.empty => "",
+        List.cons hd rest =>
+            match rest {
+                List.empty => quoted_ctor_path ty hd,
+                List.cons _ _ =>
+                    String.concat (quoted_ctor_path ty hd)
+                        (String.concat ", " (missing_ctor_names_joined ty rest)),
+            },
+    }
+
+/// The text of an incomplete match, shared by the error and the warning.
+pub def non_exhaustive_match_message (ind : NamePath) (missing : List NamePath) : String :=
+    let listed : String := missing_ctor_names_joined (show_name_path ind) missing in
+    if I64.beq (List.length missing) 1
+    then "non-exhaustive match: " ++ listed ++ " is not covered (add an arm for it, or a `_` arm)"
+    else "non-exhaustive match: " ++ listed ++ " are not covered (add arms for them, or a `_` arm)"
 
 /// Render a full diagnostic for a type error — same visual family as
 /// `render_parse_error`'s header/arrow-line

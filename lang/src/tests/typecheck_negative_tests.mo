@@ -922,3 +922,19 @@ def test_a_method_local_variable_does_not_determine_a_class_variable : IO Bool :
             ++ "instance Ms Bx {\n"
             ++ "    def put (s : A) : Bx Unit := Bx.bx Unit.unit\n"
             ++ "}\n")
+
+/// An incomplete match is the structured `non_exhaustive_match`, and its text
+/// is unchanged (the check cache keys on it).
+#[test]
+def test_an_incomplete_match_is_rejected_with_the_uncovered_constructor : IO Bool :=
+    rejected_with "tri_name" "non-exhaustive match: `Tri.c` is not covered (add an arm for it, or a `_` arm)"
+        ("type Tri { a, b, c }\n"
+            ++ "def tri_name (t : Tri) : I64 := match t { Tri.a => 1, Tri.b => 2 }\n")
+
+/// A `Vec (Nat.succ n)` scrutinee cannot be `nil`, so a `cons`-only match is
+/// complete.
+#[test]
+def test_a_match_omitting_an_index_impossible_constructor_is_accepted : IO Bool :=
+    accepted
+        ("def vhead2 {A : Type} {n : Nat} (v : Vec (Nat.succ n) A) : A :=\n"
+            ++ "    match v { Vec.cons h _t => h }\n")

@@ -34,7 +34,7 @@ use lang::module {try_parse_decls}
 use lang::scope {build_scope_from_decls}
 use lang::typecheck::infer {empty_locals, type_check}
 use lang::typecheck::whnf {whnf}
-use lang::types {case_minors,
+use lang::types {Minor, case_minors,
     DebugName, Elim, Identifier, ModulePath, NamePath, Scope, ScopeData, Similar, Term,
     binder_anon, sentinel, sort_n,
 }
@@ -132,6 +132,13 @@ def elim_non_sort_motive_is_rejected : Bool :=
     let bad_motive : Term := Term.lam binder_anon Term.hole Term.hole in
     let e : Elim := Elim.mk bool_name List.empty List.empty List.empty bad_motive
         (case_minors (List.cons Term.hole (List.cons Term.hole List.empty))) bool_scrutinee in
+    elim_rejected e bool_local_types bool_scope
+
+/// Both `Bool` constructors can occur, so neither minor may be `impossible`.
+#[test]
+def elim_impossible_minor_on_a_possible_constructor_is_rejected : Bool :=
+    let e : Elim := Elim.mk bool_name List.empty List.empty List.empty bool_constant_motive
+        [Minor.case Term.hole, Minor.impossible] bool_scrutinee in
     elim_rejected e bool_local_types bool_scope
 
 /// `Bool` declares two constructors; one minor is one short -- this is

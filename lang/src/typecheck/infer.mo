@@ -55,6 +55,7 @@ use lib::typecheck::cubical {
 }
 use lib::typecheck::unify {unify, unify_structural}
 use lib::typecheck::whnf {normalize_path_endpoints, whnf}
+use lib::typecheck::diagnostic {non_exhaustive_match_message}
 use lang::parser::numeric_literal {int_value_fits}
 use std::list {List.any, List.filter}
 
@@ -1861,8 +1862,9 @@ def type_check_if (one : Term) (two : Term) (three : Term) (expected_type : Term
 /// `expected_type`), so every accepted corpus program keeps its exact
 /// semantics. Two cases stay on the old `Literal.match_` path: an
 /// unresolvable inductive (`maybe_ind = Option.none`) and an INCOMPLETE match
-/// (deliberate `#[allow_incomplete_match]` uses exist, and a hole minor cannot
-/// be peeled back into a case). Only a match the old rule REJECTS can reach
+/// that a `#[allow_incomplete_match]` def opts into. A constructor the
+/// scrutinee's indices rule out is not incomplete: its minor is `impossible`.
+/// Only a match the old rule REJECTS can reach
 /// the dependent fallback, which derives a motive and runs `type_check_elim`.
 #[terminating]
 def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
@@ -1888,7 +1890,7 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
                                                     let lit_val : Literal := Literal.match_ sc_term checked_cases in
                                                     ok (mk_typed (Term.lit lit_val) unified_typ),
                                                 Option.some ind =>
-                                                    if List.is_empty (uncovered_constructors checked_cases ind)
+                                                    if List.is_empty (possibly_uncovered checked_cases ind sc_typ scope)
                                                         && Bool.not (is_hole unified_typ)
                                                     then
                                                         let e : Elim := elim_from_checked_cases ind sc_term sc_typ checked_cases unified_typ in
@@ -2770,32 +2772,30 @@ def build_elim_minors (ctors : List InductConstructor) (cases : List MatchCase)
         List.empty => List.empty,
         List.cons ctor rest =>
             List.cons
-                (Minor.case (elim_minor_for_ctor ctor cases scrutinee_typ maybe_ind))
+                (elim_minor_for_ctor ctor cases scrutinee_typ maybe_ind)
                 (build_elim_minors rest cases scrutinee_typ maybe_ind),
     }
 
 /// The one minor this constructor contributes: built from the first case
 /// (in WRITTEN order) that covers it -- a real named arm, or a `_` that
-/// reaches it. `Option.none` is unreachable once `validate_match_
-/// coverage` (strict-exhaustiveness.md Phase 4, now a hard error) has
-/// run over this same `cases`/`ind` pair before elaboration ever gets
-/// here; `Term.hole` is a backstop for a caller that skipped that check,
-/// never something a checked program can reach.
+/// reaches it. A constructor no case covers is `impossible`: coverage has
+/// already shown it cannot build the scrutinee's value, and
+/// `check_one_minor` re-checks that on any later pass.
 def elim_minor_for_ctor (ctor : InductConstructor) (cases : List MatchCase)
-    (scrutinee_typ : Term) (maybe_ind : Option Inductive) : Term :=
+    (scrutinee_typ : Term) (maybe_ind : Option Inductive) : Minor :=
     match ctor {
         InductConstructor.mk cname _cparams _ctyp =>
             match find_covering_case cname cases {
-                Option.none => Term.hole,
+                Option.none => Minor.impossible,
                 Option.some case_ =>
                     if match_is_wildcard_name case_.name
                     then
                         let field_types : List Term :=
                             arg_types_for_case (constructor_bare_name cname) maybe_ind scrutinee_typ in
-                        build_anon_lambda_chain field_types (term_shift (List.length field_types) case_.body)
+                        Minor.case (build_anon_lambda_chain field_types (term_shift (List.length field_types) case_.body))
                     else
                         let field_types : List Term := arg_types_for_case case_.name maybe_ind scrutinee_typ in
-                        build_named_lambda_chain case_.args field_types case_.body,
+                        Minor.case (build_named_lambda_chain case_.args field_types case_.body),
             },
     }
 
@@ -3264,37 +3264,6 @@ def validate_cases_against_inductive (cases : List MatchCase) (ind : Inductive) 
 // patterns, 0 guards, 0 duplicate arms, 0 arms after a catch-all -- there is
 // nothing for a general algorithm to be more precise about.
 
-/// `` `T.d` `` -- the constructor qualified by its OWN inductive's name.
-/// The qualifier is not decoration: `InductConstructor.mk`'s own `NamePath`
-/// is never type-prefixed (`constructor_bare_name`), so rendering it bare
-/// would print `` `d` `` for every type that has a `d` -- and
-/// `init/prelude.mo` really does declare both `List` and `Vec` with a
-/// `cons`.
-def quoted_ctor_path (ty : String) (np : NamePath) : String :=
-    "`" ++ ty ++ "." ++ show_identifier (constructor_bare_name np) ++ "`"
-
-/// `` `T.d`, `T.e` `` -- the missing constructors backticked and comma
-/// separated, in the caller's order (which is the inductive's DECLARATION
-/// order). Determinism matters here: the check-plan cache keys on the
-/// diagnostic text, so the same file must render byte-identically.
-def missing_ctor_names_joined (ty : String) (missing : List NamePath) : String :=
-    match missing {
-        List.empty => "",
-        List.cons hd rest =>
-            match rest {
-                List.empty => quoted_ctor_path ty hd,
-                List.cons _ _ =>
-                    String.concat (quoted_ctor_path ty hd)
-                        (String.concat ", " (missing_ctor_names_joined ty rest)),
-            },
-    }
-
-def non_exhaustive_match_message (ind : Inductive) (missing : List NamePath) : String :=
-    let listed : String := missing_ctor_names_joined (inductive_name_str ind) missing in
-    if I64.beq (List.length missing) 1
-    then "non-exhaustive match: " ++ listed ++ " is not covered (add an arm for it, or a `_` arm)"
-    else "non-exhaustive match: " ++ listed ++ " are not covered (add arms for them, or a `_` arm)"
-
 def inductive_constructors (ind : Inductive) : List InductConstructor :=
     match ind { Inductive.mk _name _params _typ constructors _attrs _vis => constructors }
 
@@ -3391,7 +3360,7 @@ def validate_match_coverage (cases : List MatchCase) (maybe_ind : Option Inducti
     : Result TypeError Bool :=
     match match_coverage_gap_at cases maybe_ind sc_typ scope {
         Option.some p => match p {
-            Pair.pair ind missing => err (TypeError.custom (non_exhaustive_match_message ind missing)),
+            Pair.pair ind missing => err (TypeError.non_exhaustive_match ind.name missing),
         },
         Option.none => ok true,
     }
@@ -3414,13 +3383,18 @@ pub def match_coverage_gap_at (cases : List MatchCase) (maybe_ind : Option Induc
     else match maybe_ind {
         Option.none => Option.none,
         Option.some ind =>
-            let possible : NamePath -> Bool := fn (c : NamePath) => Bool.not (ctor_impossible ind c sc_typ scope) in
-            let missing : List NamePath := List.filter possible (uncovered_constructors cases ind) in
+            let missing : List NamePath := possibly_uncovered cases ind sc_typ scope in
             match missing {
                 List.empty => Option.none,
                 List.cons _ _ => Option.some (Pair.pair ind missing),
             },
     }
+
+/// The constructors no case covers that can still build a value of
+/// `sc_typ`; an index-impossible one is not missing.
+def possibly_uncovered (cases : List MatchCase) (ind : Inductive) (sc_typ : Term) (scope : Scope) : List NamePath :=
+    let possible : NamePath -> Bool := fn (c : NamePath) => Bool.not (ctor_impossible ind c sc_typ scope) in
+    List.filter possible (uncovered_constructors cases ind)
 
 /// Constructor `c` of `ind` provably cannot build a value of type `sc_typ`.
 def ctor_impossible (ind : Inductive) (c : NamePath) (sc_typ : Term) (scope : Scope) : Bool :=
@@ -3448,7 +3422,7 @@ pub def match_coverage_warning (cases : List MatchCase) (maybe_ind : Option Indu
     match match_coverage_gap cases maybe_ind scope {
         Option.none => Option.none,
         Option.some p => match p {
-            Pair.pair ind missing => Option.some (non_exhaustive_match_message ind missing),
+            Pair.pair ind missing => Option.some (non_exhaustive_match_message ind.name missing),
         },
     }
 

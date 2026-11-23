@@ -2333,6 +2333,9 @@ pub type TypeError {
     /// An `Elim` minor marked `impossible` for a constructor that can build
     /// a value of the scrutinee's type.
     elim_impossible_minor (inductive : NamePath) (ctor : NamePath),
+    /// A match leaves constructors of `inductive` uncovered (`missing`, in
+    /// declaration order) that can build a value of the scrutinee's type.
+    non_exhaustive_match (inductive : NamePath) (missing : List NamePath),
 }
 
 /// `f #Named.Instance args`'s lowered marker argument: a sentinel `Term.var`
