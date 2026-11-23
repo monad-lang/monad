@@ -16,6 +16,7 @@
 /// user cannot tell that from a real finding on line 1.
 
 use lang::types {Location}
+use lib::config {LintLevel}
 
 pub struct LintDiagnostic {
     /// The stable rule identifier, e.g. `unused_open`. This is what
