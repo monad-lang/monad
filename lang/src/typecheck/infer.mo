@@ -1861,10 +1861,9 @@ def type_check_if (one : Term) (two : Term) (three : Term) (expected_type : Term
 /// constant motive (no re-checking -- the arms were just checked against
 /// `expected_type`), so every accepted corpus program keeps its exact
 /// semantics. Two cases stay on the old `Literal.match_` path: an
-/// unresolvable inductive (`maybe_ind = Option.none`) and an INCOMPLETE match
-/// that a `#[allow_incomplete_match]` def opts into. A constructor the
-/// scrutinee's indices rule out is not incomplete: its minor is `impossible`.
-/// Only a match the old rule REJECTS can reach
+/// unresolvable inductive (`maybe_ind = Option.none`) and a hole result type.
+/// A constructor the scrutinee's indices rule out is not missing: its minor is
+/// `impossible`. Only a match the old rule REJECTS can reach
 /// the dependent fallback, which derives a motive and runs `type_check_elim`.
 #[terminating]
 def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
@@ -2004,8 +2003,8 @@ def try_dependent_match (cases : List MatchCase) (sc_term : Term) (sc_typ : Term
     }
 
 /// The fallback's preconditions, all of which must hold before deriving a
-/// motive. `uncovered_constructors` is the DIRECT coverage test (it ignores
-/// `incomplete_match_ok`), and the spine-length check is what keeps indexed
+/// motive. `uncovered_constructors` is the DIRECT coverage test, and the
+/// spine-length check is what keeps indexed
 /// families (`Eq`/`Vec`) out: their `Elim` needs a motive over each index, not
 /// just the scrutinee.
 ///
@@ -3340,22 +3339,11 @@ def uncovered_constructors (cases : List MatchCase) (ind : Inductive) : List Nam
 /// 2's per-tag runtime trap (codegen/emit.mo) closes that hole at run
 /// time, on the tag actually computed, needing no static type at all.
 ///
-/// A def marked `#[allow_incomplete_match "<reason>"]` opts out via
-/// `Scope.incomplete_match_ok` (set in lang/module.mo; see
-/// `has_incomplete_match_exemption`).
-///
-/// THIS IS NOW AN ERROR (strict-exhaustiveness.md Phase 4, flipped once the
-/// corpus was swept clean). It used to be a deliberate warning, because
-/// returning `err` reached codegen through `elaborate_def_with_scope`, whose
-/// caller (`elaborate_module_decls_reporting`, lang/module.mo) is
-/// best-effort and SWALLOWED the error, leaving the def un-elaborated for
-/// codegen's syntactic fallbacks to miscompile into a SIGSEGV with no
-/// diagnostic (`codegen/validate.mo` documents that exact shape; it
-/// cost a ladder rung on 2026-10-06). `scope_for_elab_body` (lang/module.mo)
-/// still forces `incomplete_match_ok := true` unconditionally, so that path
-/// stays exempt by design -- only `check` (via `check_def_with_scope`)
-/// enforces this rule now. `match_coverage_warning` below is the reporting
-/// half and renders the same message this now returns.
+/// The rule is an error on every path. `check` reports it; on the
+/// elaboration path the def fails to elaborate and the codegen gate names it,
+/// so an incomplete match can no longer reach codegen and fall through
+/// (ISSUE-4). There is no opt-out. `match_coverage_warning` below renders
+/// the same message for the reporting side.
 def validate_match_coverage (cases : List MatchCase) (maybe_ind : Option Inductive) (sc_typ : Term) (scope : Scope)
     : Result TypeError Bool :=
     match match_coverage_gap_at cases maybe_ind sc_typ scope {
@@ -3366,7 +3354,7 @@ def validate_match_coverage (cases : List MatchCase) (maybe_ind : Option Inducti
     }
 
 /// The rule as a pure QUERY: the uncovered constructors of this match, or
-/// `Option.none` when it is covered, unresolved, or exempted. One place, so
+/// `Option.none` when it is covered or unresolved. One place, so
 /// the check that warns and a future check that errors cannot disagree about
 /// what "uncovered" means -- the same single-source-of-truth reason the host
 /// computes its `use`-completeness findings in one function
@@ -3379,8 +3367,7 @@ pub def match_coverage_gap (cases : List MatchCase) (maybe_ind : Option Inductiv
 /// A`) can never match, so it is not missing. An unknown type prunes nothing.
 pub def match_coverage_gap_at (cases : List MatchCase) (maybe_ind : Option Inductive) (sc_typ : Term) (scope : Scope)
     : Option (Pair Inductive (List NamePath)) :=
-    if scope.incomplete_match_ok then Option.none
-    else match maybe_ind {
+    match maybe_ind {
         Option.none => Option.none,
         Option.some ind =>
             let missing : List NamePath := possibly_uncovered cases ind sc_typ scope in
@@ -6645,7 +6632,7 @@ def open_free_type_vars (t : Term) (scope : Scope) : Term :=
 def call_arg_type_error (arg : Term) (arg_typ : Term) (param : Term)
     (subst : List (Pair Identifier Term)) (levels : List (Pair Identifier SortLevel))
     (scope : Scope) (locals : LocalScope) : Option TypeError :=
-    // REPORTING PASS ONLY. `scope.incomplete_match_ok` is the bit
+    // REPORTING PASS ONLY. `scope.elaboration_pass` is the bit
     // `lang/module.mo`'s `scope_for_elab_body` sets on the ELABORATION path;
     // `false` is the checked, reporting default. The comparison must not run
     // where its error is swallowed: `elaborate_def_with_scope` keeps a
@@ -6666,7 +6653,7 @@ def call_arg_type_error (arg : Term) (arg_typ : Term) (param : Term)
     // The gate comes before the substitution on purpose: the elaboration
     // path pays one boolean, not a `subst_typevars_term`/`subst_levels_term`
     // pair per argument.
-    if scope.incomplete_match_ok
+    if scope.elaboration_pass
     then Option.none
     else if term_has_loose_bound_var param
     then Option.none
@@ -7707,7 +7694,7 @@ def type_check_app_ordinary (a_tt : TypedTerm) (f : Term) (expected_type : Term)
 /// unsolved class variable still declines.
 def callee_domain_error (f : Term) (a_term : Term) (a_typ : Term) (f_typ : Term)
     (scope : Scope) (local_types : List Term) (locals : LocalScope) : Option TypeError :=
-    if scope.incomplete_match_ok
+    if scope.elaboration_pass
     then Option.none
     else match flatten_call_spine f {
         CallSpine.mk head _args =>
@@ -10849,7 +10836,7 @@ def box_scope : Scope := {
     module_id := box_module_path,
     scope := scope_data_add_inductive scope_data_empty box_inductive,
     parent := Option.none,
-    incomplete_match_ok := false,
+    elaboration_pass := false,
 }
 
 #[test]
@@ -10945,7 +10932,7 @@ def point_scope : Scope := {
     module_id := point_module_path,
     scope := scope_data_add_inductive scope_data_empty point_inductive,
     parent := Option.none,
-    incomplete_match_ok := false,
+    elaboration_pass := false,
 }
 
 def point_type_ref : Term := Term.var sentinel (DebugName.named (Identifier.id "Point"))
@@ -11218,7 +11205,7 @@ def solo_scope : Scope := {
     module_id := solo_module_path,
     scope := scope_data_add_inductive scope_data_empty solo_inductive,
     parent := Option.none,
-    incomplete_match_ok := false,
+    elaboration_pass := false,
 }
 
 def solo_mk_var : Term := Term.var sentinel (DebugName.named (Identifier.id "mk"))
@@ -11341,7 +11328,7 @@ def scale_scope : Scope := {
     module_id := scale_module_path,
     scope := build_scope_def scale_def scale_module_path scope_data_empty,
     parent := Option.none,
-    incomplete_match_ok := false,
+    elaboration_pass := false,
 }
 
 def scale_var : Term := Term.var sentinel (DebugName.named (Identifier.id "scale"))
@@ -11579,7 +11566,7 @@ def wrap_scope : Scope := {
     module_id := wrap_module_path,
     scope := scope_data_add_inductive scope_data_empty wrap_inductive,
     parent := Option.none,
-    incomplete_match_ok := false,
+    elaboration_pass := false,
 }
 
 def wrap_local_types : List Term := List.cons (Term.var sentinel (DebugName.named (Identifier.id "Wrap"))) empty_local_types
@@ -11617,7 +11604,7 @@ def pi_ret_test_scope : Scope := {
     module_id := ModulePath.mk (List.cons (Identifier.id "PiRetTest") List.empty),
     scope := scope_data_empty,
     parent := Option.none,
-    incomplete_match_ok := false,
+    elaboration_pass := false,
 }
 
 /// `FromListLiteral.cons`'s promoted signature, exactly as
@@ -11821,7 +11808,7 @@ def qualified_vzero_scope : Scope := {
     module_id := qualified_vzero_module,
     scope := scope_data_add_inductive (scope_data_add_def scope_data_empty qualified_vzero_def) point_inductive,
     parent := Option.none,
-    incomplete_match_ok := false,
+    elaboration_pass := false,
 }
 
 /// Whether `t` is a `Term.var` naming `want` (source-location wrappers

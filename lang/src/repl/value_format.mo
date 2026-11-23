@@ -265,7 +265,7 @@ def raw_scope : Scope :=
     { module_id := ModulePath.mk List.empty,
         scope := scope_data_empty,
         parent := Option.none,
-        incomplete_match_ok := false }
+        elaboration_pass := false }
 
 // ─── Type inspection ──────────────────────────────────────────────────
 

@@ -57,7 +57,7 @@ def scope_of (source : String) : Scope :=
         module_id := elim_props_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 // ─── Fixtures ──────────────────────────────────────────────────────────

@@ -25,7 +25,7 @@ def test_module_path : ModulePath :=
 def make_scope (sd : ScopeData) : Scope :=
     let path : ModulePath := test_module_path in
     let empty_parent : Option Scope := Option.none in
-    { module_id := path, scope := sd, parent := empty_parent, incomplete_match_ok := false }
+    { module_id := path, scope := sd, parent := empty_parent, elaboration_pass := false }
 
 /// A one-segment DECL name -- the shape `Def.name`, `Inductive.name`,
 /// `InductConstructor.name` and the name arguments of

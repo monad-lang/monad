@@ -239,7 +239,7 @@ def interval_kind_scope : Scope :=
         module_id := interval_kind_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 /// A free (global) reference by name -- the same helper idiom

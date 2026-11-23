@@ -14,13 +14,14 @@
 
 use std::list {}
 use lang::types {case_minors,
-    DebugName, Elim, Identifier, Inductive, ModulePath, NamePath, Scope,
+    DebugName, Elim, Identifier, Inductive, Literal, MatchCase, ModulePath, NamePath, Scope,
     ScopeData, Similar, Term, binder_anon, binder_named, sentinel,
 }
 use lib::module {try_parse_decls}
 use lib::scope {build_scope_from_decls, scope_find_inductive}
 use lib::elim_lower {ElimArm, bool_branches, elim_arms, elim_arms_in}
-use lib::typecheck::infer {canonicalize_ctor_refs}
+use lib::typecheck::infer {canonicalize_ctor_refs, empty_local_types, empty_locals, type_check}
+use lib::typecheck::diagnostic {type_error_message}
 
 def elim_lower_test_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "elim_lower_tests") List.empty)
 
@@ -34,7 +35,7 @@ def scope_of (source : String) : Scope :=
         module_id := elim_lower_test_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 def named_var (name : String) : Term := Term.var sentinel (DebugName.named (Identifier.id name))
@@ -203,3 +204,39 @@ def test_canonicalize_rewrites_a_qualified_constructor : Bool :=
     let t : Term := Term.var sentinel (DebugName.named (Identifier.id "Nat.succ")) in
     let want : Term := Term.var sentinel (DebugName.named (Identifier.id "succ")) in
     Similar.similar (canonicalize_ctor_refs sc t) want
+
+// ─── Coverage on the elaboration pass (ISSUE-4) ────────────────────────
+
+def tri_case (ctor : String) : MatchCase :=
+    MatchCase.mk (Identifier.id ctor) List.empty (named_var "Tri.a") Option.none Option.none
+
+/// The elaboration pass (`Scope.elaboration_pass`) has no coverage opt-out:
+/// an incomplete match is rejected there too, so it never reaches a backend
+/// as a match whose last arm catches the missing constructor's tag.
+#[test]
+def test_an_incomplete_match_is_rejected_on_the_elaboration_pass : Bool :=
+    let sc : Scope := scope_of "type Tri { a, b, c }" in
+    let elab : Scope := { sc with elaboration_pass := true } in
+    let t : Term := Term.lit (Literal.match_ (named_var "Tri.a") [tri_case "a", tri_case "b"]) in
+    match type_check t Term.hole elab empty_local_types empty_locals {
+        Result.ok _ => false,
+        Result.err e => String.contains (type_error_message e) "non-exhaustive match: `Tri.c`",
+    }
+
+/// The complete match on the same pass is an `Elim`, not a `Literal.match_`.
+#[test]
+def test_a_complete_match_is_an_elim_on_the_elaboration_pass : Bool :=
+    let sc : Scope := scope_of "type Tri { a, b, c }" in
+    let elab : Scope := { sc with elaboration_pass := true } in
+    let t : Term := Term.lit (Literal.match_ (named_var "Tri.a") [tri_case "a", tri_case "b", tri_case "c"]) in
+    match type_check t Term.hole elab empty_local_types empty_locals {
+        Result.ok tt => is_elim tt.term,
+        Result.err _ => false,
+    }
+
+def is_elim (t : Term) : Bool :=
+    match t {
+        Term.elim _ => true,
+        Term.ctx _ inner => is_elim inner,
+        _ => false,
+    }

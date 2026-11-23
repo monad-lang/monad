@@ -252,7 +252,7 @@ def test_scope_construct : Bool :=
         module_id := expected_path,
         scope := scope_data_add_inductive (scope_data_add_def scope_data_empty dummy_def) dummy_type,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     } in
     match scope {
         mk mod_id _ _ _ => Similar.similar mod_id expected_path

@@ -504,7 +504,7 @@ def probe_scope : Scope :=
     { module_id := ModulePath.mk (List.cons (Identifier.id "probe") List.empty),
         scope := scope_data_empty,
         parent := Option.none,
-        incomplete_match_ok := false }
+        elaboration_pass := false }
 
 def a_type : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "Term"))
 

@@ -65,7 +65,7 @@ def proof_scope : Scope := {
     module_id := proof_synthetic_path,
     scope := proof_scope_data,
     parent := Option.none,
-    incomplete_match_ok := false,
+    elaboration_pass := false,
 }
 
 /// Does `term` typecheck against `expected_type`, per the checker's own

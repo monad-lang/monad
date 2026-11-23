@@ -19,7 +19,7 @@ use lang::types {
     struct_update, term_loc, u32, u64, var, zero,
     forall,
 }
-use std::list {List.intercalate}
+use std::list {List.any, List.intercalate}
 // For `HashMap` (the located parser's position table) and the monomorphic
 // helpers over it -- never `Map.insert`/`Map.lookup`, whose generic
 // dispatch can resolve to the wrong instance.
@@ -658,9 +658,8 @@ def attr_arg_try_str (r : ParseResult ParseTerm) (orig : String) : ParseResult (
     }
 
 /// `string_parse` only ever succeeds with a `Term.lit (Literal.str _)`
-/// shape — but "only ever" is an invariant, not a type, and this is the
-/// function `#[allow_incomplete_match "..."]`'s own exemption string is
-/// built from: a silent misbind here would exempt the wrong def. So the
+/// shape — but "only ever" is an invariant, not a type, and an attribute's
+/// string argument is built from this. So the
 /// non-string shapes are real `Option.none` arms and the caller falls
 /// through the parse chain, which fails loudly, rather than converting
 /// something that is not a string.
@@ -5930,7 +5929,7 @@ def dep_pi_var_idx (a : Term) (want : I64) : Bool :=
 #[test]
 def test_param_pi_chain_binds_earlier_params : Bool :=
     match def_parser "def pick (A : Type) (a : A) : A := a" {
-        success _ d => def_sig_ret_var_idx (lower_parse_decl lower_ctx_bare d) 1,
+        success _ d => List.any (fn (ld : Decl) => def_sig_ret_var_idx ld 1) (lower_parse_decl lower_ctx_bare d),
         fail _ => false,
     }
 
@@ -8772,6 +8771,15 @@ def cons_list_params_similar (a : List InductConstructor) (b : List InductConstr
     }
 
 #[partial]
+def decl_lists_cons_params_similar (xs : List Decl) (ys : List Decl) : Bool :=
+    match xs {
+        List.cons a _ => match ys {
+            List.cons b _ => decl_cons_params_similar a b,
+            List.empty => false,
+        },
+        List.empty => false,
+    }
+
 def decl_cons_params_similar (a : Decl) (b : Decl) : Bool :=
     match a {
         Decl.inductive_d inda =>
@@ -8796,7 +8804,7 @@ def test_type_cons_brace_form_matches_paren_form : Bool :=
     match type_parser "type Shape { circle { radius : F64, border : Bool }, rectangle { width : F64, height : F64 }, }" {
         success _ brace_out =>
             match type_parser "type Shape { circle (radius : F64) (border : Bool), rectangle (width : F64) (height : F64), }" {
-                success _ paren_out => decl_cons_params_similar (lower_parse_decl lower_ctx_bare brace_out) (lower_parse_decl lower_ctx_bare paren_out),
+                success _ paren_out => decl_lists_cons_params_similar (lower_parse_decl lower_ctx_bare brace_out) (lower_parse_decl lower_ctx_bare paren_out),
                 fail _ => false,
             },
         fail _ => false,
@@ -9861,7 +9869,11 @@ def test_def_param_destructured_written_order_binds_correctly_reversed : Bool :=
 def def_param_destructured_body_var_is (_expected_name : Identifier) (expected_idx : I64) (d : ParseDecl) : Bool :=
     // Asserts a de Bruijn index, so it lowers first and walks the
     // canonical tree -- the parse AST has no indices to check.
-    match (lower_parse_decl lower_ctx_bare d) {
+    List.any (fn (ld : Decl) => lowered_param_body_var_is expected_idx ld) (lower_parse_decl lower_ctx_bare d)
+
+#[partial]
+def lowered_param_body_var_is (expected_idx : I64) (ld : Decl) : Bool :=
+    match ld {
         Decl.def_d def_ =>
             match def_ {
                 Def.mk {name := _name, typ := _typ, term, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>

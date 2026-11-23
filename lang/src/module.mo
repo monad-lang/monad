@@ -12,7 +12,7 @@ use lang::types {
     MatchCase, ModulePath, Multiplicity, NamePath, NameRef, Param, Scope, ScopeData, ScopeInstance, SourceRange,
     SortLevel, Struct, StructField, Term, TypeConstraint, TypeError, UseFilter, UseItem,
     binder_anon, binder_is_explicit, binder_is_level, binder_name, concrete,
-    has_incomplete_match_exemption, id_eq, level_const, level_le,
+    id_eq, level_const, level_le,
     list_reverse, many, module_path_to_string_colon, package_private, priv_, sentinel,
     show_identifier, show_module_path, show_name_path, sort_level_of, term_peel, union_ids,
     name_map_merge, bare_name_map_merge, name_set_union,
@@ -2684,31 +2684,13 @@ def check_class_method_with_scope (m : ClassDef) (constraints : List TypeConstra
 def check_default_method_body (body : Term) (typ : Term) (scope : Scope) (dict_locals : LocalScope) (name : Identifier) (path : Option String) : List String :=
     body_signature_diagnostics (identifier_to_string name) typ body scope dict_locals path
 
-/// `scope` with the def-body match-coverage check switched off, when `attrs`
-/// carries `#[allow_incomplete_match "<reason>"]` (`types.mo`). Both def-body
-/// entry points below go through here; see `validate_match_coverage`
-/// (`lang/typecheck/infer.mo`) for why one attribute is enough and why it is
-/// not `#[partial]`.
-def scope_for_def_body (attrs : List Attribute) (scope : Scope) : Scope :=
-    if has_incomplete_match_exemption attrs
-    then { scope with incomplete_match_ok := true }
-    else scope
-
-/// `scope` for an ELABORATION body, where coverage is never checked.
-///
-/// Coverage belongs to `check`, which turns a rejection into a diagnostic a
-/// reader sees. Elaboration's caller is best-effort by design
-/// (`elaborate_module_decls_reporting` below keeps a failed decl UNCHANGED and
-/// prints only under `--verbose`), so a coverage rejection here is silently
-/// swallowed and codegen then compiles the un-elaborated body with its
-/// syntactic fallbacks -- `void_val` struct literals and index-0 field reads.
-/// That is a SIGSEGV in the self-compiled binary with no diagnostic anywhere,
-/// the exact shape `codegen/validate.mo` documents; it cost a ladder
-/// rung on 2026-10-06. Checking the same rule twice buys nothing: every def
-/// elaboration sees has already been through `check_def_with_scope`.
-def scope_for_elab_body (attrs : List Attribute) (scope : Scope) : Scope :=
-    let body_scope : Scope := scope_for_def_body attrs scope in
-    { body_scope with incomplete_match_ok := true }
+/// `scope` for an ELABORATION body. Elaboration's caller is best-effort
+/// (`elaborate_module_decls_reporting` keeps a failed decl unchanged), so
+/// the report-only argument checks are off here (`Scope.elaboration_pass`).
+/// Match coverage is not: an incomplete match fails elaboration, and the
+/// codegen gate names the def that did not elaborate.
+def scope_for_elab_body (scope : Scope) : Scope :=
+    { scope with elaboration_pass := true }
 
 /// Check the declared type itself, not only the body against it. Before
 /// this, `def bad : Vec (-1) I64 := Vec.nil` checked cleanly: the body check
@@ -2744,12 +2726,11 @@ def check_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) (path 
 /// calls -- the wiring is exactly what regressed silently before.
 pub def def_body_diagnostics (df : Def) (scope : Scope) (locals : LocalScope) (path : Option String) : List String :=
     match df {
-        Def.mk {name, typ, term := body, constraints := _constraints, attrs, vis := _vis, ..} =>
+        Def.mk {name, typ, term := body, constraints := _constraints, vis := _vis, ..} =>
             let locals_ : LocalScope := locals_with_def_typevars typ body scope locals in
-            let body_scope : Scope := scope_for_def_body attrs scope in
             list_append
                 (declared_type_diagnostics (show_name_path name) typ scope locals_ path)
-                (body_signature_diagnostics (show_name_path name) typ body body_scope locals_ path)
+                (body_signature_diagnostics (show_name_path name) typ body scope locals_ path)
     }
 
 /// The pure signature check shared by both def-body entry points: check
@@ -2833,7 +2814,7 @@ def elaborate_def_with_scope ({ name, typ, term := body, constraints, attrs, vis
         Result.ok (Def.mk name typ body constraints attrs vis params)
     else
         let locals_ : LocalScope := locals_with_def_typevars typ body scope locals in
-        let body_scope : Scope := scope_for_elab_body attrs scope in
+        let body_scope : Scope := scope_for_elab_body scope in
         // Plain `type_check` here, NOT `body_signature_diagnostics`: this is
         // the COMPILE path, where a rejection is swallowed by
         // `elaborate_module_decls_reporting` and leaves the decl
@@ -3774,7 +3755,7 @@ def test_parse_def_resolve : Bool :=
                 module_id := path,
                 scope := sd,
                 parent := no_parent,
-                incomplete_match_ok := false,
+                elaboration_pass := false,
             } in
             let foo_ref : NameRef := NameRef.nid (Identifier.id "foo") in
             let no_vars : List LocalVar := List.empty in
@@ -3802,7 +3783,7 @@ def test_parse_type_resolve_inductive : Bool :=
                 module_id := path,
                 scope := sd,
                 parent := no_parent,
-                incomplete_match_ok := false,
+                elaboration_pass := false,
             } in
             let color_path : NamePath := NamePath.mk [Identifier.id "Color"] in
             match scope_find_inductive color_path scope {
@@ -3824,7 +3805,7 @@ def test_parse_type_constructor_resolves : Bool :=
                 module_id := path,
                 scope := sd,
                 parent := no_parent,
-                incomplete_match_ok := false,
+                elaboration_pass := false,
             } in
             let red_ref : NameRef := NameRef.nid (Identifier.id "red") in
             let no_vars : List LocalVar := List.empty in
@@ -3852,7 +3833,7 @@ def test_parse_if_body_def_resolves : Bool :=
                 module_id := path,
                 scope := sd,
                 parent := no_parent,
-                incomplete_match_ok := false,
+                elaboration_pass := false,
             } in
             let name_ref : NameRef := NameRef.nid (Identifier.id "test_bool_true") in
             let no_vars : List LocalVar := List.empty in
@@ -3880,7 +3861,7 @@ def test_parse_multiple_decls_resolve : Bool :=
                 module_id := path,
                 scope := sd,
                 parent := no_parent,
-                incomplete_match_ok := false,
+                elaboration_pass := false,
             } in
             let a_ref : NameRef := NameRef.nid (Identifier.id "a") in
             let no_vars : List LocalVar := List.empty in
@@ -3908,7 +3889,7 @@ def test_parse_module_builds_scope : Bool :=
                 module_id := path,
                 scope := sd,
                 parent := no_parent,
-                incomplete_match_ok := false,
+                elaboration_pass := false,
             } in
             let hello_ref : NameRef := NameRef.nid (Identifier.id "hello") in
             let no_vars : List LocalVar := List.empty in
@@ -3936,7 +3917,7 @@ def test_parse_use_decl_ignored_in_scope : Bool :=
                 module_id := path,
                 scope := sd,
                 parent := no_parent,
-                incomplete_match_ok := false,
+                elaboration_pass := false,
             } in
             let bar_ref : NameRef := NameRef.nid (Identifier.id "bar") in
             let no_vars : List LocalVar := List.empty in
@@ -6853,7 +6834,7 @@ def expand_decls_graph_go (scope : Scope) (whole_graph_decls : List Decl) (targe
 /// works there.
 #[partial]
 def rebuild_target_scope (target_mp : ModulePath) (decls : List Decl) : Scope :=
-    { module_id := target_mp, scope := refine_scope_instances decls (build_scope_from_decls target_mp decls), parent := Option.none, incomplete_match_ok := false }
+    { module_id := target_mp, scope := refine_scope_instances decls (build_scope_from_decls target_mp decls), parent := Option.none, elaboration_pass := false }
 
 /// `loaded` with the MAIN module's own `decl_list` replaced by `decls` --
 /// in both the `main_module` field and the matching entry of
@@ -6947,7 +6928,7 @@ pub def elaborate_loaded_modules_pure_for_targets
     let scope_data : ScopeData :=
         refine_scope_instances dict_paramed_flat (build_scope_from_groups dict_paramed) in
     let scope : Scope :=
-        { module_id := target_mp, scope := scope_data, parent := Option.none, incomplete_match_ok := false } in
+        { module_id := target_mp, scope := scope_data, parent := Option.none, elaboration_pass := false } in
     let target_decls_raw : List Decl := main_module.decl_list in
     let target_decls_pre : List Decl :=
         if check_deps then
@@ -7258,7 +7239,7 @@ def check_one_batch_target (file : String) (mp : ModulePath) (all : List ModuleI
                         (promote_instance_defs (resolve_infix_decls infixes raw)))
                     known;
             let scope : Scope :=
-                { module_id := mp, scope := scope_data, parent := Option.none, incomplete_match_ok := false };
+                { module_id := mp, scope := scope_data, parent := Option.none, elaboration_pass := false };
             let mode <- Mote.affine_mode_of_path (Path.unsafe file);
             let checked <- check_module_with_scope_classified mode scope decls empty_locs (Option.some file) verbose;
             let r : FileCheckResult :=
@@ -7564,7 +7545,7 @@ def test_check_module_with_scope_all_pass : IO Bool := do {
     match result {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, elaboration_pass := false };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
             let diags <- check_module_with_scope scope decl_list locals Option.none false;
             return (match diags {
@@ -7590,7 +7571,7 @@ def test_check_module_with_scope_paramed_inductive : IO Bool := do {
     match result {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, elaboration_pass := false };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
             let diags <- check_module_with_scope scope decl_list locals Option.none false;
             return (match diags {
@@ -7619,7 +7600,7 @@ def check_diags_of_source (src : String) (module_name : String) : IO (List Strin
     match parse_all_decls src {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, elaboration_pass := false };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
             check_module_with_scope scope decl_list locals Option.none false
         },
@@ -7660,7 +7641,7 @@ def check_affine_diags_of_source (src : String) (module_name : String) : IO (Lis
         ParseResult.success _ decl_list => do {
             let promoted : List Decl := promote_instance_defs decl_list;
             let sd : ScopeData := build_scope_from_decls path promoted;
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, elaboration_pass := false };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
             check_module_with_scope_affine scope promoted locals Option.none false
         },
@@ -7685,7 +7666,7 @@ def check_diags_of_source_prepared (src : String) (module_name : String) : IO (L
         ParseResult.success _ decl_list => do {
             let prepared : List Decl := add_constraint_dict_params_decls (promote_instance_defs decl_list);
             let sd : ScopeData := build_scope_from_decls path prepared;
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, elaboration_pass := false };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
             check_module_with_scope scope prepared locals Option.none false
         },
@@ -8113,7 +8094,7 @@ def test_check_module_with_scope_accumulates_failures : IO Bool := do {
     match result {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, elaboration_pass := false };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
             let diags <- check_module_with_scope scope decl_list locals Option.none false;
             return (match diags {
@@ -8144,7 +8125,7 @@ def test_check_module_with_scope_dot_field_access_resolves : IO Bool := do {
     match result {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, elaboration_pass := false };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
             let diags <- check_module_with_scope scope decl_list locals Option.none false;
             return (match diags {
@@ -8167,7 +8148,7 @@ def test_check_module_with_scope_chained_dot_field_access_resolves : IO Bool := 
     match result {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, elaboration_pass := false };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
             let diags <- check_module_with_scope scope decl_list locals Option.none false;
             return (match diags {
@@ -8190,7 +8171,7 @@ def test_check_module_with_scope_dotted_module_path_still_resolves : IO Bool := 
     match result {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, elaboration_pass := false };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
             let diags <- check_module_with_scope scope decl_list locals Option.none false;
             return (match diags {
@@ -8634,7 +8615,7 @@ def check_synthetic_source (src : String) : IO (List String) := do {
             let promoted := promote_instance_defs resolved;
             let dict_paramed := add_constraint_dict_params_decls promoted;
             let sd : ScopeData := build_scope_from_decls path dict_paramed;
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, elaboration_pass := false };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
             check_module_with_scope scope dict_paramed locals Option.none false
         },
@@ -8655,7 +8636,7 @@ def elaborate_synthetic_source (src : String) : IO String := do {
             let promoted := promote_instance_defs resolved;
             let dict_paramed := add_constraint_dict_params_decls promoted;
             let sd : ScopeData := build_scope_from_decls path dict_paramed;
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, elaboration_pass := false };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
             let report : BestEffortElab := elaborate_module_decls_reporting scope dict_paramed locals;
             return (show_decls (best_effort_decls report))
@@ -8677,7 +8658,7 @@ def recheck_elaborated_source (src : String) : IO (List String) := do {
             let promoted := promote_instance_defs resolved;
             let dict_paramed := add_constraint_dict_params_decls promoted;
             let sd : ScopeData := build_scope_from_decls path dict_paramed;
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, elaboration_pass := false };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
             let report : BestEffortElab := elaborate_module_decls_reporting scope dict_paramed locals;
             check_module_with_scope scope (best_effort_decls report) locals Option.none false
@@ -8874,7 +8855,7 @@ def test_elaborate_module_decls_rewrites_class_method_call : IO Bool := do {
             let promoted := promote_instance_defs resolved;
             let dict_paramed := add_constraint_dict_params_decls promoted;
             let sd : ScopeData := build_scope_from_decls path dict_paramed;
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, elaboration_pass := false };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
             return (match elaborate_module_decls scope dict_paramed locals {
                 Result.err _ => false,
@@ -8926,7 +8907,7 @@ def elaborate_parsed_decls (decl_list : List Decl) : List Decl :=
         module_id := path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     } in
     elaborate_module_decls_best_effort scope dict_paramed empty_locals
 
@@ -9186,7 +9167,7 @@ def test_elaborate_do_at_equal_indices_picks_the_wrapper_instance : IO Bool := d
                 module_id := path,
                 scope := sd,
                 parent := Option.none,
-                incomplete_match_ok := false,
+                elaboration_pass := false,
             };
             let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
             let desugared := elaborate_def_typs dict_paramed (names_of_decls dict_paramed);
@@ -9249,7 +9230,7 @@ def test_dict_hint_selects_named_instance : IO Bool := do {
                 module_id := path,
                 scope := sd,
                 parent := Option.none,
-                incomplete_match_ok := false,
+                elaboration_pass := false,
             };
             let elaborated := elaborate_module_decls_best_effort scope dict_paramed empty_locals;
             let auto_ok : Bool := decl_list_def_term_contains elaborated "auto_pick" "Show_I64_show_ShowA";
@@ -10239,7 +10220,7 @@ def classified_probe (mode : AffineMode) (src : String) : IO CheckDiagnostics :=
         ParseResult.success _ decl_list => do {
             let promoted : List Decl := promote_instance_defs decl_list;
             let sd : ScopeData := build_scope_from_decls path promoted;
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, incomplete_match_ok := false };
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none, elaboration_pass := false };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
             check_module_with_scope_classified mode scope promoted locals Option.none false
         },

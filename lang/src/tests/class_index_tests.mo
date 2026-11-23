@@ -110,7 +110,7 @@ def scope_of (sd : ScopeData) : Scope := {
     module_id := ModulePath.mk [Identifier.id "class_index_tests"],
     scope := sd,
     parent := Option.none,
-    incomplete_match_ok := false,
+    elaboration_pass := false,
 }
 
 def scope_agrees (s : Scope) (cs : List Class) (qs : List String) : Bool :=

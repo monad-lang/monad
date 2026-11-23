@@ -17,7 +17,7 @@ def test_scope : Scope := {
     module_id := ModulePath.mk List.empty,
     scope := build_scope_from_decls (ModulePath.mk List.empty) List.empty,
     parent := Option.none,
-    incomplete_match_ok := false,
+    elaboration_pass := false,
 }
 
 def test_locals : LocalScope := {
@@ -170,7 +170,7 @@ def conv_scope : Scope :=
                 fail _ => build_scope_from_decls conv_path List.empty,
             },
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 def run_unify_conv (a : Term) (b : Term) : Bool :=

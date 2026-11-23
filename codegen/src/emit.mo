@@ -466,41 +466,45 @@ def constructor_tag_owned_nonbuiltin (c : CodegenCtx) (base_name : String) (typ_
         Option.none => bare_ctor_tag c base_name,
     }
 
-// `is_arith_native_op` (below) gates every call site in
-// `compile_native_app_db`: the 4 non-arithmetic `NativeOp`s it excludes
-// never reach here. Keep the two matches' constructor lists in sync by
-// hand -- a new `true` case there without a new arm here would silently
-// reintroduce this as a REACHABLE gap.
-#[allow_incomplete_match "is_arith_native_op gates every call here; the other 4 NativeOps never reach it"]
+/// The LLVM value of an arithmetic or comparison `NativeOp`; `Option.none`
+/// for the ops that have no inline form and are a runtime call instead
+/// (`emit_native_call2_instr`).
 #[partial]
-def compile_native_val (op : NativeOp) (lhs : LLVMValue) (rhs : LLVMValue) : LLVMValue :=
+def compile_native_val (op : NativeOp) (lhs : LLVMValue) (rhs : LLVMValue) : Option LLVMValue :=
     match op {
-        NativeOp.op_add => LLVMValue.add lhs rhs,
-        NativeOp.op_sub => LLVMValue.sub lhs rhs,
-        NativeOp.op_mul => LLVMValue.mul lhs rhs,
-        NativeOp.op_sdiv => LLVMValue.sdiv lhs rhs,
-        NativeOp.op_eq => LLVMValue.icmp_eq lhs rhs,
-        NativeOp.op_ne => LLVMValue.icmp_ne lhs rhs,
-        NativeOp.op_lt => LLVMValue.icmp_slt lhs rhs,
-        NativeOp.op_gt => LLVMValue.icmp_sgt lhs rhs,
+        NativeOp.op_add => Option.some (LLVMValue.add lhs rhs),
+        NativeOp.op_sub => Option.some (LLVMValue.sub lhs rhs),
+        NativeOp.op_mul => Option.some (LLVMValue.mul lhs rhs),
+        NativeOp.op_sdiv => Option.some (LLVMValue.sdiv lhs rhs),
+        NativeOp.op_eq => Option.some (LLVMValue.icmp_eq lhs rhs),
+        NativeOp.op_ne => Option.some (LLVMValue.icmp_ne lhs rhs),
+        NativeOp.op_lt => Option.some (LLVMValue.icmp_slt lhs rhs),
+        NativeOp.op_gt => Option.some (LLVMValue.icmp_sgt lhs rhs),
+        NativeOp.op_file_exists => Option.none,
+        NativeOp.op_is_dir => Option.none,
+        NativeOp.op_string_hash => Option.none,
+        NativeOp.op_i64_to_string => Option.none,
     }
 
 #[partial]
 def i64_ne (a : I64) (b : I64) : Bool := not (a == b)
 
-// Same gate as `compile_native_val` just above -- see its comment.
-#[allow_incomplete_match "is_arith_native_op gates every call here; the other 4 NativeOps never reach it"]
+/// `compile_native_val` over two literal operands, folded at compile time.
 #[partial]
-def fold_native_const (op : NativeOp) (n1 : I64) (n2 : I64) : LLVMValue :=
+def fold_native_const (op : NativeOp) (n1 : I64) (n2 : I64) : Option LLVMValue :=
     match op {
-        NativeOp.op_add => LLVMValue.int_ (n1 + n2),
-        NativeOp.op_sub => LLVMValue.int_ (n1 - n2),
-        NativeOp.op_mul => LLVMValue.int_ (n1 * n2),
-        NativeOp.op_sdiv => LLVMValue.int_ (n1 / n2),
-        NativeOp.op_eq => LLVMValue.bool_ (n1 == n2),
-        NativeOp.op_ne => LLVMValue.bool_ (i64_ne n1 n2),
-        NativeOp.op_lt => LLVMValue.bool_ (n1 < n2),
-        NativeOp.op_gt => LLVMValue.bool_ (n1 > n2),
+        NativeOp.op_add => Option.some (LLVMValue.int_ (n1 + n2)),
+        NativeOp.op_sub => Option.some (LLVMValue.int_ (n1 - n2)),
+        NativeOp.op_mul => Option.some (LLVMValue.int_ (n1 * n2)),
+        NativeOp.op_sdiv => Option.some (LLVMValue.int_ (n1 / n2)),
+        NativeOp.op_eq => Option.some (LLVMValue.bool_ (n1 == n2)),
+        NativeOp.op_ne => Option.some (LLVMValue.bool_ (i64_ne n1 n2)),
+        NativeOp.op_lt => Option.some (LLVMValue.bool_ (n1 < n2)),
+        NativeOp.op_gt => Option.some (LLVMValue.bool_ (n1 > n2)),
+        NativeOp.op_file_exists => Option.none,
+        NativeOp.op_is_dir => Option.none,
+        NativeOp.op_string_hash => Option.none,
+        NativeOp.op_i64_to_string => Option.none,
     }
 
 /// Total over every `Literal` variant, but the two struct arms are
@@ -591,35 +595,22 @@ def compile_str_lit_ir (c : CodegenCtx) (s : String) : CompileResult :=
 /// (`desugar_struct_lits_decls` here, `type_check_struct_lit` in the
 /// checker) and every validate gate (i.e. a direct `compile_db_module`
 /// caller that skips `validate_no_undesugared_struct_lits`). The
-/// match is deliberately non-exhaustive (`Bool.false` never matches
-/// `Bool.true`), so evaluating it aborts the self-hosted compile with
-/// "non-exhaustive match" naming this function -- grep the name to
-/// find the pipeline hole. `CompileResult` has no error constructor
-/// to thread through the term compiler (and retrofitting one means an
-/// arm at every `CompileResult.ok` site, each a fresh silent-bug
-/// opportunity), and a silent `void_val` placeholder is exactly the
-/// miscompile class `validate_no_undesugared_struct_lits` exists to
-/// fail fast on. The dummy `ok` arm exists only so the match
-/// typechecks and is never evaluated.
-///
-/// The `allow_incomplete_match` attribute is no longer a one-site
-/// idiom -- `strict-exhaustiveness.md` Phase 4's corpus sweep gave it
-/// several real sites, each naming its own durable, pipeline-level
-/// invariant (not a test fixture's incidental input). `grep -rn
-/// '^\s*#\[allow_incomplete_match'` is still the way to find them all;
-/// plain `grep -rn allow_incomplete_match` also matches the doc comments
-/// explaining it (`types.mo`, `module.mo`, `infer.mo`, and this one), so
-/// anchor the pattern to a line-leading `#[` when counting sites.
-/// Phase 2's runtime trap is not
-/// reachable from Monad source (`compile_match_ir` never sees this
-/// match: it is hand-written here), so rewriting the arm would trade one
-/// self-naming trap for another with no correctness gain.
-#[allow_incomplete_match "fail-fast backstop; see the doc comment above"]
+/// `CompileResult` has no error constructor to thread through the term
+/// compiler (retrofitting one means an arm at every `CompileResult.ok`
+/// site), and a silent `void_val` placeholder is exactly the miscompile
+/// class `validate_no_undesugared_struct_lits` exists to fail fast on, so
+/// the value is `codegen_backstop`'s undeclared call: the module is
+/// rejected with a symbol naming this hole.
 #[partial]
 def crash_struct_lit_reached_codegen (c : CodegenCtx) : CompileResult :=
-    match Bool.false {
-        Bool.true => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
-    }
+    codegen_backstop c "monad_backstop_struct_lit_reached_codegen"
+
+/// A fail-fast backstop's value: a call to `symbol`, which nothing declares,
+/// so the module is rejected by the call-target gate (or `llc`) with the
+/// symbol naming the cause, instead of silently compiling a placeholder.
+#[partial]
+def codegen_backstop (c : CodegenCtx) (symbol : String) : CompileResult :=
+    CompileResult.ok c List.empty (LLVMValue.call symbol LLVMType.i64_ List.empty false) List.empty List.empty List.empty
 
 /// Compile a match expression to LLVM IR: compiles the scrutinee once,
 /// reads its runtime tag (@monad_get_tag), and generates a chain of
@@ -2362,10 +2353,8 @@ def literal_int_of (lit : Literal) : Option I64 :=
 
 // `Term.quote_`/`Term.var_macro` are rejected by `type_check` before
 // elaboration (its own doc comment, `lang/typecheck/infer.mo`), and codegen
-// only ever runs on a term that passed `type_check` -- a def that fails
-// stays un-elaborated for `elaborate_module_decls_reporting`'s best-effort
-// caller, so its original, unchecked term never reaches this function.
-#[allow_incomplete_match "quote_/var_macro are rejected by type_check before codegen ever runs"]
+// only ever runs on a term that passed `type_check`, so their arms are
+// fail-fast backstops.
 #[partial]
 def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match term_ {
     Term.lit val => compile_lit_ir c val,
@@ -2605,6 +2594,8 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
     Term.ctx loc inner => compile_located_term_ir c loc inner,
     Term.cubical cub_ => compile_cubical_ir c cub_,
     Term.elim e => compile_elim_ir c e,
+    Term.quote_ _quoted => codegen_backstop c "monad_backstop_quote_reached_codegen",
+    Term.var_macro _idx _dbg => codegen_backstop c "monad_backstop_var_macro_reached_codegen",
 }
 
 /// Fail-fast backstop for `compile_elim_ir`: an `Elim` whose inductive is not
@@ -2613,12 +2604,9 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
 /// (`validate_elims_well_formed`); this is reachable only from a direct
 /// `compile_db_module` caller that skips the gate. Same shape and rationale
 /// as `crash_struct_lit_reached_codegen` below.
-#[allow_incomplete_match "fail-fast backstop; see the doc comment above"]
 #[partial]
 def crash_elim_reached_codegen (c : CodegenCtx) : CompileResult :=
-    match Bool.false {
-        Bool.true => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
-    }
+    codegen_backstop c "monad_backstop_ill_formed_elim_reached_codegen"
 
 /// Stage 1 codegen for the cubical primitives.
 ///
@@ -3853,28 +3841,6 @@ def native_op_to_fn_name (op : NativeOp) : String := match op {
     NativeOp.op_i64_to_string => "monad_i64_to_string",
 }
 
-/// `compile_native_app_db` is reached for ANY 2-arg saturated call whose
-/// head resolves via `lookup_native_any` -- not just the 8 arithmetic/
-/// comparison ops. `compile_native_val`/`fold_native_const` cover only
-/// those 8, so every other op is routed to `emit_native_call2_instr`,
-/// which calls the real runtime function, rather than reaching a
-/// non-exhaustive match.
-#[partial]
-def is_arith_native_op (op : NativeOp) : Bool := match op {
-    NativeOp.op_add => true,
-    NativeOp.op_sub => true,
-    NativeOp.op_mul => true,
-    NativeOp.op_sdiv => true,
-    NativeOp.op_eq => true,
-    NativeOp.op_ne => true,
-    NativeOp.op_lt => true,
-    NativeOp.op_gt => true,
-    NativeOp.op_file_exists => false,
-    NativeOp.op_is_dir => false,
-    NativeOp.op_string_hash => false,
-    NativeOp.op_i64_to_string => false,
-}
-
 /// `arg2`'s own compiled fragment (`instrs2`/`blocks2`/...) used to be
 /// combined with `arg`'s via blind `List.append instrs2 instrs1`,
 /// with `blocks`/`funcs`/`globals` from BOTH operands silently
@@ -3902,14 +3868,19 @@ def compile_native_app_db (c : CodegenCtx) (op : NativeOp) (arg2 : Term) (arg : 
                         { instrs := combined, blocks := all_blocks, val := last_val } =>
                             let all_funcs := List.append funcs2 funcs1 in
                             let all_globals := List.append globals2 globals1 in
-                            if not (is_arith_native_op op) then
-                                emit_native_call2_instr ctx1 op val2 val1 combined all_blocks all_funcs all_globals last_val
-                            else
+                            // Literal operands fold; an op with no inline
+                            // form (`compile_native_val` is `none`) is the
+                            // runtime call, via `emit_arith_instr`.
                             match extract_lit_from_val val2 {
                                 Option.some n1 =>
                                     match extract_lit_from_val val1 {
                                         Option.some n2 =>
-                                            CompileResult.ok ctx1 combined (fold_native_const op n1 n2) all_blocks all_funcs all_globals,
+                                            match fold_native_const op n1 n2 {
+                                                Option.some folded =>
+                                                    CompileResult.ok ctx1 combined folded all_blocks all_funcs all_globals,
+                                                Option.none =>
+                                                    emit_arith_instr ctx1 op val2 val1 combined all_blocks all_funcs all_globals last_val,
+                                            },
                                         Option.none =>
                                             emit_arith_instr ctx1 op val2 val1 combined all_blocks all_funcs all_globals last_val,
                                     },
@@ -4341,9 +4312,15 @@ def combine_indirect_call (ctx_a : CodegenCtx) (callee_val : LLVMValue) (arg_val
 /// `compose_seq`, instead of blindly appended after it.
 #[partial]
 def emit_arith_instr (c : CodegenCtx) (op : NativeOp) (lhs : LLVMValue) (rhs : LLVMValue) (instrs : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (last_val : LLVMValue) : CompileResult :=
+    match compile_native_val op lhs rhs {
+        Option.none => emit_native_call2_instr c op lhs rhs instrs blocks funcs globals last_val,
+        Option.some arith_val => emit_arith_value c arith_val instrs blocks funcs globals last_val,
+    }
+
+#[partial]
+def emit_arith_value (c : CodegenCtx) (arith_val : LLVMValue) (instrs : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (last_val : LLVMValue) : CompileResult :=
     match fresh_temp c {
         CtxStrPair.mk new_ctx temp =>
-            let arith_val := compile_native_val op lhs rhs in
             let arith_instr := LLVMInstruction.assign temp arith_val in
             match compose_seq ({ instrs := instrs, blocks := blocks, val := last_val }) ({ instrs := (List.cons arith_instr List.empty), blocks := List.empty, val := (LLVMValue.var_ temp) }) {
                 { instrs := new_instrs, blocks := new_blocks, val := _ } =>
@@ -6732,7 +6709,7 @@ pub def compile_input_of_modules (target_mp : ModulePath) (qualified_mods : List
     let t_scope : I64 <- Bench.now;
     let scope_data : ScopeData := refine_scope_instances dict_param_decls (build_scope_from_decls target_mp dict_param_decls);
     let t_desugar : I64 <- bench_step verbose "  front end: build_scope_from_decls" t_scope (List.length scope_data.classes);
-    let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none, incomplete_match_ok := false };
+    let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none, elaboration_pass := false };
     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
     let desugared_decls := elaborate_def_typs (desugar_struct_lits_decls scope dict_param_decls) (names_of_decls dict_param_decls);
     let t_elab : I64 <- bench_step verbose "  front end: desugar_struct_lits" t_desugar (List.length desugared_decls);

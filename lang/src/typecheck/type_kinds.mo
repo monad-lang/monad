@@ -196,7 +196,7 @@ def probe_scope_base : Scope :=
     { module_id := ModulePath.mk (List.cons (Identifier.id "probe") List.empty),
         scope := scope_data_empty,
         parent := Option.none,
-        incomplete_match_ok := false }
+        elaboration_pass := false }
 
 def scope_with_inds (inds : List Inductive) : Scope :=
     let m : NameMap Inductive := scope_with_inds_go inds name_map_empty in

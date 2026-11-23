@@ -25,7 +25,7 @@ def path_boundary_scope : Scope := {
     module_id := path_boundary_path,
     scope := build_scope_from_decls path_boundary_path List.empty,
     parent := Option.none,
-    incomplete_match_ok := false,
+    elaboration_pass := false,
 }
 
 def path_boundary_locals : LocalScope := {

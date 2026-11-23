@@ -96,7 +96,7 @@ def cubical_scope : Scope :=
         module_id := checker_synthetic_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 /// The same declarations WITHOUT any `#[cubical]` markers -- the
@@ -120,7 +120,7 @@ def unmarked_scope : Scope :=
         module_id := checker_synthetic_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 /// A free (global) reference by name -- `sentinel` is what marks a var as

@@ -125,21 +125,21 @@ def parse_decl_succeeds (r : ParseResult ParseDecl) : Bool :=
 #[test]
 def test_roundtrip_use_glob : Bool :=
     match use_parser "use init::io {*}" {
-        success _ out => parse_decl_succeeds (use_parser (show_decl (lower_parse_decl lower_ctx_bare out))),
+        success _ out => parse_decl_succeeds (use_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
         fail _ => false
     }
 
 #[test]
 def test_roundtrip_use_nested : Bool :=
     match use_parser "use init::io {file {read}}" {
-        success _ out => parse_decl_succeeds (use_parser (show_decl (lower_parse_decl lower_ctx_bare out))),
+        success _ out => parse_decl_succeeds (use_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
         fail _ => false
     }
 
 #[test]
 def test_roundtrip_use_nested_rename : Bool :=
     match use_parser "use init::io {file as f {read}}" {
-        success _ out => parse_decl_succeeds (use_parser (show_decl (lower_parse_decl lower_ctx_bare out))),
+        success _ out => parse_decl_succeeds (use_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
         fail _ => false
     }
 
@@ -149,7 +149,7 @@ def test_roundtrip_use_nested_rename : Bool :=
 #[test]
 def test_roundtrip_use_dotted_item : Bool :=
     match use_parser "use std::list {List.length}" {
-        success _ out => parse_decl_succeeds (use_parser (show_decl (lower_parse_decl lower_ctx_bare out))),
+        success _ out => parse_decl_succeeds (use_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
         fail _ => false
     }
 
@@ -158,7 +158,7 @@ def test_roundtrip_use_dotted_item : Bool :=
 #[test]
 def test_roundtrip_use_dotted_item_rename : Bool :=
     match use_parser "use std::list {List.length as len}" {
-        success _ out => parse_decl_succeeds (use_parser (show_decl (lower_parse_decl lower_ctx_bare out))),
+        success _ out => parse_decl_succeeds (use_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
         fail _ => false
     }
 
@@ -169,7 +169,7 @@ def test_roundtrip_use_dotted_item_rename : Bool :=
 #[test]
 def test_roundtrip_use_dotted_and_sub_together : Bool :=
     match use_parser "use init::io {file {read}, String.length}" {
-        success _ out => parse_decl_succeeds (use_parser (show_decl (lower_parse_decl lower_ctx_bare out))),
+        success _ out => parse_decl_succeeds (use_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
         fail _ => false
     }
 
@@ -177,13 +177,21 @@ def test_roundtrip_use_dotted_and_sub_together : Bool :=
 def test_roundtrip_open_filtered : Bool :=
 
     match open_parser "open io {println}" {
-        success _ out => parse_decl_succeeds (open_parser (show_decl (lower_parse_decl lower_ctx_bare out))),
+        success _ out => parse_decl_succeeds (open_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
         fail _ => false
     }
 
 #[test]
 def test_roundtrip_scoped_open : Bool :=
     match open_parser "open io {println} in def main : IO Unit := println \"hi\"" {
-        success _ out => parse_decl_succeeds (open_parser (show_decl (lower_parse_decl lower_ctx_bare out))),
+        success _ out => parse_decl_succeeds (open_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
         fail _ => false
+    }
+
+/// The source text of a lowered declaration list (one declaration, unless a
+/// `with` block expanded).
+def show_lowered (ds : List Decl) : String :=
+    match ds {
+        List.empty => "",
+        List.cons d rest => show_decl d ++ show_lowered rest,
     }

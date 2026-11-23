@@ -883,7 +883,7 @@ def probe_scope : Scope :=
     { module_id := ModulePath.mk (List.cons (Identifier.id "probe") List.empty),
         scope := scope_data_empty,
         parent := Option.none,
-        incomplete_match_ok := false }
+        elaboration_pass := false }
 
 #[test]
 def test_empty_scope_grants_no_copy : Bool :=

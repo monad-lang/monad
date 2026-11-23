@@ -18,12 +18,8 @@ use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 /// and a named debug name that is NOT in known_names.
 /// Mirrors Rust's free_vars (type.rs:1901).
 ///
-/// `Term.quote_`/`Term.var_macro` are intentionally not covered: this is
-/// only ever called on a def's declared TYPE, at the same pipeline point
-/// `type_check` is about to run on its body -- and `type_check` itself
-/// unconditionally rejects both shapes before elaboration ever sees them
-/// (`lang/typecheck/infer.mo`'s own doc comment for that rejection).
-#[allow_incomplete_match "mirrors type_check's own quote_/var_macro rejection at the same pipeline point"]
+/// `Term.quote_`/`Term.var_macro` have no free type variables to collect:
+/// `type_check` rejects both before elaboration, and a quoted term is data.
 def free_vars (typ : Term) (known_names : List Identifier) : List Identifier :=
     match typ {
         Term.var idx dbg =>
@@ -115,6 +111,8 @@ def free_vars (typ : Term) (known_names : List Identifier) : List Identifier :=
                                     (union_ids (free_vars_of_minors minors known_names)
                                         (free_vars scrutinee known_names)))),
             },
+        Term.quote_ _quoted => List.empty,
+        Term.var_macro _idx _dbg => List.empty,
     }
 
 #[partial]
@@ -632,18 +630,22 @@ def test_elaborate_decl_def_macro_d_passthrough : Bool :=
 def test_elaborate_decl_decl_gen_d_passthrough : Bool :=
     let no_names : List Identifier := List.empty in
     match elaborate_decl elaborate_test_decl_gen_decl no_names {
-        Decl.decl_gen_d name _ _ _ => id_eq (Identifier.id "foo") (name_path_head name),
+        Decl.decl_gen_d name _ _ _ =>
+            match name_path_head name {
+                Option.some head => id_eq (Identifier.id "foo") head,
+                Option.none => false,
+            },
         _ => false,
     }
 
-// `np`'s sole call site (the test just above) always passes a user-written
-// `decl_gen` macro name, never `Decl.to_name`'s `NamePath.mk []` placeholder
-// (a different, unrelated construction site) -- so `ids` is never empty
-// here, though nothing in `np`'s own type says so.
-#[allow_incomplete_match "np always comes from a decl_gen name; its one call site never passes an empty path"]
-#[partial]
-def name_path_head (np : NamePath) : Identifier :=
-    match np { NamePath.mk ids => match ids { List.cons hd _ => hd } }
+/// The first segment of `np`; `Option.none` for the empty path.
+def name_path_head (np : NamePath) : Option Identifier :=
+    match np {
+        NamePath.mk ids => match ids {
+            List.cons hd _ => Option.some hd,
+            List.empty => Option.none,
+        },
+    }
 
 /// Map elaborate_decl over a list of decl_list with a fixed known_names set.
 def elaborate_decls_map (decl_list : List Decl) (known_names : List Identifier) : List Decl :=

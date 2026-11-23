@@ -39,7 +39,7 @@ def scope_of (source : String) : Scope :=
         module_id := synthetic_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 /// A free (global) reference by name -- `sentinel` is what marks a var

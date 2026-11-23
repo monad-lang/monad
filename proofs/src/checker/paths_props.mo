@@ -82,7 +82,7 @@ def paths_scope : Scope :=
         module_id := paths_props_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 /// The `def` named `nm` in the parsed source, if it parsed as one.

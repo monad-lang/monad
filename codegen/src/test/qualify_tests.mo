@@ -545,7 +545,7 @@ def qtest_elab_failures_of_modules (modules : List ModuleInfo) : List String :=
         List.empty => List.empty,
         List.cons m rest =>
             let sd := build_scope_from_decls m.path m.decl_list in
-            let scope : Scope := { module_id := m.path, scope := sd, parent := Option.none, incomplete_match_ok := false } in
+            let scope : Scope := { module_id := m.path, scope := sd, parent := Option.none, elaboration_pass := false } in
             let locals : LocalScope := { vars := List.empty, parent := Option.none } in
             List.append (best_effort_failed (elaborate_module_decls_reporting scope m.decl_list locals))
                 (qtest_elab_failures_of_modules rest),

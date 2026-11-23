@@ -8341,7 +8341,7 @@ def test_nid_arm_resolves_flattened_qualified : Bool :=
         module_id := ModulePath.mk (List.cons (Identifier.id "Main") List.empty),
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     } in
     match resolve_name_in_scope (NameRef.nid (Identifier.id "std.process::process_id")) s {
         Result.ok _ => true,

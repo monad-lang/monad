@@ -2609,7 +2609,7 @@ def empty_scope : Scope :=
     { module_id := ModulePath.mk (List.cons (Identifier.id "probe") List.empty),
         scope := scope_data_empty,
         parent := Option.none,
-        incomplete_match_ok := false }
+        elaboration_pass := false }
 
 def probe_param (name : String) (ty : String) : Param :=
     let ty_term : Term := Term.var (0 - 1) (DebugName.named (Identifier.id ty)) in

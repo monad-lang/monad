@@ -34,7 +34,7 @@ def test_scope : Scope := {
     module_id := empty_path,
     scope := test_sd,
     parent := Option.none,
-    incomplete_match_ok := false,
+    elaboration_pass := false,
 }
 
 def run_check (t : Term) (e : Term) : Result TypeError TypedTerm :=
@@ -491,7 +491,7 @@ def maybe_scope : Scope :=
         module_id := mod_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 #[test]
@@ -736,11 +736,11 @@ def test_match_unresolved_scrutinee_is_skipped : Bool :=
     }
 
 #[test]
-def test_match_incomplete_match_exemption_switches_the_rule_off : Bool :=
-    let exempt : Scope := { test_scope with incomplete_match_ok := true } in
-    match match_coverage_warning [cov_case "c"] (Option.some cov_ind) exempt {
-        Option.none => true,
-        Option.some _ => false,
+def test_match_the_elaboration_pass_does_not_switch_the_rule_off : Bool :=
+    let elab : Scope := { test_scope with elaboration_pass := true } in
+    match match_coverage_warning [cov_case "c"] (Option.some cov_ind) elab {
+        Option.none => false,
+        Option.some _ => true,
     }
 
 #[test]
@@ -790,23 +790,19 @@ def test_match_missing_arm_error_names_the_constructor_end_to_end : Bool :=
         err e => String.contains (type_error_message e) "`Maybe.none`",
     }
 
-/// `#[allow_incomplete_match]`'s effect through the real entry point: with
-/// the exemption set, the SAME incomplete match that just failed above must
-/// type-check. `test_match_incomplete_match_exemption_switches_the_rule_off`
-/// pins the pure query only; this is its `type_check`-level counterpart, so
-/// a regression that wires the exemption into the query but not into the
-/// checker's own call site would still be caught.
+/// The elaboration pass rejects the same incomplete match through the real
+/// entry point: there is no coverage opt-out on any path (ISSUE-4).
 #[test]
-def test_match_incomplete_match_exemption_still_checks_end_to_end : Bool :=
-    let exempt_scope : Scope := { maybe_scope with incomplete_match_ok := true } in
+def test_match_incomplete_match_is_rejected_on_the_elaboration_pass : Bool :=
+    let exempt_scope : Scope := { maybe_scope with elaboration_pass := true } in
     let scrutinee : Term := sort_n 1 in
     let body : Term := sort_n 1 in
     let case_some : MatchCase := MatchCase.mk (Identifier.id "some") List.empty body Option.none Option.none in
     let cases : List MatchCase := List.cons case_some List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole exempt_scope empty_local_types empty_locals {
-        ok _ => true,
-        err _ => false,
+        ok _ => false,
+        err _ => true,
     }
 
 /// The same shape as the pin above, but asserting the rule still SEES the
@@ -869,7 +865,7 @@ def point_scope : Scope :=
         module_id := mod_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 /// A scrutinee whose OWN type is genuinely known to be `Point`
@@ -949,7 +945,7 @@ def test_field_pattern_bare_form_multi_constructor_is_an_error : Bool :=
     let ind : Inductive := Inductive.mk type_name empty_params (sort_n 1) cns empty_attrs Visibility.package_private in
     let decl_list : List Decl := List.cons (Decl.inductive_d ind) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decl_list in
-    let shape_scope : Scope := { module_id := mod_path, scope := sd, parent := Option.none, incomplete_match_ok := false } in
+    let shape_scope : Scope := { module_id := mod_path, scope := sd, parent := Option.none, elaboration_pass := false } in
     let scrutinee : Term := Term.var 0 DebugName.unnamed in
     let types : List Term := List.cons (Term.var sentinel (DebugName.named (Identifier.id "Shape"))) List.empty in
     let fp : FieldPattern := FieldPattern.mk List.empty true in
@@ -1029,7 +1025,7 @@ def pair_scope : Scope :=
         module_id := mod_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 /// `P T U` -- two DIFFERENT concrete arguments, so substituting the wrong
@@ -1246,7 +1242,7 @@ def classdef_scope : Scope :=
     } in
     let base_sd : ScopeData := test_sd in
     let sd_with_cd : ScopeData := { base_sd with class_defs := List.cons scd base_sd.class_defs } in
-    { module_id := empty_path, scope := sd_with_cd, parent := Option.none, incomplete_match_ok := false }
+    { module_id := empty_path, scope := sd_with_cd, parent := Option.none, elaboration_pass := false }
 
 #[test]
 def test_class_method_resolve : Bool :=
@@ -1342,7 +1338,7 @@ def dup_match_checks (decl_list : List Decl) : Bool :=
     let mod_id : Identifier := Identifier.id "DupTest" in
     let mod_path : ModulePath := ModulePath.mk (List.cons mod_id List.empty) in
     let sd : ScopeData := build_scope_from_decls mod_path decl_list in
-    let dup_scope : Scope := { module_id := mod_path, scope := sd, parent := Option.none, incomplete_match_ok := false } in
+    let dup_scope : Scope := { module_id := mod_path, scope := sd, parent := Option.none, elaboration_pass := false } in
     let scrutinee : Term := Term.var 0 DebugName.unnamed in
     let types : List Term := List.cons (Term.var sentinel (DebugName.named (Identifier.id "Dup"))) List.empty in
     let case_ : MatchCase := MatchCase.mk (Identifier.id "d_wanted") [Identifier.id "p"] (sort_n 1) Option.none Option.none in
@@ -1577,7 +1573,7 @@ def scope_with_decls (decl_list : List Decl) : Scope := {
     module_id := empty_path,
     scope := build_scope_from_decls empty_path decl_list,
     parent := Option.none,
-    incomplete_match_ok := false,
+    elaboration_pass := false,
 }
 
 def lift_scope : Scope := scope_with_decls [Decl.def_d lift_def]
@@ -1893,7 +1889,7 @@ def bool_scope_for_elim_tests : Scope :=
         module_id := mod_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 def shape_scope_for_elim_tests : Scope :=
@@ -1904,7 +1900,7 @@ def shape_scope_for_elim_tests : Scope :=
         module_id := mod_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 /// A degenerate but well-formed constant motive (`fn _ => Prop`, domain
@@ -2007,7 +2003,7 @@ def fam_scope_for_elim_tests : Scope :=
         module_id := mod_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 def fam_motive_for_elim_tests : Term :=
@@ -2083,7 +2079,7 @@ def my_sigma_scope : Scope :=
         module_id := my_sigma_mod_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 /// `MySigma P Fam` -- `P` a real nullary type, `Fam` a real (constant)
@@ -2170,7 +2166,7 @@ def my_eq_scope : Scope :=
         module_id := my_eq_mod_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 /// `[P, P.p0]` -- `MyEq`'s own first two type arguments (`A := P`, `a :=

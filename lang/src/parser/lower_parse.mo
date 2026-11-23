@@ -56,7 +56,7 @@ use lang::types {
 // the duplicate-top-level-name collision item 18 records). The grammar no
 // longer resolves names at all, so nothing flows the other way: it
 // imports `lower_parse_do` from here and that is the only edge.
-use lib::types {Location, ParseSpan, field_access_chain, parse_span_is_unknown, show_module_path, show_name_path, show_operator}
+use lib::types {Location, OpenFilter, ParseSpan, field_access_chain, parse_span_is_unknown, show_module_path, show_name_path, show_operator}
 // The monomorphic string map, from the leaf module -- never `Map.lookup`,
 // whose generic dispatch can resolve to the wrong instance
 // (`codegen/util.mo` documents the live bug).
@@ -1135,49 +1135,50 @@ def lower_parse_struct (ctx : ParseLowerCtx) (s : ParseStruct) : Struct :=
     Struct.mk s.name (lower_parse_struct_decl_fields ctx s.fields) s.attrs s.vis
 
 #[partial]
-def lower_parse_decl (ctx : ParseLowerCtx) (d : ParseDecl) : Decl :=
+def lower_parse_decl (ctx : ParseLowerCtx) (d : ParseDecl) : List Decl :=
     lower_parse_decl_kind ctx d.kind
 
-// `ParseDeclKind.with_d` is deliberately NOT covered: `with_d` expands to
-// its (possibly several) prefixed INNER decls, which `lower_parse_decls`
-// above special-cases and splices out before this function is ever
-// reached -- a `with_d` therefore has no correct single-`Decl` value to
-// return here even in principle, not merely one this function happens
-// not to need. `scoped_open_d`'s own recursive call is the only other
-// path in, and the grammar restricts a scoped `open`'s wrapped decl to
-// `[def_parser, class_parser, instance_parser, struct_parser, type_parser]`
-// (`scoped_open_inner_decl_at`, lang/parser.mo) -- `with_parser` is not in
-// that list, so `with_d` can't reach this function that way either.
-#[allow_incomplete_match "with_d is spliced out by lower_parse_decls before reaching here; no single Decl value fits"]
+/// One parsed declaration's core declarations: exactly one, except a
+/// `with` block, which expands to its prefixed inner declarations.
 #[partial]
-def lower_parse_decl_kind (ctx : ParseLowerCtx) (k : ParseDeclKind) : Decl :=
+def lower_parse_decl_kind (ctx : ParseLowerCtx) (k : ParseDeclKind) : List Decl :=
     match k {
-        ParseDeclKind.def_d d => Decl.def_d (lower_parse_def ctx d),
-        ParseDeclKind.inductive_d i => Decl.inductive_d (lower_parse_inductive ctx i),
-        ParseDeclKind.struct_d s => Decl.struct_d (lower_parse_struct ctx s),
-        ParseDeclKind.class_d c => Decl.class_d (lower_parse_class ctx c),
-        ParseDeclKind.instance_d i => Decl.instance_d (lower_parse_instance ctx i),
-        ParseDeclKind.infix_d op path vis => Decl.infix_d op path vis,
-        ParseDeclKind.use_d path filter public => Decl.use_d path filter public,
-        ParseDeclKind.open_d path filter => Decl.open_d path filter,
+        ParseDeclKind.def_d d => [Decl.def_d (lower_parse_def ctx d)],
+        ParseDeclKind.inductive_d i => [Decl.inductive_d (lower_parse_inductive ctx i)],
+        ParseDeclKind.struct_d s => [Decl.struct_d (lower_parse_struct ctx s)],
+        ParseDeclKind.class_d c => [Decl.class_d (lower_parse_class ctx c)],
+        ParseDeclKind.instance_d i => [Decl.instance_d (lower_parse_instance ctx i)],
+        ParseDeclKind.infix_d op path vis => [Decl.infix_d op path vis],
+        ParseDeclKind.use_d path filter public => [Decl.use_d path filter public],
+        ParseDeclKind.open_d path filter => [Decl.open_d path filter],
         ParseDeclKind.scoped_open_d path filter inner =>
-            Decl.scoped_open_d path filter (lower_parse_decl ctx inner),
-        ParseDeclKind.def_macro_d d => Decl.def_macro_d (lower_parse_def ctx d),
+            scoped_open_each path filter (lower_parse_decl ctx inner),
+        ParseDeclKind.def_macro_d d => [Decl.def_macro_d (lower_parse_def ctx d)],
         ParseDeclKind.decl_gen_d name params decl_list attrs =>
-            Decl.decl_gen_d name (lower_parse_params ctx params)
-                (lower_parse_decls (lower_ctx_clear_opened ctx) decl_list) attrs,
+            [Decl.decl_gen_d name (lower_parse_params ctx params)
+                (lower_parse_decls (lower_ctx_clear_opened ctx) decl_list) attrs],
         // A declaration-position `m!` resolves in the macro namespace by
         // the bare spelling (`macro_queue.mo` keys on it), so an opened
         // sibling has to be spelled out here too.
         ParseDeclKind.macro_call_d name args =>
-            Decl.macro_call_d (opened_identifier ctx name) (lower_parse_terms ctx args),
+            [Decl.macro_call_d (opened_identifier ctx name) (lower_parse_terms ctx args)],
         // Pass-through, not a lowering: both ASTs spell this as the same
         // `Attribute`, and an `Attribute` contains no `ParseTerm` to
         // de-Bruijn.
-        ParseDeclKind.mote_d attr => Decl.mote_d attr,
+        ParseDeclKind.mote_d attr => [Decl.mote_d attr],
         // Unreachable after `cfg_filter_parse_decls`; lowered as its
         // wrappee should a caller skip the filter.
         ParseDeclKind.attrs_d _attrs inner => lower_parse_decl ctx inner,
+        ParseDeclKind.with_d prefix inner => lower_with_block ctx prefix inner,
+    }
+
+/// A scoped `open` around each of `ds` (one, unless the wrapped declaration
+/// is a `with` block).
+#[partial]
+def scoped_open_each (path : NamePath) (filter : OpenFilter) (ds : List Decl) : List Decl :=
+    match ds {
+        List.empty => List.empty,
+        List.cons d rest => List.cons (Decl.scoped_open_d path filter d) (scoped_open_each path filter rest),
     }
 
 /// `with Dotted.Name { ... }`'s name prefixing, applied here rather
@@ -1277,13 +1278,7 @@ def cfg_keep_if (keep : Bool) (d : ParseDecl) : Option ParseDecl :=
 pub def lower_parse_decls (ctx : ParseLowerCtx) (ds : List ParseDecl) : List Decl :=
     match ds {
         List.empty => List.empty,
-        List.cons d rest =>
-            match d.kind {
-                ParseDeclKind.with_d prefix inner =>
-                    List.append (lower_with_block ctx prefix inner)
-                        (lower_parse_decls ctx rest),
-                _ => List.cons (lower_parse_decl ctx d) (lower_parse_decls ctx rest),
-            },
+        List.cons d rest => List.append (lower_parse_decl ctx d) (lower_parse_decls ctx rest),
     }
 
 /// A `with` block's body: its decls prefixed, lowered under a context

@@ -34,7 +34,7 @@ def scope_ : Scope :=
         module_id := ctor_refine_test_path,
         scope := sd,
         parent := Option.none,
-        incomplete_match_ok := false,
+        elaboration_pass := false,
     }
 
 def np (name : String) : NamePath := NamePath.mk (List.cons (Identifier.id name) List.empty)

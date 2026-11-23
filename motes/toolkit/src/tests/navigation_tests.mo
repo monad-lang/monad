@@ -337,7 +337,7 @@ def test_a_def_in_another_module_answers_its_file : IO Bool := do {
         ParseResult.success _rem decls => do {
             let sd : ScopeData := build_scope_from_decls nt_other_module decls;
             let no_parent : Option Scope := Option.none;
-            let scope : Scope := { module_id := nt_here_module, scope := sd, parent := no_parent, incomplete_match_ok := false };
+            let scope : Scope := { module_id := nt_here_module, scope := sd, parent := no_parent, elaboration_pass := false };
             let no_ranges : List DeclText := List.empty;
             let info : ModuleInfo := ModuleInfo.mk nt_other_module (Path.unsafe nt_other_file) decls;
             let cache : ModuleInfoCache := module_info_cache_insert nt_other_module info module_info_cache_empty;
@@ -525,7 +525,7 @@ def test_a_struct_in_another_module_renders_and_answers_its_file : IO Bool := do
         ParseResult.success _rem decls => do {
             let sd : ScopeData := build_scope_from_decls nt_other_module decls;
             let no_parent : Option Scope := Option.none;
-            let scope : Scope := { module_id := nt_here_module, scope := sd, parent := no_parent, incomplete_match_ok := false };
+            let scope : Scope := { module_id := nt_here_module, scope := sd, parent := no_parent, elaboration_pass := false };
             let no_ranges : List DeclText := List.empty;
             let no_decls : List Decl := List.empty;
             let info : ModuleInfo := ModuleInfo.mk nt_other_module (Path.unsafe nt_other_file) decls;
@@ -554,7 +554,7 @@ def test_types_and_classes_in_another_module_answer_its_file : IO Bool := do {
         ParseResult.success _rem decls => do {
             let sd : ScopeData := build_scope_from_decls nt_other_module decls;
             let no_parent : Option Scope := Option.none;
-            let scope : Scope := { module_id := nt_here_module, scope := sd, parent := no_parent, incomplete_match_ok := false };
+            let scope : Scope := { module_id := nt_here_module, scope := sd, parent := no_parent, elaboration_pass := false };
             let info : ModuleInfo := ModuleInfo.mk nt_other_module (Path.unsafe nt_other_file) decls;
             let cache : ModuleInfoCache := module_info_cache_insert nt_other_module info module_info_cache_empty;
             let ty <- nt_far_answers scope cache "ZzFarColor" "type" "ZzFarColor";
