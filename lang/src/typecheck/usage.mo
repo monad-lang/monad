@@ -53,7 +53,7 @@
 /// transfer is allowed. That is why higher-order code needs no
 /// `Copy (A -> B)` instance — the closure is never duplicated, so its
 /// captured environment is never double-owned.
-use lib::types {
+use lib::types {minor_bodies,
     Similar,
     Attribute, Binder, Con, DebugName, FieldPattern, Identifier, InductConstructor, Inductive,
     Literal, Location, MatchCase, ModulePath, Multiplicity, NamePath, Native, Param, Scope,
@@ -123,7 +123,7 @@ def uses_of (target : I64) (t : Term) : I64 :=
             match e {
                 { inductive := _, levels := _, params := _, indices := _,
                     motive := _, minors := minors, scrutinee := scrutinee } =>
-                        uses_of target scrutinee + uses_of_minors target minors,
+                        uses_of target scrutinee + uses_of_minors target (minor_bodies minors),
             },
     }
 
@@ -276,7 +276,7 @@ def captured_uses_go (free : I64) (target : I64) (inside : Bool) (t : Term) : I6
                 { inductive := _, levels := _, params := _, indices := _,
                     motive := _, minors := minors, scrutinee := scrutinee } =>
                         captured_uses_go free target inside scrutinee
-                            + captured_uses_minors free target inside minors,
+                            + captured_uses_minors free target inside (minor_bodies minors),
             },
     }
 
@@ -810,7 +810,7 @@ def borrow_aware_at (borrows : HashMap String Bool) (borrowed_here : Bool) (targ
                 { inductive := _, levels := _, params := _, indices := _,
                     motive := _, minors := minors, scrutinee := scrutinee } =>
                         borrow_aware_at borrows false target scrutinee
-                            + borrow_aware_minors borrows borrowed_here target minors,
+                            + borrow_aware_minors borrows borrowed_here target (minor_bodies minors),
             },
     }
 
@@ -954,7 +954,7 @@ def owning_at_mode (ctors : HashMap String Bool) (borrows : HashMap String Bool)
                 { inductive := _, levels := _, params := _, indices := _,
                     motive := _, minors := minors, scrutinee := scrutinee } =>
                         owning_at_mode ctors borrows fn_mode UsePos.up_scrutinee target scrutinee
-                            + owning_at_minors ctors borrows fn_mode ctx target minors,
+                            + owning_at_minors ctors borrows fn_mode ctx target (minor_bodies minors),
             },
     }
 
@@ -1294,7 +1294,7 @@ pub def expr_is_view (shareds : HashMap String Bool) (e : ViewEnv) (t : Term) : 
                 { inductive := _, levels := _, params := _, indices := _, motive := _,
                     minors := minors, scrutinee := scrutinee } =>
                         let sv : Bool := expr_is_view shareds e scrutinee in
-                        sv || expr_is_view_minors shareds e sv minors,
+                        sv || expr_is_view_minors shareds e sv (minor_bodies minors),
             },
     }
 
@@ -2070,7 +2070,7 @@ def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
                     motive := _, minors := minors, scrutinee := scrutinee } =>
                         let sv : Bool := view_binder (expr_is_view borrows venv scrutinee) venv in
                         let minor_env : ViewEnv := { flags := venv.flags, inherit := sv } in
-                        collect_uses_terms ctors borrows minor_env minors
+                        collect_uses_terms ctors borrows minor_env (minor_bodies minors)
                             (collect_uses_term ctors borrows venv scrutinee acc),
             },
     }

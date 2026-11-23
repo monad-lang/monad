@@ -1,5 +1,5 @@
 use lib::typecheck::levels {free_level_vars}
-use lang::types {
+use lang::types {Minor,
     Attribute, BinderInfo, Class, ClassDef, DebugName, Decl, Def, Identifier,
     InductConstructor, Inductive, Instance, MatchCase, ModulePath, NamePath, Param,
     Similar, SortLevel, Struct, StructLitField, Term, TypeConstraint, binder_binder,
@@ -112,7 +112,7 @@ def free_vars (typ : Term) (known_names : List Identifier) : List Identifier :=
                         union_ids (free_vars_of_terms params known_names)
                             (union_ids (free_vars_of_terms indices known_names)
                                 (union_ids (free_vars e_motive known_names)
-                                    (union_ids (free_vars_of_terms minors known_names)
+                                    (union_ids (free_vars_of_minors minors known_names)
                                         (free_vars scrutinee known_names)))),
             },
     }
@@ -121,6 +121,15 @@ def free_vars (typ : Term) (known_names : List Identifier) : List Identifier :=
 def free_vars_of_terms (ts : List Term) (known_names : List Identifier) : List Identifier := match ts {
     List.empty => List.empty,
     List.cons x rest => union_ids (free_vars x known_names) (free_vars_of_terms rest known_names),
+}
+
+def free_vars_of_minors (ms : List Minor) (known_names : List Identifier) : List Identifier := match ms {
+    List.empty => List.empty,
+    List.cons m rest =>
+        match m {
+            Minor.case body => union_ids (free_vars body known_names) (free_vars_of_minors rest known_names),
+            Minor.impossible => free_vars_of_minors rest known_names,
+        },
 }
 
 /// Collect free vars from match case bodies.

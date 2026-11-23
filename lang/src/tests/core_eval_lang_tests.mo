@@ -5,7 +5,7 @@ use lang::core_value {
     GlobalTable, Value, env_nil, global_cache_new, global_table_len,
 }
 use lib::lower_core_ir {LowerCtx, lower_ctx_from_decls, lower_root}
-use lang::types {
+use lang::types {case_minors,
     Attribute, DebugName, Decl, Elim, InductConstructor, ModulePath, NamePath, Param,
     Term, binder_explicit, def_d, i64, id, ident, if_, inductive_d, many, match_, num,
     open_d, open_only, package_private,
@@ -497,7 +497,7 @@ def pick_term : Term :=
         Term.lam (binder_explicit (named "p")) Term.hole
             (Term.lam (binder_explicit (named "q")) Term.hole (Term.var 0 (named "q"))),
     ] in
-    let e : Elim := Elim.mk tri_path List.empty List.empty List.empty Term.hole minors (Term.var 0 (named "t")) in
+    let e : Elim := Elim.mk tri_path List.empty List.empty List.empty Term.hole (case_minors minors) (Term.var 0 (named "t")) in
     Term.lam (binder_explicit (named "t")) Term.hole (Term.elim e)
 
 def tri_con (name : String) (args : List Term) : Term :=

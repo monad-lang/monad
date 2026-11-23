@@ -22,7 +22,7 @@
 ///
 /// All three are ERRORS in every `[affine]` mode (logical consistency is not
 /// a migration warning), on the CLI, buffer and LSP paths.
-use lib::types {
+use lib::types {minor_bodies,
     Class, ClassDef, Con, DebugName, Decl, Def, Identifier, InductConstructor, Inductive,
     Instance, Literal, MatchCase, NamePath, Native, Scope, Struct, StructField, StructLitField,
     Term, TypeError, has_attr, name_map_values, show_identifier, show_name_path,
@@ -326,7 +326,7 @@ def opaque_ref_in_term (names : HashMap String Bool) (t : Term) : Option String 
                     motive := _, minors := minors, scrutinee := scrutinee } =>
                         match opaque_ref_in_term names scrutinee {
                             Option.some hit => Option.some hit,
-                            Option.none => opaque_ref_in_terms names minors,
+                            Option.none => opaque_ref_in_terms names (minor_bodies minors),
                         },
             },
         Term.sort _level => Option.none,

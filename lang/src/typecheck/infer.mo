@@ -1,5 +1,5 @@
 use std::map {HashMap.to_list}
-use lang::types {
+use lang::types {Minor,
     Binder, Class, ClassIndex, Con, Cubical, CubicalPrim, DebugName, Def, Elim, FieldPattern,
     FieldPatternEntry, Identifier, InductConstructor, Inductive, Instance, Literal,
     LocalScope, LocalVar, Location, MatchCase, ModulePath, NamePath, NameRef,
@@ -1769,11 +1769,11 @@ def find_bool_inductive (scope : Scope) : Option Inductive :=
 /// `compile_db_if_ir`'s `ensure_i1_cond` anchors to the constructor tag named
 /// `true`, and `elaborate_if_to_elim`'s "true is constructor 0" is only a
 /// prelude-convention assumption.
-def bool_elim_minors (ctors : List InductConstructor) (then_term : Term) (else_term : Term) : List Term :=
+def bool_elim_minors (ctors : List InductConstructor) (then_term : Term) (else_term : Term) : List Minor :=
     match ctors {
         List.empty => List.empty,
         List.cons ctor rest =>
-            List.cons (bool_minor_for_ctor ctor then_term else_term)
+            List.cons (Minor.case (bool_minor_for_ctor ctor then_term else_term))
                 (bool_elim_minors rest then_term else_term),
     }
 
@@ -1841,7 +1841,7 @@ def type_check_if (one : Term) (two : Term) (three : Term) (expected_type : Term
                                                 ok (mk_typed (Term.lit lit_val) then_typ)
                                             else
                                                 let motive : Term := Term.lam binder_anon bool_typ (term_shift 1 then_typ) in
-                                                let minors : List Term := bool_elim_minors (inductive_constructors ind) then_term els_term in
+                                                let minors : List Minor := bool_elim_minors (inductive_constructors ind) then_term els_term in
                                                 let e : Elim := Elim.mk ind.name List.empty List.empty List.empty motive minors cond_term in
                                                 ok (mk_typed (Term.elim e) then_typ),
                                     },
@@ -1954,7 +1954,7 @@ def elim_from_checked_cases (ind : Inductive) (sc_term : Term) (sc_typ : Term)
     let params : List Term := match flatten_call_spine sc_typ { CallSpine.mk _head args => args } in
     let motive : Term := Term.lam binder_anon sc_typ (term_shift 1 result_typ) in
     let maybe_ind : Option Inductive := Option.some ind in
-    let minors : List Term := build_elim_minors (inductive_constructors ind) checked_cases sc_typ maybe_ind in
+    let minors : List Minor := build_elim_minors (inductive_constructors ind) checked_cases sc_typ maybe_ind in
     Elim.mk ind.name List.empty params List.empty motive minors sc_term
 
 /// The dependent fallback: refine the scrutinee to each constructor. Returns
@@ -1993,7 +1993,7 @@ def try_dependent_match (cases : List MatchCase) (sc_term : Term) (sc_typ : Term
                         let motive : Term := derive_motive idx sc_typ_r expected_type in
                         let params : List Term := match flatten_call_spine sc_typ_r { CallSpine.mk _head args => args } in
                         let maybe_ind_ : Option Inductive := Option.some ind in
-                        let minors : List Term := build_elim_minors (inductive_constructors ind) cases sc_typ_r maybe_ind_ in
+                        let minors : List Minor := build_elim_minors (inductive_constructors ind) cases sc_typ_r maybe_ind_ in
                         let e : Elim := Elim.mk ind.name List.empty params List.empty motive minors sc_term in
                         Option.some (type_check_elim e expected_type scope local_types locals)
                     else Option.none,
@@ -2358,9 +2358,9 @@ def type_check_elim_minors (e : Elim) (ind : Inductive) (motive_term : Term) (sc
 /// partial-information fallback: unlike `arg_types_for_case`'s `Option
 /// Inductive`, `ind` here is always resolved (R4's caller already erred
 /// out if it wasn't).
-def type_check_elim_minors_go (ctors : List InductConstructor) (minors : List Term) (ind : Inductive)
+def type_check_elim_minors_go (ctors : List InductConstructor) (minors : List Minor) (ind : Inductive)
     (actual_args : List Term) (num_params : I64) (sc_typ : Term) (motive_term : Term) (scope : Scope)
-    (local_types : List Term) (locals : LocalScope) : Result TypeError (List Term) :=
+    (local_types : List Term) (locals : LocalScope) : Result TypeError (List Minor) :=
     match ctors {
         List.empty =>
             match minors {
@@ -2373,7 +2373,7 @@ def type_check_elim_minors_go (ctors : List InductConstructor) (minors : List Te
                 List.empty => err (TypeError.custom
                     "Term.elim is missing a minor for a constructor"),
                 List.cons minor mrest =>
-                    match type_check_elim_minor ctor minor ind actual_args num_params sc_typ motive_term
+                    match check_one_minor ctor minor ind actual_args num_params sc_typ motive_term
                         scope local_types locals {
                         err err_ => err err_,
                         ok checked_minor =>
@@ -2383,6 +2383,26 @@ def type_check_elim_minors_go (ctors : List InductConstructor) (minors : List Te
                                 ok checked_rest => ok (List.cons checked_minor checked_rest),
                             },
                     },
+            },
+    }
+
+/// A `case` minor is checked against its constructor's minor type; an
+/// `impossible` one is admitted only when the constructor cannot build a
+/// value of the scrutinee's type (`ctor_impossible`).
+#[terminating]
+def check_one_minor (ctor : InductConstructor) (minor : Minor) (ind : Inductive)
+    (actual_args : List Term) (num_params : I64) (sc_typ : Term) (motive_term : Term) (scope : Scope)
+    (local_types : List Term) (locals : LocalScope) : Result TypeError Minor :=
+    match minor {
+        Minor.impossible =>
+            if ctor_impossible ind ctor.name sc_typ scope
+            then ok Minor.impossible
+            else err (TypeError.elim_impossible_minor ind.name ctor.name),
+        Minor.case body =>
+            match type_check_elim_minor ctor body ind actual_args num_params sc_typ motive_term
+                scope local_types locals {
+                err err_ => err err_,
+                ok checked => ok (Minor.case checked),
             },
     }
 
@@ -2716,7 +2736,7 @@ def elaborate_if_to_elim (bool_ind : Inductive) (cond : Term) (then_term : Term)
     (else_term : Term) (result_typ : Term) : Term :=
     let bool_typ : Term := named_type_ref "Bool" in
     let motive : Term := Term.lam binder_anon bool_typ (term_shift 1 result_typ) in
-    let minors : List Term := List.cons then_term (List.cons else_term List.empty) in
+    let minors : List Minor := [Minor.case then_term, Minor.case else_term] in
     Term.elim (Elim.mk bool_ind.name List.empty List.empty List.empty motive minors cond)
 
 /// `match value_ { ... }` as an `Elim`, with a constant motive -- same
@@ -2737,7 +2757,7 @@ def elaborate_match_to_elim (ind : Inductive) (scrutinee_typ : Term) (scrutinee_
     let params : List Term := match flatten_call_spine scrutinee_typ { CallSpine.mk _head args => args } in
     let motive : Term := Term.lam binder_anon scrutinee_typ (term_shift 1 result_typ) in
     let maybe_ind : Option Inductive := Option.some ind in
-    let minors : List Term := build_elim_minors (inductive_constructors ind) checked_cases scrutinee_typ maybe_ind in
+    let minors : List Minor := build_elim_minors (inductive_constructors ind) checked_cases scrutinee_typ maybe_ind in
     Term.elim (Elim.mk ind.name List.empty params List.empty motive minors scrutinee_term)
 
 /// One minor per constructor, in `ind`'s own DECLARATION order -- not
@@ -2745,12 +2765,12 @@ def elaborate_match_to_elim (ind : Inductive) (scrutinee_typ : Term) (scrutinee_
 /// deliberately ignores for the same reason (coverage is a set test, not
 /// a positional one).
 def build_elim_minors (ctors : List InductConstructor) (cases : List MatchCase)
-    (scrutinee_typ : Term) (maybe_ind : Option Inductive) : List Term :=
+    (scrutinee_typ : Term) (maybe_ind : Option Inductive) : List Minor :=
     match ctors {
         List.empty => List.empty,
         List.cons ctor rest =>
             List.cons
-                (elim_minor_for_ctor ctor cases scrutinee_typ maybe_ind)
+                (Minor.case (elim_minor_for_ctor ctor cases scrutinee_typ maybe_ind))
                 (build_elim_minors rest cases scrutinee_typ maybe_ind),
     }
 

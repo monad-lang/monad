@@ -2066,9 +2066,41 @@ pub struct Elim {
     params : List Term,
     indices : List Term,
     motive : Term,
-    minors : List Term,
+    minors : List Minor,
     scrutinee : Term,
 }
+
+/// One `Elim` minor, positional with the inductive's constructors. A
+/// constructor the scrutinee's indices rule out (`nil` against
+/// `Vec (succ n) A`) has no arm to write, so its minor is `impossible`
+/// rather than a placeholder term; the checker admits one only where
+/// `ctor_impossible` holds.
+pub type Minor {
+    case (body : Term),
+    impossible,
+}
+
+/// The bodies of the `case` minors, in order; `impossible` ones are skipped.
+pub def minor_bodies (ms : List Minor) : List Term :=
+    match ms {
+        List.empty => List.empty,
+        List.cons m rest =>
+            match m {
+                Minor.case body => List.cons body (minor_bodies rest),
+                Minor.impossible => minor_bodies rest,
+            },
+    }
+
+/// Every term a `case` minor.
+pub def case_minors (ts : List Term) : List Minor :=
+    List.map (fn (t : Term) => Minor.case t) ts
+
+/// Apply `f` to every `case` minor's body.
+pub def map_minors (f : Term -> Term) (ms : List Minor) : List Minor :=
+    List.map (fn (m : Minor) => match m {
+        Minor.case body => Minor.case (f body),
+        Minor.impossible => Minor.impossible,
+    }) ms
 
 pub type Term {
     var (idx : I64) (dbg : DebugName),
@@ -2298,6 +2330,9 @@ pub type TypeError {
     /// A class's instance-determined variable (`{S : Type}`) that no
     /// annotated method of the instance fixes.
     instance_determined_unsolved (cls : NamePath) (name : Identifier),
+    /// An `Elim` minor marked `impossible` for a constructor that can build
+    /// a value of the scrutinee's type.
+    elim_impossible_minor (inductive : NamePath) (ctor : NamePath),
 }
 
 /// `f #Named.Instance args`'s lowered marker argument: a sentinel `Term.var`
@@ -3697,8 +3732,21 @@ def similar_elim (a : Elim) (b : Elim) : Bool :=
         && similar_terms_pointwise a.params b.params
         && similar_terms_pointwise a.indices b.indices
         && Similar.similar a.motive b.motive
-        && similar_terms_pointwise a.minors b.minors
+        && similar_minors_pointwise a.minors b.minors
         && Similar.similar a.scrutinee b.scrutinee
+
+def similar_minors_pointwise (xs : List Minor) (ys : List Minor) : Bool := match xs {
+    List.empty => List.is_empty ys,
+    List.cons x xrest => match ys {
+        List.empty => false,
+        List.cons y yrest =>
+            let same : Bool := match x {
+                Minor.case a => match y { Minor.case b => Similar.similar a b, Minor.impossible => false },
+                Minor.impossible => match y { Minor.case _ => false, Minor.impossible => true },
+            } in
+            same && similar_minors_pointwise xrest yrest,
+    },
+}
 
 #[partial]
 def levels_similar (xs : List SortLevel) (ys : List SortLevel) : Bool := match xs {

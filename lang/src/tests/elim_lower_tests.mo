@@ -13,7 +13,7 @@
 // hence the small accessors below, each with single-constructor patterns.
 
 use std::list {}
-use lang::types {
+use lang::types {case_minors,
     DebugName, Elim, Identifier, Inductive, ModulePath, NamePath, Scope,
     ScopeData, Similar, Term, binder_anon, binder_named, sentinel,
 }
@@ -86,7 +86,7 @@ def check_shape_arms (sc : Scope) (ind : Inductive) : Bool :=
     let m1 : Term := one_field_minor in
     let m2 : Term := one_field_minor in
     let e : Elim := Elim.mk ind.name List.empty List.empty List.empty Term.hole
-        (List.cons m1 (List.cons m2 List.empty)) (Term.var 0 DebugName.unnamed) in
+        (case_minors (List.cons m1 (List.cons m2 List.empty))) (Term.var 0 DebugName.unnamed) in
     match arms_of sc e {
         Option.none => false,
         Option.some arms => match first_two_arms arms {
@@ -101,7 +101,7 @@ def check_bool_branches (sc : Scope) (ind : Inductive) : Bool :=
     let false_body : Term := named_var "F" in
     let true_body : Term := named_var "T" in
     let e : Elim := Elim.mk ind.name List.empty List.empty List.empty Term.hole
-        (List.cons false_body (List.cons true_body List.empty)) (Term.var 0 DebugName.unnamed) in
+        (case_minors (List.cons false_body (List.cons true_body List.empty))) (Term.var 0 DebugName.unnamed) in
     match arms_of sc e {
         Option.none => false,
         Option.some arms => match bool_branches ind arms {
@@ -117,7 +117,7 @@ def check_short_minor_rejected (sc : Scope) (ind : Inductive) : Bool :=
     let m1 : Term := named_var "not-a-lambda" in
     let m2 : Term := one_field_minor in
     let e : Elim := Elim.mk ind.name List.empty List.empty List.empty Term.hole
-        (List.cons m1 (List.cons m2 List.empty)) (Term.var 0 DebugName.unnamed) in
+        (case_minors (List.cons m1 (List.cons m2 List.empty))) (Term.var 0 DebugName.unnamed) in
     match elim_arms ind e {
         Result.err _ => true,
         Result.ok _ => false,
@@ -126,7 +126,7 @@ def check_short_minor_rejected (sc : Scope) (ind : Inductive) : Bool :=
 def check_anonymous_binder (sc : Scope) (ind : Inductive) : Bool :=
     let m : Term := Term.lam binder_anon Term.hole Term.hole in
     let e : Elim := Elim.mk ind.name List.empty List.empty List.empty Term.hole
-        (List.cons m List.empty) (Term.var 0 DebugName.unnamed) in
+        (case_minors (List.cons m List.empty)) (Term.var 0 DebugName.unnamed) in
     match arms_of sc e {
         Option.none => false,
         Option.some arms => match first_arm arms {

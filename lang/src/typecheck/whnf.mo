@@ -1,5 +1,5 @@
 use std::list {}
-use lib::types {
+use lib::types {Minor,
     Binder, Con, Cubical, CubicalPrim, DebugName, Elim, Identifier, InductConstructor,
     Literal, LocalScope, LocalVar, MatchCase, NamePath, NameRef, Scope, Similar, Term,
     cub_face_eq0, cub_face_eq1, cub_i0, cub_i1, cub_it_is_one, cubical_arity, cubical_prim_eq, id_eq,
@@ -1269,7 +1269,7 @@ def whnf_subst_case_fields (body : Term) (args : List Term) (k : I64) : Term :=
 /// `Option.none` on a length mismatch (an ill-shaped `Elim` reaching
 /// reduction) or when no constructor matches; reduction only ever widens
 /// what a sound checker accepts, so this stays stuck rather than guessing.
-def whnf_elim_minor_for_ctor (ctors : List InductConstructor) (minors : List Term)
+def whnf_elim_minor_for_ctor (ctors : List InductConstructor) (minors : List Minor)
     (con_name : Identifier) : Option Term :=
     match ctors {
         List.empty => Option.none,
@@ -1278,7 +1278,11 @@ def whnf_elim_minor_for_ctor (ctors : List InductConstructor) (minors : List Ter
                 List.empty => Option.none,
                 List.cons minor mrest =>
                     if id_eq (whnf_simple_name (whnf_constructor_bare_name ctor.name)) con_name
-                    then Option.some minor
+                    then match minor {
+                        Minor.case body => Option.some body,
+                        // An impossible constructor reached reduction: stay stuck.
+                        Minor.impossible => Option.none,
+                    }
                     else whnf_elim_minor_for_ctor crest mrest con_name,
             },
     }

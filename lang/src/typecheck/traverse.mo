@@ -15,7 +15,7 @@
 /// makes that explicit and gives the substitution walkers
 /// ([[lang/typecheck/name_subst.mo]], [[lang/typecheck/subst.mo]]) a
 /// home to build on rather than re-deriving the same ~10 helpers each.
-use lib::types {Con, Cubical, Elim, Literal, MatchCase, Native, StructLitField, Term}
+use lib::types {Minor, map_minors, minor_bodies, Con, Cubical, Elim, Literal, MatchCase, Native, StructLitField, Term}
 use std::list {}
 
 // ─── Generic structural recursion ──────────────────────────────────
@@ -73,7 +73,7 @@ def elim_map_children (f : Term -> Term) (e : Elim) : Elim :=
         params := terms_map_children f e.params,
         indices := terms_map_children f e.indices,
         motive := f e.motive,
-        minors := terms_map_children f e.minors,
+        minors := map_minors f e.minors,
         scrutinee := f e.scrutinee }
 
 /// `args` is positional and its length is the primitive's arity, so this
@@ -211,7 +211,7 @@ def elim_map_children_result (f : Term -> Result String Term) (e : Elim) : Resul
     result_bind (terms_map_children_result f e.params) (fn (params2 : List Term) =>
         result_bind (terms_map_children_result f e.indices) (fn (indices2 : List Term) =>
             result_bind (f e.motive) (fn (motive2 : Term) =>
-                result_bind (terms_map_children_result f e.minors) (fn (minors2 : List Term) =>
+                result_bind (minors_map_children_result f e.minors) (fn (minors2 : List Minor) =>
                     result_bind (f e.scrutinee) (fn (scrutinee2 : Term) =>
                         // Annotated local, NOT `Result.ok { e with ... }`:
                         // a struct literal in argument position is the
@@ -224,6 +224,23 @@ def elim_map_children_result (f : Term -> Result String Term) (e : Elim) : Resul
                             minors := minors2,
                             scrutinee := scrutinee2 } in
                         Result.ok updated)))))
+
+/// `terms_map_children_result` over the `case` minors; `impossible` is kept.
+#[partial]
+def minors_map_children_result (f : Term -> Result String Term) (ms : List Minor) : Result String (List Minor) :=
+    match ms {
+        List.empty => Result.ok List.empty,
+        List.cons m rest =>
+            match m {
+                Minor.case body =>
+                    result_bind (f body) (fn (body2 : Term) =>
+                        result_bind (minors_map_children_result f rest) (fn (rest2 : List Minor) =>
+                            Result.ok (List.cons (Minor.case body2) rest2))),
+                Minor.impossible =>
+                    result_bind (minors_map_children_result f rest) (fn (rest2 : List Minor) =>
+                        Result.ok (List.cons Minor.impossible rest2)),
+            },
+    }
 
 #[partial]
 def cubical_map_children_result (f : Term -> Result String Term) (c : Cubical) : Result String Cubical :=
@@ -402,7 +419,7 @@ def elim_map_children_at_depth (f : I64 -> Term -> Term) (e : Elim) : Elim :=
         params := terms_map_children (f 0) e.params,
         indices := terms_map_children (f 0) e.indices,
         motive := f 0 e.motive,
-        minors := terms_map_children (f 0) e.minors,
+        minors := map_minors (f 0) e.minors,
         scrutinee := f 0 e.scrutinee }
 
 #[partial]
@@ -467,7 +484,7 @@ def cubical_children (c : Cubical) : List Term := c.args
 /// motive or inductive parameters yet; `Elim` does).
 def elim_children (e : Elim) : List Term :=
     List.append e.params
-        (List.append e.indices (List.cons e.motive (List.append e.minors (List.singleton e.scrutinee))))
+        (List.append e.indices (List.cons e.motive (List.append (minor_bodies e.minors) (List.singleton e.scrutinee))))
 
 pub def literal_children (l : Literal) : List Term :=
     match l {

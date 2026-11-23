@@ -38,7 +38,7 @@
 ///   covers every name expansion declares but the consumer does not
 ///   write.
 
-use lang::types {
+use lang::types {minor_bodies,
     Attribute, Class, ClassDef, DebugName, Decl, Def, Identifier, InductConstructor,
     Inductive, Instance, Literal, MatchCase, ModuleMap, ModulePath, ModuleSet, NamePath,
     NameMap, NamePathSet, Param, QualifiedName, QualifiedNameSet, Struct, StructField,
@@ -915,7 +915,7 @@ def collect_term (t : Term) (refs : Refs) : Refs :=
         // below, generalized to a plain list of minors instead of
         // `MatchCase`s.
         Term.elim e =>
-            collect_terms e.minors
+            collect_terms (minor_bodies e.minors)
                 (collect_term e.motive
                     (collect_terms e.indices (collect_terms e.params (collect_term e.scrutinee refs)))),
     }

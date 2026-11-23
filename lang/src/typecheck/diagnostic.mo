@@ -143,6 +143,10 @@ pub def type_error_message (e : TypeError) : String :=
             String.concat "this instance of `" (String.concat (show_name_path cls)
                 (String.concat "` does not determine `" (String.concat (show_identifier name)
                     "`: annotate a method whose class signature mentions it"))),
+        TypeError.elim_impossible_minor ind ctor =>
+            String.concat "constructor `" (String.concat (show_name_path ctor)
+                (String.concat "` of `" (String.concat (show_name_path ind)
+                    "` can occur here, so its minor cannot be `impossible`"))),
     }
 
 /// Render a full diagnostic for a type error — same visual family as

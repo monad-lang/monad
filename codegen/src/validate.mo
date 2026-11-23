@@ -18,7 +18,7 @@
 /// All four run on the REACHABLE decls, so a bug in dead code cannot
 /// block a build that never touches it.
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
-use lang::types {
+use lang::types {Minor,
     AttrArg, Attribute, Con, Decl, Def, Identifier, Inductive, Literal, MatchCase, NamePath, Native,
     StructLitField, Term, binder_is_explicit, has_attr, id_eq, show_identifier, show_name_path, term_peel,
 }
@@ -559,7 +559,7 @@ def term_has_struct_lit (t : Term) : Bool := match t {
                     terms_have_struct_lit params
                         || terms_have_struct_lit indices
                         || term_has_struct_lit motive
-                        || terms_have_struct_lit minors
+                        || minors_have_struct_lit minors
                         || term_has_struct_lit scrutinee,
         },
 }
@@ -567,6 +567,15 @@ def term_has_struct_lit (t : Term) : Bool := match t {
 def terms_have_struct_lit (ts : List Term) : Bool := match ts {
     List.empty => false,
     List.cons x rest => term_has_struct_lit x || terms_have_struct_lit rest,
+}
+
+def minors_have_struct_lit (ms : List Minor) : Bool := match ms {
+    List.empty => false,
+    List.cons m rest =>
+        match m {
+            Minor.case body => term_has_struct_lit body || minors_have_struct_lit rest,
+            Minor.impossible => minors_have_struct_lit rest,
+        },
 }
 
 def lit_has_struct_lit (l : Literal) : Bool := match l {

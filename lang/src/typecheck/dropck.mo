@@ -84,7 +84,7 @@
 /// time comes. Recorded here so it is a known, deliberate deferral
 /// rather than a surprise the next person to touch this file has to
 /// rediscover.
-use lib::types {Binder, Con, DebugName, FieldPattern, Identifier, Literal, MatchCase, NamePath, Native, StructLitField, Term, binder_explicit, binder_is_explicit, binder_name, term_peel}
+use lib::types {minor_bodies, Binder, Con, DebugName, FieldPattern, Identifier, Literal, MatchCase, NamePath, Native, StructLitField, Term, binder_explicit, binder_is_explicit, binder_name, term_peel}
 use lib::typecheck::usage {UsePos, owning_at}
 use llvm::strmap {str_map_empty}
 use std::map {HashMap}
@@ -150,7 +150,7 @@ pub def drop_leaves (ctors : HashMap String Bool) (borrows : HashMap String Bool
             match elim {
                 { inductive := _, levels := _, params := _, indices := _, motive := _,
                     minors := minors, scrutinee := scrutinee } =>
-                        let branch_leaves : List Bool := drop_leaves_minors ctors borrows target minors in
+                        let branch_leaves : List Bool := drop_leaves_minors ctors borrows target (minor_bodies minors) in
                         if I64.gt (owning_at ctors borrows UsePos.up_scrutinee target scrutinee) 0
                         then all_false branch_leaves
                         else branch_leaves,
@@ -295,7 +295,7 @@ def collect_drop_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
             match e {
                 { inductive := _, levels := _, params := _, indices := _,
                     motive := _, minors := minors, scrutinee := scrutinee } =>
-                        collect_drop_terms ctors borrows minors (collect_drop_term ctors borrows scrutinee acc),
+                        collect_drop_terms ctors borrows (minor_bodies minors) (collect_drop_term ctors borrows scrutinee acc),
             },
     }
 

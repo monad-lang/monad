@@ -1,4 +1,4 @@
-use lang::types {
+use lang::types {Minor, map_minors, minor_bodies,
     Attribute, Binder, Class, ClassDef, Con, CubicalPrim, DebugName, Decl, DeclGroup, Def,
     NameSet,
     FieldPattern, FieldPatternEntry, Identifier, InductConstructor, Inductive,
@@ -2359,7 +2359,7 @@ def resolve_open_alias_term_scoped (names : HashMap String String) (bound : List
             let rewritten_params : List Term := resolve_open_alias_terms_scoped names bound e.params in
             let rewritten_indices : List Term := resolve_open_alias_terms_scoped names bound e.indices in
             let rewritten_motive : Term := resolve_open_alias_term_scoped names bound e.motive in
-            let rewritten_minors : List Term := resolve_open_alias_terms_scoped names bound e.minors in
+            let rewritten_minors : List Minor := map_minors (fn (t : Term) => resolve_open_alias_term_scoped names bound t) e.minors in
             let rewritten_scrutinee : Term := resolve_open_alias_term_scoped names bound e.scrutinee in
             Term.elim
                 { e with
@@ -7274,7 +7274,7 @@ def find_unresolved_class_calls_term (classes : ClassIndex) (t : Term) (acc : Li
     // `params`/`indices`, a minor, or the scrutinee is still unresolved.
     Term.elim e =>
         find_unresolved_class_calls_term classes e.scrutinee
-            (find_unresolved_class_calls_terms classes e.minors
+            (find_unresolved_class_calls_terms classes (minor_bodies e.minors)
                 (find_unresolved_class_calls_term classes e.motive
                     (find_unresolved_class_calls_terms classes e.indices
                         (find_unresolved_class_calls_terms classes e.params acc)))),

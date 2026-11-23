@@ -34,7 +34,7 @@ use lang::module {try_parse_decls}
 use lang::scope {build_scope_from_decls}
 use lang::typecheck::infer {empty_locals, type_check}
 use lang::typecheck::whnf {whnf}
-use lang::types {
+use lang::types {case_minors,
     DebugName, Elim, Identifier, ModulePath, NamePath, Scope, ScopeData, Similar, Term,
     binder_anon, sentinel, sort_n,
 }
@@ -113,7 +113,7 @@ def elim_rejected (e : Elim) (local_types : List Term) (scope : Scope) : Bool :=
 #[test]
 def elim_bool_constant_motive_is_accepted : Bool :=
     let e : Elim := Elim.mk bool_name List.empty List.empty List.empty bool_constant_motive
-        (List.cons Term.hole (List.cons Term.hole List.empty)) bool_scrutinee in
+        (case_minors (List.cons Term.hole (List.cons Term.hole List.empty))) bool_scrutinee in
     elim_accepted e bool_local_types bool_scope
 
 /// Soundness-shaped pin: an `e.inductive` that names no real inductive
@@ -122,7 +122,7 @@ def elim_bool_constant_motive_is_accepted : Bool :=
 def elim_unknown_inductive_is_rejected : Bool :=
     let bad_name : NamePath := NamePath.mk (List.cons (Identifier.id "NoSuchInductive") List.empty) in
     let e : Elim := Elim.mk bad_name List.empty List.empty List.empty bool_constant_motive
-        (List.cons Term.hole (List.cons Term.hole List.empty)) bool_scrutinee in
+        (case_minors (List.cons Term.hole (List.cons Term.hole List.empty))) bool_scrutinee in
     elim_rejected e bool_local_types bool_scope
 
 /// The motive must be a function into a SORT -- `Term.hole` as a body is
@@ -131,7 +131,7 @@ def elim_unknown_inductive_is_rejected : Bool :=
 def elim_non_sort_motive_is_rejected : Bool :=
     let bad_motive : Term := Term.lam binder_anon Term.hole Term.hole in
     let e : Elim := Elim.mk bool_name List.empty List.empty List.empty bad_motive
-        (List.cons Term.hole (List.cons Term.hole List.empty)) bool_scrutinee in
+        (case_minors (List.cons Term.hole (List.cons Term.hole List.empty))) bool_scrutinee in
     elim_rejected e bool_local_types bool_scope
 
 /// `Bool` declares two constructors; one minor is one short -- this is
@@ -140,7 +140,7 @@ def elim_non_sort_motive_is_rejected : Bool :=
 #[test]
 def elim_wrong_minor_count_is_rejected : Bool :=
     let e : Elim := Elim.mk bool_name List.empty List.empty List.empty bool_constant_motive
-        (List.cons Term.hole List.empty) bool_scrutinee in
+        (case_minors (List.cons Term.hole List.empty)) bool_scrutinee in
     elim_rejected e bool_local_types bool_scope
 
 /// `circle`/`square` each declare ONE field (`r : I64`); a minor that is
@@ -158,7 +158,7 @@ def elim_minor_with_wrong_field_arity_is_rejected : Bool :=
     let shape_local_types : List Term := List.cons (named_free_var "Shape") List.empty in
     let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
     let e : Elim := Elim.mk shape_name List.empty List.empty List.empty motive
-        (List.cons (sort_n 0) (List.cons (sort_n 0) List.empty)) shape_scrutinee in
+        (case_minors (List.cons (sort_n 0) (List.cons (sort_n 0) List.empty))) shape_scrutinee in
     elim_rejected e shape_local_types shape_scope
 
 // ─── Iota: a CHECKED `Elim` reduces through `whnf` (R4 + R5, end to end) ───
@@ -175,7 +175,7 @@ def elim_minor_with_wrong_field_arity_is_rejected : Bool :=
 def elim_checked_term_reduces_to_first_minor : Bool :=
     let scrutinee : Term := named_free_var "Bool.true" in
     let e : Elim := Elim.mk bool_name List.empty List.empty List.empty bool_marker_motive
-        (List.cons (named_free_var "Marker1") (List.cons (named_free_var "Marker2") List.empty)) scrutinee in
+        (case_minors (List.cons (named_free_var "Marker1") (List.cons (named_free_var "Marker2") List.empty))) scrutinee in
     match type_check (Term.elim e) Term.hole marker_scope List.empty empty_locals {
         err _ => false,
         ok tt => Similar.similar (whnf marker_scope empty_locals tt.term) (named_free_var "Marker1"),
@@ -186,7 +186,7 @@ def elim_checked_term_reduces_to_first_minor : Bool :=
 def elim_checked_term_reduces_to_second_minor : Bool :=
     let scrutinee : Term := named_free_var "Bool.false" in
     let e : Elim := Elim.mk bool_name List.empty List.empty List.empty bool_marker_motive
-        (List.cons (named_free_var "Marker1") (List.cons (named_free_var "Marker2") List.empty)) scrutinee in
+        (case_minors (List.cons (named_free_var "Marker1") (List.cons (named_free_var "Marker2") List.empty))) scrutinee in
     match type_check (Term.elim e) Term.hole marker_scope List.empty empty_locals {
         err _ => false,
         ok tt => Similar.similar (whnf marker_scope empty_locals tt.term) (named_free_var "Marker2"),
@@ -200,7 +200,7 @@ def elim_checked_term_reduces_to_second_minor : Bool :=
 #[test]
 def elim_checked_term_with_unresolved_scrutinee_stays_stuck : Bool :=
     let e : Elim := Elim.mk bool_name List.empty List.empty List.empty bool_marker_motive
-        (List.cons (named_free_var "Marker1") (List.cons (named_free_var "Marker2") List.empty)) bool_scrutinee in
+        (case_minors (List.cons (named_free_var "Marker1") (List.cons (named_free_var "Marker2") List.empty))) bool_scrutinee in
     match type_check (Term.elim e) Term.hole marker_scope bool_local_types empty_locals {
         err _ => false,
         ok tt =>

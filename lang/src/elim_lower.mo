@@ -11,7 +11,7 @@
 // Strictness: a minor with fewer lambdas than its constructor has fields is a
 // de-Bruijn-misaligned arm and is reported rather than realigned.
 
-use lib::types {
+use lib::types {Minor,
     Binder, DebugName, Elim, Identifier, InductConstructor, Inductive, NamePath, Scope, Term,
     binder_name, list_reverse, show_identifier, show_name_path, term_peel,
 }
@@ -45,7 +45,7 @@ pub def elim_arms_in (scope : Scope) (e : Elim) : Result String (Pair Inductive 
 pub def elim_arms (ind : Inductive) (e : Elim) : Result String (List ElimArm) :=
     arms_go ind ind.constructors e.minors
 
-def arms_go (ind : Inductive) (ctors : List InductConstructor) (minors : List Term) : Result String (List ElimArm) :=
+def arms_go (ind : Inductive) (ctors : List InductConstructor) (minors : List Minor) : Result String (List ElimArm) :=
     match ctors {
         List.empty =>
             match minors {
@@ -55,13 +55,18 @@ def arms_go (ind : Inductive) (ctors : List InductConstructor) (minors : List Te
         List.cons ctor rest =>
             match minors {
                 List.empty => Result.err "Term.elim is missing a minor for a constructor",
+                // An impossible constructor's tag never occurs, so it gets no arm.
                 List.cons minor mrest =>
-                    match arm_for_ctor ind ctor minor {
-                        Result.err msg => Result.err msg,
-                        Result.ok arm =>
-                            match arms_go ind rest mrest {
+                    match minor {
+                        Minor.impossible => arms_go ind rest mrest,
+                        Minor.case body =>
+                            match arm_for_ctor ind ctor body {
                                 Result.err msg => Result.err msg,
-                                Result.ok arms => Result.ok (List.cons arm arms),
+                                Result.ok arm =>
+                                    match arms_go ind rest mrest {
+                                        Result.err msg => Result.err msg,
+                                        Result.ok arms => Result.ok (List.cons arm arms),
+                                    },
                             },
                     },
             },

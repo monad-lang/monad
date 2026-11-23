@@ -18,7 +18,7 @@
 /// the whole graph. The closure is taken over ELABORATED bodies, because
 /// elaboration is what introduces the dictionary and instance-method
 /// references a class call resolves to.
-use lang::types {
+use lang::types {minor_bodies,
     DebugName, Decl, Def, Identifier, Literal, MatchCase, StructLitField, Term,
     sentinel, show_identifier, show_name_path,
 }
@@ -50,7 +50,7 @@ pub def term_ref_names (t : Term) (acc : List String) : List String := match t {
     Term.cubical c => match c { { prim := _, args := args } => terms_ref_names args acc },
     Term.elim e =>
         term_ref_names e.scrutinee
-            (terms_ref_names e.minors
+            (terms_ref_names (minor_bodies e.minors)
                 (term_ref_names e.motive (terms_ref_names e.indices (terms_ref_names e.params acc)))),
 }
 

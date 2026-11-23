@@ -13,7 +13,7 @@
 /// * `collect_referenced_names` is binder-BLIND, and deliberately so:
 ///   reachability may safely over-approximate, and cheaply. Do not
 ///   reach for it where precision matters -- that is the other one.
-use lang::types {
+use lang::types {minor_bodies,
     Con, DebugName, FieldPattern, FieldPatternEntry, Identifier, Literal, MatchCase,
     Native, StructLitField, Term, binder_is_explicit, binder_name, term_peel,
     union_ids,
@@ -57,7 +57,7 @@ def free_names_of_term (bound : List Identifier) (t : Term) : List Identifier :=
     // they capture nothing. A minor's leading lambdas are the arm's field
     // binders: bound in its body, their (erased) types not walked -- the
     // same names a source `match` case contributes.
-    Term.elim e => List.append (free_names_of_term bound e.scrutinee) (free_names_of_minors bound e.minors),
+    Term.elim e => List.append (free_names_of_term bound e.scrutinee) (free_names_of_minors bound (minor_bodies e.minors)),
 }
 
 #[partial]
@@ -213,7 +213,7 @@ def collect_referenced_names (t : Term) (acc : List String) : List String := mat
     // scrutinee and every minor's body, or a name referenced only there is
     // invisible to `filter_reachable_decls`. The motive, params, indices and
     // the minors' binder types are erased.
-    Term.elim e => collect_referenced_names_minors e.minors (collect_referenced_names e.scrutinee acc),
+    Term.elim e => collect_referenced_names_minors (minor_bodies e.minors) (collect_referenced_names e.scrutinee acc),
 }
 
 #[partial]

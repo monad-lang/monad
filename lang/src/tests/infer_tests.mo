@@ -1,5 +1,5 @@
 use std::list {}
-use lang::types {
+use lang::types {case_minors, minor_bodies,
     Attribute, Binder, BinderInfo, DebugName, Decl, Def, Elim, FieldPattern, FieldPatternEntry,
     Identifier, CubicalPrim, InductConstructor, Inductive, MatchCase, ModulePath,
     NamePath, Param, Scope, ScopeClassDef, ScopeData, Similar, SortLevel, Term, TypeError,
@@ -1775,7 +1775,7 @@ def test_elaborate_if_to_elim_builds_bool_elim_with_ordered_minors : Bool :=
                 && Similar.similar e.scrutinee cond
                 && Similar.similar e.motive
                     (Term.lam binder_anon (named_free_var "Bool") (term_shift 1 result_typ))
-                && two_terms_eq e.minors then_term else_term,
+                && two_terms_eq (minor_bodies e.minors) then_term else_term,
         _ => false,
     }
 
@@ -1815,7 +1815,7 @@ def test_elaborate_match_to_elim_minors_follow_declared_order : Bool :=
     match elaborate_match_to_elim shape_ind_for_elim_tests shape_scrutinee_typ_for_elim_tests
         scrutinee cases result_typ {
         Term.elim e =>
-            two_terms_eq e.minors
+            two_terms_eq (minor_bodies e.minors)
                 (Term.lam (binder_named (Identifier.id "r")) (named_free_var "I64") circle_body)
                 (Term.lam (binder_named (Identifier.id "r")) (named_free_var "I64") square_body),
         _ => false,
@@ -1840,7 +1840,7 @@ def test_elaborate_match_to_elim_wildcard_minor_ignores_and_shifts_fields : Bool
     match elaborate_match_to_elim shape_ind_for_elim_tests shape_scrutinee_typ_for_elim_tests
         scrutinee cases result_typ {
         Term.elim e =>
-            second_term_eq e.minors (Term.lam binder_anon (named_free_var "I64") (term_shift 1 wildcard_body)),
+            second_term_eq (minor_bodies e.minors) (Term.lam binder_anon (named_free_var "I64") (term_shift 1 wildcard_body)),
         _ => false,
     }
 
@@ -1863,7 +1863,7 @@ def test_elaborate_match_to_elim_params_and_field_types_from_scrutinee_spine : B
     match elaborate_match_to_elim pair_ind pair_scrutinee_typ scrutinee cases result_typ {
         Term.elim e =>
             two_terms_eq e.params (named_free_var "T") (named_free_var "U")
-                && one_term_eq e.minors
+                && one_term_eq (minor_bodies e.minors)
                     (Term.lam (binder_named (Identifier.id "first")) (named_free_var "T")
                         (Term.lam (binder_named (Identifier.id "second")) (named_free_var "U") body)),
         _ => false,
@@ -1924,7 +1924,7 @@ def test_type_check_elim_bool_constant_motive_checks : Bool :=
     let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
     let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
     let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty List.empty motive
-        (List.cons Term.hole (List.cons Term.hole List.empty)) scrutinee in
+        (case_minors (List.cons Term.hole (List.cons Term.hole List.empty))) scrutinee in
     elim_result_ok (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
 
 #[test]
@@ -1934,7 +1934,7 @@ def test_type_check_elim_rejects_unknown_inductive : Bool :=
     let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
     let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
     let e : Elim := Elim.mk bad_name List.empty List.empty List.empty motive
-        (List.cons Term.hole (List.cons Term.hole List.empty)) scrutinee in
+        (case_minors (List.cons Term.hole (List.cons Term.hole List.empty))) scrutinee in
     elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
 
 /// The scrutinee's own LOCAL type is `NotBool`, not `Bool` -- `e.inductive`
@@ -1946,7 +1946,7 @@ def test_type_check_elim_rejects_scrutinee_type_mismatch : Bool :=
     let local_types : List Term := List.cons (named_free_var "NotBool") List.empty in
     let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
     let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty List.empty motive
-        (List.cons Term.hole (List.cons Term.hole List.empty)) scrutinee in
+        (case_minors (List.cons Term.hole (List.cons Term.hole List.empty))) scrutinee in
     elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
 
 /// The motive's body is `Term.hole`, whose own inferred type is `Term.hole`
@@ -1958,7 +1958,7 @@ def test_type_check_elim_rejects_non_sort_motive : Bool :=
     let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
     let motive : Term := Term.lam binder_anon Term.hole Term.hole in
     let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty List.empty motive
-        (List.cons Term.hole (List.cons Term.hole List.empty)) scrutinee in
+        (case_minors (List.cons Term.hole (List.cons Term.hole List.empty))) scrutinee in
     elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
 
 /// `Bool` declares two constructors; one minor is one short.
@@ -1968,7 +1968,7 @@ def test_type_check_elim_rejects_too_few_minors : Bool :=
     let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
     let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
     let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty List.empty motive
-        (List.cons Term.hole List.empty) scrutinee in
+        (case_minors (List.cons Term.hole List.empty)) scrutinee in
     elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
 
 /// Three minors for `Bool`'s two constructors -- one too many.
@@ -1978,7 +1978,7 @@ def test_type_check_elim_rejects_too_many_minors : Bool :=
     let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
     let motive : Term := Term.lam binder_anon Term.hole (sort_n 0) in
     let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty List.empty motive
-        (List.cons Term.hole (List.cons Term.hole (List.cons Term.hole List.empty))) scrutinee in
+        (case_minors (List.cons Term.hole (List.cons Term.hole (List.cons Term.hole List.empty)))) scrutinee in
     elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
 
 /// A genuinely NON-CONSTANT, DEPENDENT motive: `Fam : Shape -> Type` is a
@@ -2022,7 +2022,7 @@ def fam_local_types_for_elim_tests : List Term := List.cons (named_free_var "Sha
 
 def fam_elim_for_elim_tests (first : Term) (second : Term) : Elim :=
     Elim.mk shape_name_for_elim_tests List.empty List.empty List.empty fam_motive_for_elim_tests
-        (List.cons first (List.cons second List.empty)) (Term.var 0 DebugName.unnamed)
+        (case_minors (List.cons first (List.cons second List.empty))) (Term.var 0 DebugName.unnamed)
 
 #[test]
 def test_type_check_elim_accepts_a_real_dependent_motive : Bool :=
@@ -2117,7 +2117,7 @@ def my_sigma_snd_minor : Term :=
 def test_derive_motive_lets_sigma_snd_shaped_elim_check : Bool :=
     let motive : Term := derive_motive 0 my_sigma_scrutinee_typ my_sigma_expected_type in
     let e : Elim := Elim.mk (NamePath.mk [Identifier.id "MySigma"]) List.empty my_sigma_params List.empty
-        motive (List.cons my_sigma_snd_minor List.empty) my_sigma_p in
+        motive (case_minors (List.cons my_sigma_snd_minor List.empty)) my_sigma_p in
     elim_result_ok (type_check_elim e Term.hole my_sigma_scope my_sigma_local_types empty_locals)
 
 /// No swapped/wrong-motive mutation control here -- confirmed directly,
@@ -2244,7 +2244,7 @@ def my_eq_refl_minor : Term := named_free_var "Marker1"
 #[test]
 def test_type_check_elim_computes_per_constructor_index_not_the_callers_generic_one : Bool :=
     let e : Elim := Elim.mk (NamePath.mk [Identifier.id "MyEq"]) List.empty my_eq_params my_eq_indices
-        my_eq_motive (List.cons my_eq_refl_minor List.empty) my_eq_e in
+        my_eq_motive (case_minors (List.cons my_eq_refl_minor List.empty)) my_eq_e in
     elim_result_ok (type_check_elim e Term.hole my_eq_scope my_eq_local_types empty_locals)
 
 /// The REAL mutation-checked negative control (see the doc comment
