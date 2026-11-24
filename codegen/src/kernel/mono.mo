@@ -87,7 +87,7 @@
 /// plan says it can be.
 use lang::types {
     Binder, Con, Cubical, DebugName, Decl, Def, Elim, Identifier, Literal, MatchCase,
-    Native, NumSuffix, StructLitField, Term, binder_is_explicit, binder_name, term_peel,
+    Native, NumSuffix, StructLitField, Term, binder_is_explicit, binder_name, map_minors, term_peel,
 }
 use lang::typecheck::subst {beta_reduce, term_subst, term_shift}
 use lib::decls {def_body_term, def_name_str, def_param_chain_body, extract_defs}
@@ -685,7 +685,7 @@ def reduce_elim_with (defs : HashMap String Term) (e : Elim) : Elim :=
         params := List.map (fn p => reduce_with defs p) e.params,
         indices := List.map (fn i => reduce_with defs i) e.indices,
         motive := reduce_with defs e.motive,
-        minors := List.map (fn m => reduce_with defs m) e.minors,
+        minors := map_minors (fn (m : Term) => reduce_with defs m) e.minors,
         scrutinee := reduce_with defs e.scrutinee }
 
 // ─── inlining ────────────────────────────────────────────────────────
@@ -795,7 +795,7 @@ def inline_elim (defs : HashMap String Term) (budget : I64) (e : Elim) : Elim :=
         params := List.map (fn p => inline_term defs budget p) e.params,
         indices := List.map (fn i => inline_term defs budget i) e.indices,
         motive := inline_term defs budget e.motive,
-        minors := List.map (fn m => inline_term defs budget m) e.minors,
+        minors := map_minors (fn (m : Term) => inline_term defs budget m) e.minors,
         scrutinee := inline_term defs budget e.scrutinee }
 
 // ─── unresolved references (the inliner's own diagnostic) ────────────

@@ -35,7 +35,7 @@
 ///   whose NAME is what the emitter looks up.
 use lang::types {
     Con, DebugName, Elim, Identifier, Literal, MatchCase, NamePath, NumSuffix, Term,
-    binder_named, sentinel,
+    binder_named, case_minors, sentinel,
 }
 use lib::kernel::detect {KernelDiagnostic}
 use lib::kernel::mono {KernelExtract}
@@ -243,7 +243,7 @@ def test_a_constructor_is_reported : Bool :=
 def test_an_undesugared_elim_is_reported : Bool :=
     let e : Elim :=
         Elim.mk (bare_npath "Bool") List.empty List.empty List.empty Term.hole
-            (List.cons (ref "n") List.empty) (ref "n")
+            (case_minors (List.cons (ref "n") List.empty)) (ref "n")
     in
     reports_exactly "unsupported" (emit_body (Term.elim e))
 

@@ -61,7 +61,7 @@
 
 use lang::types {
     Decl, Def, Elim, Identifier, Literal, MatchCase, NamePath, StructLitField,
-    Term, binder_is_explicit, term_peel,
+    Term, binder_is_explicit, minor_bodies, term_peel,
 }
 use lib::decls {def_attrs, def_body_term, def_name_str, def_param_chain_body, extract_defs}
 use lib::attrs {find_attr_args}
@@ -462,7 +462,7 @@ def struct_field_terms (fields : List StructLitField) : List Term := match field
 /// the minors (the arm bodies). Its `params`/`indices`/`motive` are types and
 /// index values, so they are skipped for the same reason a `pi` is.
 def elim_value_children (e : Elim) : List Term :=
-    List.cons e.scrutinee e.minors
+    List.cons e.scrutinee (minor_bodies e.minors)
 
 // ─── shared: name collection over a body ─────────────────────────────
 
