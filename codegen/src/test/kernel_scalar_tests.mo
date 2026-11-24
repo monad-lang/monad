@@ -90,10 +90,10 @@ def emit_body (body : Term) : KernelBody :=
     emit_kernel_body (ready_shape scalar_n (List.cons MlirType.i64 List.empty)) (ready_extract body)
 
 /// The rule tags a diagnostic list reports, in order.
-def rules_of (ds : List KernelDiagnostic) : List String := List.map (fn d => d.rule) ds
+def rules_of (ds : List KernelDiagnostic) : List String := List.map (fn (d : KernelDiagnostic) => d.rule) ds
 
 def has_rule (rule : String) (ds : List KernelDiagnostic) : Bool :=
-    List.any (fn d => String.beq d.rule rule) ds
+    List.any (fn (d : KernelDiagnostic) => String.beq d.rule rule) ds
 
 /// Emit and report whether the ONLY thing that happened is a finding tagged
 /// `rule` -- the same shape `kernel_detect_tests.mo`'s `reports_exactly` uses.

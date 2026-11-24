@@ -101,10 +101,10 @@ def lam (arg : String) (body : Term) : Term :=
 /// The rule tags a diagnostic list reports, in order. Asserting the TAG is
 /// right and asserting the prose is not: the tag is the stable identifier
 /// (`detect.mo`'s own doc comment), while the prose is copy.
-def rules_of (ds : List KernelDiagnostic) : List String := List.map (fn d => d.rule) ds
+def rules_of (ds : List KernelDiagnostic) : List String := List.map (fn (d : KernelDiagnostic) => d.rule) ds
 
 def has_rule (rule : String) (ds : List KernelDiagnostic) : Bool :=
-    List.any (fn d => String.beq d.rule rule) ds
+    List.any (fn (d : KernelDiagnostic) => String.beq d.rule rule) ds
 
 /// Exactly one diagnostic, and it carries `rule`. Asserting the COUNT as well
 /// as the tag is what catches a rule that fires twice for one construct.

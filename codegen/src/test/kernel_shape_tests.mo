@@ -632,7 +632,7 @@ def kind_letter (s : ParamShape) : String := match s {
 /// is `detect.mo`'s, and pinning it twice would make one edit break two files.
 #[partial]
 def has_rule (ds : List KernelDiagnostic) (rule : String) : Bool :=
-    List.any (fn d => String.beq d.rule rule) ds
+    List.any (fn (d : KernelDiagnostic) => String.beq d.rule rule) ds
 
 #[partial]
 def i64_list_eq (a : List I64) (b : List I64) : Bool := match a {
