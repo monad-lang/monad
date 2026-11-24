@@ -343,6 +343,10 @@ pub def validate_export_defs (kind : TargetKind) (triple : String) (decl_list : 
         TargetKind.native => Result.ok decl_list,
         TargetKind.wasi => Result.ok decl_list,
         TargetKind.web => export_check triple decl_list,
+        // Windows exports a def's own code through the native path exactly as
+        // the host does, so the web profile's JS-addressing rules (single
+        // identifier segment, no dots, no `main`) do not apply.
+        TargetKind.windows => Result.ok decl_list,
     }
 
 #[partial]

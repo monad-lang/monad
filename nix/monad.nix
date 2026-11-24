@@ -180,7 +180,7 @@
       # phase that linked it: `llvm/src/link.mo` compiles `runtime.c` and links
       # through the bare name `clang`, so a user's build with the packaged
       # compiler links with whatever that name finds.
-      installPhaseWith = gc: extraFlag: extraPath: ''
+      installPhaseWith = gc: extraFlag: extraPath: extraWrap: ''
         runHook preInstall
         install -Dm755 "$PWD/monad" $out/share/monad/monad
         makeWrapper $out/share/monad/monad $out/bin/monad \
@@ -190,7 +190,7 @@
           --prefix LIBRARY_PATH : "${lib.getLib gc}/lib" \
           --prefix CPATH : "${lib.getDev gc}/include" \
           --prefix PKG_CONFIG_PATH : "${lib.getDev gc}/lib/pkgconfig" \
-          ${extraFlag}
+          ${extraFlag}${if extraWrap == "" then "" else " \\\n          " + extraWrap}
         runHook postInstall
       '';
 
@@ -442,7 +442,7 @@
           # phase, hooks and all, and `install` needs none of them.
           installPhase = ''
             install -Dm644 "$PWD/monad.ll" $out/share/monad/monad.ll
-            ${installPhaseWith gcStatic "" ""}
+            ${installPhaseWith gcStatic "" "" ""}
           '';
 
           meta = {
@@ -542,6 +542,17 @@
           # clang's `-L` path, which is the only way `-static` finds
           # `libc.a` -- the default glibc output has no archives.
           glibcStatic ? pkgs.glibc.static,
+          # Extra `makeWrapper` arguments for the INSTALLED binary's wrapper,
+          # spliced as the tail of that one backslash-continued command.
+          # Empty for every existing leg, so their wrappers are unchanged.
+          # `.#monad-windows` uses it to `--set MONAD_WINDOWS_CC`.
+          #
+          # It MUST start with a newline and end with one: the flags above it
+          # are a multi-line string ending in a newline, so a value spliced
+          # without its own leading newline lands on the last flag's line and
+          # joins it (`--set MONAD_BUILD_COMMIT unknown--set MONAD_WINDOWS_CC
+          # ...` -- one argument, measured) instead of starting a new one.
+          installWrap ? "",
         }:
         pkgs.stdenv.mkDerivation (
           {
@@ -599,7 +610,7 @@
 
             installPhase = installPhaseWith gc "--set MONAD_BUILD_COMMIT ${commit}" (
               lib.optionalString (ccPath != null) "${ccPath}:"
-            );
+            ) installWrap;
 
             meta = {
               description = "The self-hosted Monad compiler";
@@ -752,6 +763,136 @@
         crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
         triple = "aarch64-unknown-linux-gnu";
         llcFlags = " -mtriple=aarch64-unknown-linux-gnu";
+      };
+
+      # ── Windows (x86_64-pc-windows-gnu) ───────────────────────────────
+      #
+      # The EXPERIMENTAL leg: Monad programs cross-compiled HERE to run THERE.
+      # A Windows-HOSTED compiler is deliberately out of scope; only the
+      # output target exists. See docs/src/windows.md.
+      #
+      # This is not `crossMonadFor`, and the difference is the whole point:
+      # `crossMonadFor` builds a compiler whose own native target IS the cross
+      # triple (aarch64/riscv64 are ELF Linux like the host, so the binary it
+      # emits can be relinked and run under qemu). A Windows build has a
+      # different RUNTIME (`platform_win32.c`), a different link discipline
+      # (no `-pthread`, static Boehm by `-lgc` rather than a named archive)
+      # and a different collector configuration (no `GC_THREADS`: no fibers).
+      # So `monadWindows` is the NATIVE `monadFor` output -- the compiler that
+      # runs here, unchanged -- plus one thing: a `clang` on its PATH that is
+      # the mingw cross cc. That is all `llvm/src/target.mo`'s
+      # `TargetPlan.windows_plan` assumes, and it is the same shimming shape
+      # `crossMonadFor` uses for aarch64/riscv64.
+      #
+      # The shim's three `-L`/`-isystem` flags are the ones a mingw link
+      # cannot find on its own, each measured:
+      #
+      #   * Boehm's `include` (for `<gc.h>`) and `lib` (for `-lgc`).
+      #     `pkgsCross.mingwW64.boehmgc` ships only `libgc.dll.a`; the
+      #     `enableStatic` override adds `libgc.a`, and it is REQUIRED:
+      #     without it the `.exe` imports `libgc-1.dll` and dies at load on a
+      #     machine that has none (`err:module:import_dll Library
+      #     libgc-1.dll ... not found`, exit 53 under wine).
+      #   * mingw's own `libmcfgthread`. binutils on this platform hard-wires
+      #     `-lmcfgthread` into the default link and the nixpkgs wrapper does
+      #     not put the library on its search path, so every link dies with
+      #     `cannot find -lmcfgthread`. nixpkgs spells the attribute
+      #     `pkgsCross.mingwW64.windows.mcfgthreads` -- there is no plain
+      #     `pkgsCross.mingwW64.mcfgthreads`.
+      #
+      # `MONAD_WINDOWS_CC` names the shim rather than `x86_64-w64-mingw32-gcc`
+      # directly so the store paths never become compiler constants: a user on
+      # Debian points it at `apt install gcc-mingw-w64-x86-64` and gets the
+      # same target with their distro's gc.
+      # NOT named `clang`, unlike `crossMonadFor`'s shim, and the difference is
+      # not cosmetic: `crossMonadFor` builds a compiler whose NATIVE target is
+      # the cross triple, so shadowing `clang` globally is what it wants. Here
+      # the native target must keep the host `clang` -- `llvm/src/link.mo` calls
+      # bare `clang` for a native build, which is most of what this compiler
+      # does -- and only the WINDOWS leg should reach mingw. So this lives under
+      # a private name and reaches the compiler through `MONAD_WINDOWS_CC`
+      # (`TargetPlan.windows_cc`), which is the one variable that selects it.
+      windowsShim = pkgs.writeShellScriptBin "monad-windows-gcc" ''
+        exec ${pkgs.pkgsCross.mingwW64.stdenv.cc}/bin/${pkgs.pkgsCross.mingwW64.stdenv.cc.targetPrefix}gcc \
+          -isystem ${windowsGcDev}/include \
+          -L${windowsGc}/lib \
+          -L${pkgs.pkgsCross.mingwW64.windows.mcfgthreads}/lib \
+          "$@"
+      '';
+
+      # The collector the .exe links, built with `enableStatic` for the
+      # reason above. Shared with the shim so the header the runtime compiles
+      # against and the archive it links come from one build.
+      windowsGc = pkgs.pkgsCross.mingwW64.boehmgc.override { enableStatic = true; };
+      windowsGcDev = lib.getDev windowsGc;
+
+      # The Windows-capable compiler: the native one, with `MONAD_WINDOWS_CC`
+      # pointing at the mingw shim. PATH is untouched, which is what keeps a
+      # native build inside this wrapper linking with the host `clang`.
+      #
+      # `checkPhase` proves the claim end to end -- compile a real program to
+      # a PE32+ image and RUN it -- and is gated on `MONAD_WINE`, because wine
+      # is a large dependency nobody building `.#monad-windows` for the binary
+      # needs. The structural half (PE32+ header, and no `libgc` import) always
+      # runs: those are the two properties a wrong link line breaks, and they
+      # hold without an emulator.
+      monadWindows = monadFor {
+        # The compiler itself is the NATIVE build: same gc, same flags, same
+        # pinned host as `.#monad`. Nothing about it changes -- only the
+        # wrapper below gains one variable.
+        #
+        # `installWrap` is the splice that lets this leg add one
+        # `makeWrapper` argument without a second copy of `installPhaseWith`.
+        # `windowsGc` is named only because the phase takes a collector; the
+        # compiler this wraps is the native build and links the native one.
+        installWrap = ''
+            --set MONAD_WINDOWS_CC ${windowsShim}/bin/monad-windows-gcc
+        '';
+
+        checkPhase = ''
+          runHook preCheck
+
+          export MONAD_WINDOWS_CC="${windowsShim}/bin/monad-windows-gcc"
+
+          cat > winprobe.mo <<'EOF_PROBE'
+          #![mote { name := "winprobe", deps := [init] }]
+
+          open IO {println}
+
+          #[decreasing n]
+          def grow (n : I64) (s : String) : String :=
+              if I64.lt n 1 then s else grow (n - 1) (s ++ "xxxxxxxxxxxxxxxxxxxx")
+
+          def main (args : List String) : IO Unit :=
+              println (grow 3000 "winprobe-ok")
+          EOF_PROBE
+
+          "$PWD/monad" build winprobe.mo --target x86_64-pc-windows-gnu -o "$PWD/winprobe"
+
+          # The two structural claims, and neither needs an emulator.
+          #
+          # 1. It is a PE32+ x86-64 image, not an ELF that happens to be
+          #    called `.exe`. `file` says so in one line.
+          file "$PWD/winprobe.exe" | grep -q 'PE32+ executable'
+          # 2. It imports no gc DLL. A `-static` link of `-lgc` is what makes
+          #    that true, and the failure it prevents is a load-time abort on
+          #    a machine with no libgc-1.dll -- which no exit-status check can
+          #    see, since the process never starts.
+          ! ${pkgs.pkgsCross.mingwW64.stdenv.cc}/bin/${pkgs.pkgsCross.mingwW64.stdenv.cc.targetPrefix}objdump               -p "$PWD/winprobe.exe" | grep -qi 'DLL Name: libgc'
+
+          # The behavioural half, only where wine is available. Asserted on
+          # STDOUT rather than the exit status, the same way `crossMonadFor`
+          # does it: a crash leaves the marker missing, which is the claim.
+          if [ -n "''${MONAD_WINE:-}" ]; then
+            "$MONAD_WINE" "$PWD/winprobe.exe" > winprobe.out || true
+            grep -q '^winprobe-ok' winprobe.out
+            # 3000 appends of 20 bytes: a collector that is not collecting, or
+            # a recursion that did not finish, cannot reach this.
+            test "$(wc -c < winprobe.out)" -gt 60000
+          fi
+
+          runHook postCheck
+        '';
       };
 
       # The riscv64-linux output, published as experimental: it is the one
@@ -968,6 +1109,11 @@
         monad-riscv64-linux = monadRiscv64Linux;
         monadup-aarch64-linux = monadupAarch64Linux;
         monadup-riscv64-linux = monadupRiscv64Linux;
+        # Cross-OUTPUT only: this binary runs on x86_64-linux and emits
+        # Windows PE images. It is here rather than under `packages` because
+        # building it pulls pkgsCross.mingwW64 in, which the plain `.#monad`
+        # has no reason to evaluate.
+        monad-windows = monadWindows;
       };
 
       apps.monad = app;

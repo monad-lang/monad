@@ -15,7 +15,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#if !defined(MONAD_TARGET_WASI) && !defined(MONAD_TARGET_WEB)
+/* Windows is a POINTER-WORD target (`rt_word` is `void*`), like the host:
+   its ABI words are 64-bit pointers exactly as LP64's are, so it belongs on
+   the native side of every `rt_*` split below and NOT with the wasm blocks.
+   Only the runtime PLATFORM differs (`runtime.c` picks platform_win32.c);
+   the word ABI is the host's. */
+#if !defined(MONAD_TARGET_WASI) && !defined(MONAD_TARGET_WEB) && !defined(MONAD_TARGET_WINDOWS)
 #define MONAD_TARGET_NATIVE 1
 #endif
 
@@ -134,7 +139,11 @@ enum MonadAllocKind {
     MONAD_STAT_OWNED_FREE,
     MONAD_STAT_KIND_COUNT,
 };
-#ifdef MONAD_TARGET_NATIVE
+/* Every pointer-word target has the counters (both platform_* blocks install
+   them and print at exit); only the wasm profiles compile the call sites
+   away, because they have no `getenv`/`atexit` contract and the counters
+   would be process-local numbers nobody can print. */
+#ifndef MONAD_TARGET_WASM
 void monad_alloc_stats_note(int kind, rt_size bytes);
 #define MONAD_STAT(kind, bytes) monad_alloc_stats_note((int)(kind), (rt_size)(bytes))
 #else

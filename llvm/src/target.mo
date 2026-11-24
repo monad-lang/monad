@@ -24,6 +24,21 @@
 // Handing such a wrapper `--target=` fights it: nixpkgs' own cc-wrapper
 // refuses outright on riscv64 with "unsupported option
 // '-fzero-call-used-regs=used-gpr' for target 'riscv64-unknown-linux-gnu'".
+//
+// WINDOWS IS A DELIBERATE EXCEPTION, and for the same reason wasi-sdk is one:
+// a mingw cc IS the target toolchain rather than a nixpkgs cc-wrapper being
+// shimmed, so there is no `--target=` it would fight. It is addressed by the
+// bare name `x86_64-w64-mingw32-gcc` (or whatever `MONAD_WINDOWS_CC` names)
+// instead of by an absolute path, because unlike wasi-sdk there is no SDK
+// root to point at: the cross cc is either on PATH or it is not, and "not" is
+// the `missing_cc_message` diagnostic rather than a `command not found`
+// twenty seconds into a link.
+//
+// The directories a mingw link cannot find on its own -- Boehm's `include`
+// (for `<gc.h>`) and its `lib` (for `-lgc`), plus mingw's own
+// `-lmcfgthread` -- reach the cc as ARGV from a shim (nix/monad.nix's
+// `windowsShim`), exactly as `crossMonadFor` does it for aarch64/riscv64.
+// Store paths are the shim's business and never this file's.
 
 use std::process {Proc.capture}
 use std::io {IO.get_env}
@@ -61,6 +76,18 @@ pub def TargetSpec.known_targets : List TargetSpec := [
     TargetSpec.mk "x86_64-unknown-linux-gnu" "" List.empty 64,
     TargetSpec.mk "aarch64-unknown-linux-gnu" "" List.empty 64,
     TargetSpec.mk "aarch64-apple-darwin" "" List.empty 64,
+    // Windows x86_64: the experimental OUTPUT target (compile here, run
+    // there). llc's target is `x86_64-pc-windows-gnu`, the same spelling
+    // mingw-w64's clang reports, so the header is the whole target selection
+    // and `llc_triple` is empty -- llc needs no ABI flags either (the
+    // Windows x64 calling convention is the only one). 64-bit pointers, like
+    // every other non-wasm entry.
+    //
+    // It is a table entry rather than an `unvalidated` acceptance so that
+    // `monad print-targets` lists it, `TargetSpec.keep_triples` spares its
+    // build-cache entries, and `--target x86_64-pc-windows-gnu` costs no
+    // `clang --print-target-triple` fork.
+    TargetSpec.mk "x86_64-pc-windows-gnu" "" List.empty 64,
     TargetSpec.mk "riscv64gc-unknown-linux-gnu" "riscv64-unknown-linux-gnu" [
         "-mattr=+m,+a,+f,+d,+c", "-target-abi=lp64d", "-relocation-model=pic",
     ] 64,
@@ -90,24 +117,38 @@ def pointer_bits_in (targets : List TargetSpec) (triple : String) : I64 :=
             if String.beq t.triple triple then t.pointer_bits else pointer_bits_in rest triple
     }
 
-/// The two wasm profiles behind the wasm triples. Everything else is the
-/// host's native target. The `Copy` instance is manual for the
-/// Rust-host-capture reason `llvm/src/ir.mo`'s `DbgLoc` gives.
+/// The target families the compiler knows, by what their RUNTIME and LINK
+/// need rather than by which machine they name.
+///
+/// `windows` is a fourth kind rather than an arm of `native` because every
+/// `TargetKind.native` site in the tree means "the host's own POSIX/Boehm/PIE
+/// link": `llvm/src/link.mo`'s `compile_runtime_obj_for` and
+/// `link_objects_for`, `codegen/src/validate.mo`'s export gate, and
+/// `codegen/src/natives.mo`'s availability table. A Windows build differs
+/// from it on all three counts -- a mingw cc instead of `clang`, a static
+/// `.exe` instead of an ELF, and a runtime with no pthreads -- so classifying
+/// it as `native` would make each of those `match`es silently answer for the
+/// wrong platform.
+///
+/// The `Copy` instance is manual for the Rust-host-capture reason
+/// `llvm/src/ir.mo`'s `DbgLoc` gives.
 pub type TargetKind {
     native,
     wasi,
     web,
+    windows,
 }
 
 pub instance Copy TargetKind {
     def copy (k : TargetKind) : Pair TargetKind TargetKind := Pair.pair k k
 }
 
-/// `kind`'s name in diagnostics (`native`, `wasi`, `web`).
+/// `kind`'s name in diagnostics (`native`, `wasi`, `web`, `windows`).
 pub def TargetKind.name (kind : TargetKind) : String := match kind {
     TargetKind.native => "native",
     TargetKind.wasi => "wasi",
     TargetKind.web => "web",
+    TargetKind.windows => "windows",
 }
 
 /// Whether `kind` is one of the wasm profiles.
@@ -115,21 +156,34 @@ pub def TargetKind.is_wasm (kind : TargetKind) : Bool := match kind {
     TargetKind.native => false,
     TargetKind.wasi => true,
     TargetKind.web => true,
+    TargetKind.windows => false,
 }
 
 /// Classify a resolved triple. Any `wasm*` spelling is a wasm profile --
 /// non-`wasm32` ones are then rejected by `TargetPlan.resolve` rather than
-/// silently treated as native and linked with the host toolchain.
+/// silently treated as native and linked with the host toolchain. A
+/// `*windows*` spelling is the mingw output target.
+///
+/// Both `windows` and `mingw` are matched because the two spellings are in
+/// use: the toolchain triple is `x86_64-pc-windows-gnu`, while the cross cc
+/// (and nixpkgs' attribute for it, `pkgsCross.mingwW64`) says
+/// `x86_64-w64-mingw32`. `TargetSpec.names` accepts either spelling of a
+/// table entry, so a user may type the second and must still land on
+/// `TargetKind.windows` rather than on the host's native link.
 pub def TargetKind.of_triple (triple : String) : TargetKind :=
     if String.starts_with "wasm" triple
     then if String.contains triple "wasi" then TargetKind.wasi else TargetKind.web
+    else if String.contains triple "windows" then TargetKind.windows
+    else if String.contains triple "mingw" then TargetKind.windows
     else TargetKind.native
 
-/// The output suffix for `kind` (`.wasm` for both wasm profiles).
+/// The output suffix for `kind` (`.wasm` for both wasm profiles, `.exe` for
+/// Windows, none for the host's own target).
 pub def TargetKind.output_ext (kind : TargetKind) : String := match kind {
     TargetKind.native => "",
     TargetKind.wasi => ".wasm",
     TargetKind.web => ".wasm",
+    TargetKind.windows => ".exe",
 }
 
 /// Everything `llvm/src/link.mo` needs to know about a target beyond the
@@ -186,6 +240,58 @@ pub def TargetPlan.for_wasm (kind : TargetKind) (triple : String) (clang : Strin
                 "-Wl,--export=monad_i64_to_string", "-Wl,-z,stack-size=33554432"]
             ["-DMONAD_TARGET_WEB"] (TargetKind.output_ext kind),
         TargetKind.native => TargetPlan.native_plan triple,
+        TargetKind.windows => TargetPlan.windows_plan triple "x86_64-w64-mingw32-gcc",
+    }
+
+/// The plan for the Windows output target, addressed through a mingw cc.
+///
+/// No `--target=` and no sysroot: a mingw `x86_64-w64-mingw32-gcc` carries
+/// both, which is why `link.mo` hands it the runtime and the objects with no
+/// target flag at all (the rule at the head of this file, which windows is an
+/// exception to only in the sense that its cc IS the target toolchain).
+///
+/// The flags are the ones measured to produce a self-contained `.exe` that
+/// runs on Windows with no install step -- the same property the Linux
+/// nightly buys with `-static`:
+///
+///   * `-static` links mingw's runtime (libgcc, mcfgthread, the CRT) into
+///     the image, so the `.exe` depends only on KERNEL32.dll and msvcrt.dll.
+///     Without it `libgc-1.dll` becomes a runtime dependency and the binary
+///     dies at load on a machine that has no such DLL -- measured under wine
+///     as `err:module:import_dll Library libgc-1.dll ... not found`, exit 53.
+///   * `-Wl,--stack=33554432` is the `monad_stack_bytes` default
+///     (`runtime/src/platform_posix.c`), which Windows has to be TOLD: there
+///     is no `setrlimit`, and the image header's `SizeOfStackReserve` is the
+///     whole answer. 32 MiB matches the POSIX runtime's fiber stack, which is
+///     a 4x margin over the deepest recursion anything has measured.
+///   * `-DMONAD_TARGET_WINDOWS` selects `platform_win32.c` in
+///     `runtime/src/runtime.c`.
+///
+/// `gcLink` is NOT part of a plan: `llvm/src/link.mo` adds `-lgc` for the
+/// native kind only, and a mingw link reaches Boehm through whatever `-L` its
+/// shim carries (nix/monad.nix's `windowsShim`). Keeping the archive path out
+/// of here is what stops a store path from becoming a compiler constant.
+pub def TargetPlan.windows_plan (triple : String) (cc : String) : TargetPlan :=
+    TargetPlan.mk TargetKind.windows triple cc
+        ["-DMONAD_TARGET_WINDOWS"]
+        ["-DMONAD_TARGET_WINDOWS", "-static", "-Wl,--stack=33554432"]
+        ["-DMONAD_TARGET_WINDOWS"] (TargetKind.output_ext TargetKind.windows)
+
+/// The C compiler a Windows build addresses. `MONAD_WINDOWS_CC` wins, and
+/// the default is the cross cc's conventional name.
+///
+/// There is no "SDK root" half, unlike `web_cc`: mingw-w64 has no single
+/// directory a compiler could be composed from, and every toolchain that
+/// installs it either puts `x86_64-w64-mingw32-gcc` on PATH or leaves the
+/// whole thing absent. An empty override reads as unset, the same convention
+/// `web_cc` uses, so a shell that exports `MONAD_WINDOWS_CC=""` does not
+/// silently try to execute "" as a compiler.
+pub def TargetPlan.windows_cc (override : Option String) : String :=
+    match override {
+        Option.some raw =>
+            let cc : String := String.trim raw in
+            if String.is_empty cc then "x86_64-w64-mingw32-gcc" else cc,
+        Option.none => "x86_64-w64-mingw32-gcc",
     }
 
 /// The C compiler the web profile uses. `MONAD_WEB_CC` wins; otherwise
@@ -217,12 +323,24 @@ def TargetPlan.web_cc_sdk (sdk_root : Option String) : String :=
     }
 
 /// The plan for `spec`. Native and web resolve without requiring
-/// `WASI_SDK_PATH`; the WASI profile requires it.
+/// `WASI_SDK_PATH`; the WASI profile requires it, and Windows requires a
+/// mingw cc to be reachable.
 #[partial]
 pub def TargetPlan.resolve (spec : TargetSpec) : IO (Result String TargetPlan) := do {
     let kind := TargetKind.of_triple spec.triple;
     match kind {
         TargetKind.native => return (Result.ok (TargetPlan.native_plan spec.triple)),
+        TargetKind.windows => do {
+            let override <- IO.get_env "MONAD_WINDOWS_CC";
+            let cc : String := TargetPlan.windows_cc override;
+            let cap <- Proc.capture cc ["--version"];
+            match cap {
+                Pair.pair code _out =>
+                    if code == 0
+                    then return (Result.ok (TargetPlan.windows_plan spec.triple cc))
+                    else return (Result.err (TargetPlan.missing_cc_message spec.triple cc)),
+            }
+        },
         TargetKind.web =>
             if Bool.not (TargetPlan.is_supported_wasm_triple spec.triple)
             then return (Result.err (TargetPlan.unsupported_wasm_message spec.triple))
@@ -279,6 +397,15 @@ def TargetPlan.missing_sdk_message (triple : String) (kind : TargetKind) : Strin
 #[partial]
 def TargetPlan.bad_sdk_message (root : String) (clang : String) : String :=
     "error: WASI_SDK_PATH=`" ++ root ++ "` does not name a wasi-sdk installation: `" ++ clang ++ "` is not executable."
+
+/// The diagnostic for a Windows build whose cross cc is not there. It has to
+/// name the variable, the conventional package that supplies it, and the
+/// distinction that matters to whoever reads it: a Windows-hosted `monad` is
+/// not what this builds, so "just install the Windows nightly" is not an
+/// answer to it.
+#[partial]
+pub def TargetPlan.missing_cc_message (triple : String) (cc : String) : String :=
+    "error: target `" ++ triple ++ "` (" ++ TargetKind.name TargetKind.windows ++ ") needs a mingw-w64 cross compiler, but `" ++ cc ++ "` is not executable. Install mingw-w64 (Debian/Ubuntu: `apt install gcc-mingw-w64-x86-64`; nix: the dev shell's `pkgsCross.mingwW64.stdenv.cc`, which `nix build .#monad-windows` wires up), or set `MONAD_WINDOWS_CC` to the compiler to use. The compiler still RUNS on this machine: `--target` only chooses what the output binary is for."
 
 /// `name` with `kind`'s output suffix, unless it already has it. The one
 /// place the suffix rule lives; the CLI and the linker both call this.
@@ -727,6 +854,74 @@ def test_target_kind_of_triple : Bool :=
     String.beq (TargetKind.name (TargetKind.of_triple "wasm32-unknown-wasip1")) "wasi"
         && String.beq (TargetKind.name (TargetKind.of_triple "wasm32-unknown-unknown")) "web"
         && String.beq (TargetKind.name (TargetKind.of_triple "x86_64-unknown-linux-gnu")) "native"
+
+/// Both Windows spellings land on the windows kind. The toolchain triple is
+/// `x86_64-pc-windows-gnu`; the cross cc (and nixpkgs' attribute) says
+/// `x86_64-w64-mingw32`, and a user may type either -- neither may fall
+/// through to `native`, which would link a PE object with the host's ELF
+/// linker and fail with an error that names neither the target nor the flag.
+#[test]
+def test_windows_spellings_are_the_windows_kind : Bool :=
+    String.beq (TargetKind.name (TargetKind.of_triple "x86_64-pc-windows-gnu")) "windows"
+        && String.beq (TargetKind.name (TargetKind.of_triple "x86_64-w64-mingw32")) "windows"
+        && Bool.not (TargetKind.is_wasm TargetKind.windows)
+
+/// A windows build's output is a `.exe`, and the suffix is applied once. The
+/// `native` arm still answers "" -- windows must not have changed that, since
+/// every host build's output name depends on it.
+#[test]
+def test_windows_output_gets_an_exe_suffix_once : Bool :=
+    String.beq (TargetKind.output_ext TargetKind.windows) ".exe"
+        && String.beq (TargetPlan.output_name (TargetPlan.windows_plan "x86_64-pc-windows-gnu" "cc") "hello") "hello.exe"
+        && String.beq (TargetPlan.output_name (TargetPlan.windows_plan "x86_64-pc-windows-gnu" "cc") "hello.exe") "hello.exe"
+        && String.beq (TargetPlan.output_name (TargetPlan.native_plan "x86_64-unknown-linux-gnu") "hello") "hello"
+
+/// The windows plan carries the runtime define on BOTH the compile and the
+/// link, because `platform_win32.c` is selected by it at compile time while
+/// the link is what must not pull `-lgc` dynamically. `-static` is what makes
+/// the `.exe` self-contained: measured, without it the image imports
+/// libgc-1.dll and dies at load on a machine that has none.
+#[test]
+def test_windows_plan_is_static_and_self_contained : Bool :=
+    let plan := TargetPlan.windows_plan "x86_64-pc-windows-gnu" "x86_64-w64-mingw32-gcc" in
+    String.beq plan.clang "x86_64-w64-mingw32-gcc"
+        && String.beq plan.triple "x86_64-pc-windows-gnu"
+        && String.beq plan.output_ext ".exe"
+        && List.length plan.compile_flags == 1
+        && (match plan.link_flags {
+            List.cons _ rest => List.length rest == 2,
+            List.empty => false,
+        })
+
+/// `MONAD_WINDOWS_CC` wins, and an empty value reads as unset rather than as
+/// a request to execute "" as a compiler.
+#[test]
+def test_windows_cc_precedence : Bool :=
+    String.beq (TargetPlan.windows_cc (Option.some "/x/cc")) "/x/cc"
+        && String.beq (TargetPlan.windows_cc (Option.some "   ")) "x86_64-w64-mingw32-gcc"
+        && String.beq (TargetPlan.windows_cc (Option.some "/x/cc ")) "/x/cc"
+        && String.beq (TargetPlan.windows_cc Option.none) "x86_64-w64-mingw32-gcc"
+
+/// The windows table entry is a plain header-carried target: no `-mtriple`, no
+/// ABI flags. llc's own x86-64 default IS the Windows x64 calling convention,
+/// so anything here would be a second spelling of the same fact.
+#[test]
+def test_windows_entry_is_flagfree : Bool :=
+    let t := TargetSpec.table_or "x86_64-pc-windows-gnu" in
+    List.is_empty (TargetSpec.llc_argv t)
+        && I64.beq t.pointer_bits 64
+        && String.beq (TargetKind.name (TargetKind.of_triple t.triple)) "windows"
+
+/// The diagnostic names the variable it read and the compiler it could not
+/// run, and says out loud that the compiler itself still runs here -- the
+/// deferred half of the experiment is a Windows-HOSTED compiler, not this.
+#[test]
+def test_missing_cc_message_names_the_variable_and_the_cc : Bool :=
+    let m := TargetPlan.missing_cc_message "x86_64-pc-windows-gnu" "x86_64-w64-mingw32-gcc" in
+    String.contains m "MONAD_WINDOWS_CC"
+        && String.contains m "x86_64-w64-mingw32-gcc"
+        && String.contains m "windows"
+        && String.contains m "still RUNS on this machine"
 
 #[test]
 def test_wasm_aliases_resolve_to_a_known_entry : Bool :=

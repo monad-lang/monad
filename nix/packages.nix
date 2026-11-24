@@ -160,5 +160,30 @@ in
     # refreshes its PR with `gh`; the runner host carries no gh of its own, and
     # the step enters through `nix develop` for exactly the reason above.
     gh
+
+    # ── The Windows cross-OUTPUT toolchain ──────────────────────────────
+    #
+    # `scripts/check-windows-target.sh` and `.github/workflows/
+    # windows-experiment.yml` compile Monad programs to Windows PE images, and
+    # these are what that needs on PATH. They are here rather than only in
+    # `nix/monad.nix`'s derivations because the GATE runs from the shell.
+    #
+    # The cc, its binutils (objdump reads the import table) and its Boehm GC.
+    # `wine` runs the resulting `.exe`, which is what turns the gate's
+    # structural checks into behavioural ones. `file` above reads the image
+    # kind.
+    #
+    # NOT wired into `MONAD_WINDOWS_CC` here: a bare `x86_64-w64-mingw32-gcc`
+    # cannot find `<gc.h>` or `-lgc` (mingw has no system gc) and needs
+    # `-lmcfgthread`'s directory, so the usable invocation is the shim
+    # `nix/monad.nix` builds -- and `.#monad-windows` already carries it in its
+    # wrapper. A developer who wants to try the target by hand points
+    # MONAD_WINDOWS_CC at that shim, which the docs show how to construct.
+    pkgsCross.mingwW64.stdenv.cc
+    (pkgsCross.mingwW64.boehmgc.override { enableStatic = true; })
+    # wine's own build is on the binary cache for x86_64-linux; `wine` here is
+    # the wow64 wrapper (one binary that runs 32- and 64-bit images), which is
+    # what the PE32+ fixtures need.
+    wine
   ];
 }

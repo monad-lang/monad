@@ -66,3 +66,68 @@ def test_web_gates_float_formatting : Bool :=
             NativeAvailability.available => true,
             NativeAvailability.unavailable _ => false,
         }
+
+/// The Windows target is CORE ONLY, and this is the half of that claim that
+/// matters most: every concurrency primitive is refused, because each one is
+/// an OS thread on POSIX with no honest single-threaded substitute.
+#[test]
+def test_windows_gates_threads_processes_and_sockets : Bool :=
+    match native_target_availability TargetKind.windows "fork_io" {
+        NativeAvailability.unavailable _ => true,
+        NativeAvailability.available => false,
+    }
+        && match native_target_availability TargetKind.windows "channel_put" {
+            NativeAvailability.unavailable _ => true,
+            NativeAvailability.available => false,
+        }
+        && match native_target_availability TargetKind.windows "proc_spawn" {
+            NativeAvailability.unavailable _ => true,
+            NativeAvailability.available => false,
+        }
+        && match native_target_availability TargetKind.windows "tcp_connect_timeout" {
+            NativeAvailability.unavailable _ => true,
+            NativeAvailability.available => false,
+        }
+        && match native_target_availability TargetKind.windows "stream_open" {
+            NativeAvailability.unavailable _ => true,
+            NativeAvailability.available => false,
+        }
+        && match native_target_availability TargetKind.windows "inotify_init" {
+            NativeAvailability.unavailable _ => true,
+            NativeAvailability.available => false,
+        }
+
+/// ...and the half that makes the target useful. Everything a console program
+/// over the three standard descriptors needs stays available, INCLUDING the
+/// sys floor and `sleep_io` -- both of which the wasm profiles refuse, so this
+/// also pins the list as deliberately NOT an alias of `wasm_os_only_natives`.
+#[test]
+def test_windows_keeps_the_console_clock_and_sys_floor : Bool :=
+    match native_target_availability TargetKind.windows "print_str" {
+        NativeAvailability.available => true,
+        NativeAvailability.unavailable _ => false,
+    }
+        && match native_target_availability TargetKind.windows "read_stdin_exact" {
+            NativeAvailability.available => true,
+            NativeAvailability.unavailable _ => false,
+        }
+        && match native_target_availability TargetKind.windows "stream_write" {
+            NativeAvailability.available => true,
+            NativeAvailability.unavailable _ => false,
+        }
+        && match native_target_availability TargetKind.windows "clock_now" {
+            NativeAvailability.available => true,
+            NativeAvailability.unavailable _ => false,
+        }
+        && match native_target_availability TargetKind.windows "sleep_io" {
+            NativeAvailability.available => true,
+            NativeAvailability.unavailable _ => false,
+        }
+        && match native_target_availability TargetKind.windows "sys_int" {
+            NativeAvailability.available => true,
+            NativeAvailability.unavailable _ => false,
+        }
+        && match native_target_availability TargetKind.windows "sys_dir_open" {
+            NativeAvailability.available => true,
+            NativeAvailability.unavailable _ => false,
+        }

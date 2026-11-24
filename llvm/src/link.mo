@@ -67,6 +67,16 @@ pub def compile_runtime_obj (runtime_c : Path) (extra_flags : List String) (obj_
 pub def compile_runtime_obj_for (plan : TargetPlan) (runtime_c : Path) (extra_flags : List String) (obj_path : Path) : IO I64 := do {
     match plan.kind {
         TargetKind.native => compile_runtime_obj runtime_c extra_flags obj_path,
+        // Byte-identical to the `_` arm ON PURPOSE: a mingw cc already emits
+        // PE for `-c`, so the plan's defines are the whole difference from a
+        // native compile. It is written out rather than folded in because the
+        // `-c` step is where a cross link goes wrong without saying so -- a
+        // HOST cc producing an ELF runtime object here links against llc's PE
+        // program object and dies with `error: 0-bit reloc in dll` on every
+        // `.pdata`/`.xdata` entry, which names neither the target nor the
+        // cause. Spelling the arm out makes the next reader look at it.
+        TargetKind.windows => exec_cmd plan.clang (List.append ["-c", Path.to_string runtime_c]
+            (List.append plan.compile_flags (List.append plan.runtime_defines (List.append extra_flags ["-o", Path.to_string obj_path])))),
         _ => exec_cmd plan.clang (List.append ["-c", Path.to_string runtime_c]
             (List.append plan.compile_flags (List.append plan.runtime_defines (List.append extra_flags ["-o", Path.to_string obj_path])))),
     }
@@ -105,6 +115,17 @@ pub def link_objects (objs : List Path) (output : Path) (extra_flags : List Stri
 pub def link_objects_for (plan : TargetPlan) (objs : List Path) (output : Path) (extra_flags : List String) : IO I64 := do {
     match plan.kind {
         TargetKind.native => link_objects objs output extra_flags,
+        // `-lgc` is added explicitly here, and only its NAME: the archive is
+        // found through whatever `-L` the mingw cc wrapper carries (nix's
+        // `windowsShim`), so no store path becomes a compiler constant.
+        // `-static` from the plan makes that archive link into the image
+        // instead of becoming a `libgc-1.dll` load-time dependency -- without
+        // it the `.exe` dies under wine with `import_dll Library libgc-1.dll
+        // ... not found`. `-pthread` is absent: there are no threads here, and
+        // mingw has no such library.
+        TargetKind.windows => exec_cmd plan.clang (List.append plan.link_flags
+            (List.append (List.map (fn (p : Path) => Path.to_string p) objs)
+                (List.append ["-lgc"] (List.append extra_flags ["-o", Path.to_string output])))),
         _ => exec_cmd plan.clang (List.append plan.link_flags
             (List.append (List.map (fn (p : Path) => Path.to_string p) objs)
                 (List.append extra_flags ["-o", Path.to_string output]))),
@@ -311,7 +332,14 @@ pub def build_commit_define (from_env : Option String) (compiler_commit : String
 /// malloc heap is never freed into, so drop glue there is refused.
 priv def ownership_unsupported (kind : TargetKind) : Bool := match kind {
     TargetKind.wasi => true,
-    _ => false,
+    // Windows' allocator is Boehm (`platform_win32.c` forwards the Owned half
+    // exactly as the default native build does), so a `MONAD_OWNERSHIP` build
+    // there would emit `monad_owned_free` calls with nothing to free into --
+    // the same reason wasi is refused. Refusing it here makes that a clear
+    // `#error` rather than a silently leaky binary.
+    TargetKind.windows => true,
+    TargetKind.native => false,
+    TargetKind.web => false,
 }
 
 /// The runtime-object defines for `$MONAD_OWNERSHIP` (ownership phase 1).

@@ -1,0 +1,156 @@
+name: Windows experiment
+
+# The experimental Windows OUTPUT target: a compiler (running on x86_64-linux)
+# that emits Windows x86_64 PE images, plus one `.exe` it produced, with a
+# `windows-experiment-<date>-<rev>` tag.
+#
+# Why a separate workflow rather than another leg of `nightly.yml`:
+#
+#   * The tag name is the whole safety story. `scripts/monadup` selects
+#     installable releases with `startswith("nightly-")`, so a tag that begins
+#     `windows-experiment-` can never be picked up by `monadup default` on
+#     someone's machine. Publishing this under a nightly tag would hand a
+#     core-only compiler to anyone with the Windows asset missing and no
+#     warning.
+#   * The artifact is not a Windows-hosted compiler. A nightly publishes a
+#     binary that RUNS on the platform it names; this publishes one that runs
+#     on x86_64-linux and emits for Windows. Compiling ON Windows is out of
+#     scope -- see docs/src/windows.md.
+#   * Its verification needs pkgsCross.mingwW64, which `.#monad` has no reason
+#     to evaluate, and wine, which the nightly's runners do not carry.
+#
+# It runs on workflow_dispatch only, and on a schedule, so it never gates
+# `main` -- an experiment that breaks should not turn the tree red.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly rather than nightly: this artifact moves far more slowly than the
+    # compiler does, and a red experiment every night trains people to ignore it.
+    - cron: "0 5 * * 1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-experiment-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DEVENV_SKIP_TASKS: "1"
+
+jobs:
+  windows-experiment:
+    if: github.repository == 'monad-lang/monad'
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      # `tag`/`date`/`rev` name the release; computed here so the artifact and
+      # the tag cannot disagree about which night this is.
+      - name: Name this run
+        id: name
+        run: |
+          set -eu
+          date=$(date -u +%Y-%m-%d)
+          rev=$(git rev-parse --short HEAD)
+          echo "tag=windows-experiment-$date-$rev" >> "$GITHUB_OUTPUT"
+          echo "date=$date" >> "$GITHUB_OUTPUT"
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+
+      # `nix develop` and not plain nix: the gate needs the mingw cross cc, its
+      # boehm-gc build and wine on PATH, and the dev shell is what pins them
+      # (nix/packages.nix). `pnpm`-free and host-free, so this is the cheap
+      # entry.
+      - name: Build, verify and package
+        env:
+          # wine is what turns the structural checks into behavioural ones. It
+          # is in the dev shell already; naming it here is the belt.
+          MONAD_WINE: wine
+        run: |
+          nix develop --no-pure-eval --accept-flake-config -c \
+            scripts/windows-release.sh dist
+
+      # The gate is separate from the release script on purpose: the script
+      # proves the ARTIFACT (a PE32+ image that runs), the gate proves the
+      # TARGET (four fixtures, the suffix rule, the native gate for every
+      # refused family, and that a native build is unaffected). A release whose
+      # gate fails should still be inspectable, so it is uploaded either way --
+      # but the job goes red, which is the signal.
+      - name: Gate the target
+        run: |
+          nix develop --no-pure-eval --accept-flake-config -c \
+            env MONAD_WINE=wine \
+            scripts/check-windows-target.sh "$(nix build --no-link --print-out-paths --accept-flake-config .#monad-windows)/bin/monad"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: monad-windows-experiment
+          path: |
+            dist/monad-windows-*.tar.gz
+            dist/hello-windows-*.exe
+            dist/windows-*.sha256
+            dist/windows-commit.txt
+          if-no-files-found: error
+
+      - name: Write the release notes
+        run: |
+          set -eu
+          notes="$PWD/release-notes.md"
+          {
+            echo '**Experimental.** A compiler that cross-compiles Monad to Windows'
+            echo 'x86_64, and a program it built.'
+            echo
+            echo "Commit: ${GITHUB_SHA}"
+            echo
+            echo '`monad-windows-<date>.tar.gz` holds `monad`, which **runs on'
+            echo 'x86_64-linux**. It is not a Windows-hosted compiler: compiling ON'
+            echo 'Windows is deliberately out of scope. Use it like this:'
+            echo
+            echo '```'
+            echo './monad build prog.mo --target x86_64-pc-windows-gnu -o prog'
+            echo '```'
+            echo
+            echo 'The result is `prog.exe`, a self-contained PE32+ image that'
+            echo 'imports only KERNEL32/msvcrt -- no Monad runtime DLL to ship.'
+            echo
+            echo 'The shipped binary carries `MONAD_WINDOWS_CC`, pointing at the'
+            echo 'nix store path of the mingw shim it was built with. Off this'
+            echo 'machine, set it yourself:'
+            echo
+            echo '```'
+            echo "MONAD_WINDOWS_CC='x86_64-w64-mingw32-gcc -isystem /gc/include -L/gc/lib' \\"
+            echo '  ./monad build prog.mo --target x86_64-pc-windows-gnu -o prog'
+            echo '```'
+            echo
+            echo '**Core only.** This works: allocation, `IO.println`/`read_line`/'
+            echo '`write_stdout` on fds 0/1/2, the clock and `IO.sleep`, file'
+            echo 'existence/size/listing and the environment (`std`'"'"'s sys floor),'
+            echo 'and `process_id`. This does NOT, and says so at compile time'
+            echo 'rather than failing at link or at run: fibers (`fork_io`,'
+            echo '`await`, scopes, channels), processes (`proc_spawn`), TCP, file'
+            echo 'streams (`stream_open`), `stream_poll`/`seek`, the terminal, and'
+            echo 'inotify. Each is a named error on this target.'
+            echo
+            echo '`hello-windows-<date>.exe` is a Monad program built with this'
+            echo 'compiler, included so the claim can be checked by running it.'
+            echo
+            echo 'See `docs/src/windows.md` for what the target covers and'
+            echo '`scripts/check-windows-target.sh` for how it is verified.'
+          } > "$notes"
+          cat "$notes"
+
+      - name: Create the experiment prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.name.outputs.tag }}
+          name: Windows experiment ${{ steps.name.outputs.date }} (${{ steps.name.outputs.rev }})
+          body_path: release-notes.md
+          prerelease: true
+          make_latest: false
+          files: |
+            dist/monad-windows-*.tar.gz
+            dist/hello-windows-*.exe
+            dist/windows-*.sha256
+            dist/windows-commit.txt

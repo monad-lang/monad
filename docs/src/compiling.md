@@ -191,6 +191,28 @@ float formatting (`f64_to_string`, `f64_of_string`). Console I/O (`IO.println`,
 `IO.write_stdout`, `IO.read_line`) and `std_fd`/`stream_read`/`stream_write`
 are available on both.
 
+## Windows x86_64 (experimental)
+
+`--target x86_64-pc-windows-gnu` cross-compiles to a self-contained PE32+
+`.exe` from a Linux or macOS host. The output name gets `.exe` when it does not
+already end in it.
+
+```bash
+monad build prog.mo --target x86_64-pc-windows-gnu -o prog
+```
+
+This is an **output** target: the compiler runs here and emits for Windows.
+Compiling *on* Windows is not supported. The target is **core only** -- the
+allocator, console I/O on fds 0/1/2, the clock and `IO.sleep`, the `std` sys
+floor (file existence/size/listing, environment) and `process_id`. Threads,
+processes, sockets and file streams are named compile errors, never link
+failures. The cross C compiler is `MONAD_WINDOWS_CC` (default
+`x86_64-w64-mingw32-gcc`, which must also be able to find a mingw build of
+Boehm GC); `nix build .#monad-windows` wires that up for you.
+
+See [Windows (experimental)](./windows.md) for the full subset, the refusal
+table, and how the target is verified.
+
 Running `monad` with no arguments prints the usage screen and exits 2.
 
 Flags are position-independent — `monad build -v hello.mo` and

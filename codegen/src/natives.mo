@@ -1302,6 +1302,52 @@ def wasm_os_only_natives : List String := [
 /// profile implements it through the JS host, `platform_web.c`.)
 def web_only_natives : List String := ["f64_of_string"]
 
+/// Natives the WINDOWS target omits. Deliberately its own list rather than
+/// an alias of `wasm_os_only_natives`, because the two platforms differ in
+/// both directions and each difference is a fact about platform_win32.c:
+///
+///   * The FIBER surface is here (`fork_io`, `await_fiber`, `poll_fiber`,
+///     `cancel_fiber`, `fiber_wait_any`, `scope_*`, `channel_*`): every one
+///     of those is an OS thread on POSIX, and a channel `put` must park one.
+///     There is no honest single-threaded substitute, and Boehm is built
+///     without GC_THREADS here (runtime_windows_prelude.h).
+///   * `sleep_io` is deliberately NOT refused: `Sleep` is a real substitute
+///     and a core-only program that waits is a reasonable thing to want.
+///   * `proc_*`/`exec_*` are here: CreateProcess is not a drop-in for
+///     fork+execvp, and the child's inherited-stdio contract would have to
+///     be rebuilt out of handles.
+///   * The socket family is here: Winsock needs its own startup, error
+///     space and handle type.
+///   * `stream_open`/`poll`/`seek`/`set_timeout` and `term_ctl`/inotify are
+///     here: the CRT descriptor is an int with a per-process table this
+///     runtime cannot reason about, and the three stdio descriptors cover
+///     the console.
+///   * `read_line` is here for a file stream, but the CONSOLE path works
+///     (`monad_stream_read_line` reads fd 0); `IO.read_line` is kept by the
+///     list below NOT naming it, which is the one place this list is
+///     deliberately narrower than the wasm one.
+///
+/// NOT here, and it is the point of the whole target: allocator, `print_str`,
+/// `flush_stdout`, `read_stdin_exact`, `stream_read`/`write`/`close` over
+/// 0/1/2, the clock family, `sleep_io`, `process_id`, and the whole `sys`
+/// floor (`sys_int`/`sys_str`/`sys_stat`/`sys_dir_*` are implemented over
+/// Win32 in platform_win32.c, unlike on wasm). Also not here: `exec_cmd`,
+/// which is ordinary Monad over `proc_spawn` in std/src/process.mo, so the
+/// reachable-use gate never sees it as a native at all.
+def windows_os_only_natives : List String := [
+    "fork_io", "fiber_wait_any", "await_fiber", "poll_fiber", "cancel_fiber",
+    "scope_new", "scope_fork", "scope_drop",
+    "channel_new", "channel_put", "channel_take", "channel_take_any", "channel_try_take",
+    // `sleep_io` is NOT here even though it sits beside these in
+    // `wasm_os_only_natives`: `Sleep` is a real substitute, and a core-only
+    // program that waits is a reasonable thing to want.
+    "proc_spawn", "proc_stream_fd", "proc_wait", "proc_kill_group",
+    "exec_child_output",
+    "tcp_connect_timeout", "tcp_listen", "tcp_listen_on", "tcp_accept", "tcp_local_port",
+    "stream_open", "stream_poll", "stream_seek", "stream_set_timeout", "term_ctl",
+    "inotify_init", "inotify_add_watch", "inotify_rm_watch", "inotify_read",
+]
+
 #[terminating]
 def name_in (name : String) (names : List String) : Bool := match names {
     List.empty => false,
@@ -1323,6 +1369,10 @@ pub def native_target_availability (kind : TargetKind) (target : String) : Nativ
             then NativeAvailability.unavailable "the web profile has no OS threads, processes, sockets or filesystems"
             else if name_in target web_only_natives
             then NativeAvailability.unavailable "the web profile is freestanding: no C library float formatting"
+            else NativeAvailability.available,
+        TargetKind.windows =>
+            if name_in target windows_os_only_natives
+            then NativeAvailability.unavailable "the Windows target is core-only: no OS threads, processes, sockets or file streams (see docs/src/windows.md)"
             else NativeAvailability.available,
     }
 
