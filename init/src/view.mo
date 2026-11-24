@@ -186,3 +186,63 @@ pub def Slot.peek [Copy A] (s : Slot Full A) : IO (Pair A (Slot Full A)) :=
 /// payload is never silently dropped.
 pub def Slot.free (s : Slot Empty A) : IO Unit :=
     IO.mk (slot_free_raw s)
+
+// ── Swap: two handles, one exchange ─────────────────────────────────
+//
+// A swap is the smallest operation that shows what the linear discipline
+// buys: it needs BOTH handles at once, gives BOTH back, and neither payload
+// is ever in two places. There is no way to write it with one handle
+// duplicated (that is untypable), and no way to leave one behind (the
+// emptied handle is refilled or freed on every path).
+//
+// The binders are annotated for the same reason `init/src/linked.mo`
+// documents: an unannotated do-bind takes the callee's DECLARED `IO` payload,
+// which still carries the callee's own `A`.
+
+/// Exchange the payloads of two cells. Both handles are consumed and returned
+/// (in the same order they were given), so `Cell.swap a b` leaves `a` holding
+/// `b`'s old value and vice versa.
+pub def Cell.swap [Copy A] (a : Cell A) (b : Cell A) : IO (Pair (Cell A) (Cell A)) := do {
+    let pa : Pair A (Cell A) <- Cell.get a;
+    match pa {
+        Pair.pair va ra => cell_swap_second va ra b,
+    }
+}
+
+def cell_swap_second [Copy A] (va : A) (ra : Cell A) (b : Cell A) : IO (Pair (Cell A) (Cell A)) := do {
+    let pb : Pair A (Cell A) <- Cell.get b;
+    match pb {
+        Pair.pair vb rb => cell_swap_apply va ra vb rb,
+    }
+}
+
+def cell_swap_apply [Copy A] (va : A) (ra : Cell A) (vb : A) (rb : Cell A) : IO (Pair (Cell A) (Cell A)) := do {
+    let rb2 <- Cell.set rb va;
+    let ra2 <- Cell.set ra vb;
+    IO.pure (Pair.pair ra2 rb2)
+}
+
+/// Exchange the payloads of two full slots. No `Copy` is needed: the values
+/// MOVE between the handles, and each handle is emptied and refilled exactly
+/// once. This is the pointer swap — the cells stay where they are and only
+/// what they point at changes.
+pub def Slot.swap (a : Slot Full A) (b : Slot Full A) : IO (Pair (Slot Full A) (Slot Full A)) := do {
+    let pa : Pair A (Slot Empty A) <- Slot.take a;
+    match pa {
+        Pair.pair va ea => slot_swap_second va ea b,
+    }
+}
+
+def slot_swap_second (va : A) (ea : Slot Empty A) (b : Slot Full A) : IO (Pair (Slot Full A) (Slot Full A)) := do {
+    let pb : Pair A (Slot Empty A) <- Slot.take b;
+    match pb {
+        Pair.pair vb eb => slot_swap_apply va ea vb eb,
+    }
+}
+
+def slot_swap_apply (va : A) (ea : Slot Empty A) (vb : A) (eb : Slot Empty A) : IO (Pair (Slot Full A) (Slot Full A)) := do {
+    // `a`'s handle takes `b`'s value, `b`'s handle takes `a`'s.
+    let fa <- Slot.fill ea vb;
+    let fb <- Slot.fill eb va;
+    IO.pure (Pair.pair fa fb)
+}

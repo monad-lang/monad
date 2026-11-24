@@ -136,3 +136,100 @@ def test_a_copy_instance_for_a_slot_is_rejected : IO Bool := do {
     let diags <- check_source_diags src "slot_copy";
     return (diags_contain "is not allowed for the linear or proof type" diags)
 }
+
+// ── The linked list (`init/src/linked.mo`) ─────────────────────────
+//
+// The list is the "pointer swapping without pointers" demonstration: a node is
+// a linear `Slot`, so a cursor is a handle that cannot be copied. These pins
+// are what makes the demonstration a *safety* claim rather than a style.
+
+/// A list handle is consumed by a walk; two walks need two handles.
+#[test]
+def test_a_link_cannot_be_walked_twice : IO Bool := do {
+    let src : String :=
+        "use init::linked {Link, Linked.to_list}\n"
+        ++ "def bad (l : Link I64) : IO Unit := do {\n"
+        ++ "  let _ <- Linked.to_list l;\n"
+        ++ "  let _ <- Linked.to_list l;\n"
+        ++ "  return unit\n"
+        ++ "}\n";
+    let diags <- check_source_diags src "link_twice";
+    return (diags_contain "is used 2 times" diags)
+}
+
+/// ...and a *node* is one handle too: emptying it twice is a use-after-move,
+/// which is exactly the two-cursors bug a C list cannot catch.
+#[test]
+def test_a_node_cannot_be_taken_twice : IO Bool := do {
+    let src : String :=
+        "use init::view {Full, Slot}\n"
+        ++ "use init::linked {Link}\n"
+        ++ "def bad (l : Link I64) : IO Unit :=\n"
+        ++ "  match l {\n"
+        ++ "    Link.node s => do {\n"
+        ++ "      let _ <- Slot.take s;\n"
+        ++ "      let _ <- Slot.take s;\n"
+        ++ "      return unit\n"
+        ++ "    },\n"
+        ++ "    Link.nil => return unit,\n"
+        ++ "  }\n";
+    let diags <- check_source_diags src "node_twice";
+    return (diags_contain "is used 2 times" diags)
+}
+
+/// A list handle may not be lent: `Shared` is `Copy`, and two readers would
+/// both reach the same nodes.
+#[test]
+def test_a_link_may_not_be_shared : IO Bool := do {
+    let src : String :=
+        "use init::linked {Link}\n"
+        ++ "def bad (l : Link I64) : IO Unit := do {\n"
+        ++ "  let _ <- Shared.of l;\n"
+        ++ "  return unit\n"
+        ++ "}\n";
+    let diags <- check_source_diags src "link_shared";
+    return (diags_contain "re-readable container" diags)
+}
+
+/// The acceptance twin: a reverse followed by a fold-out is well typed.
+#[test]
+def test_a_link_reverse_and_fold_out_is_accepted : IO Bool := do {
+    let src : String :=
+        "use init::linked {Link, Linked.from_list, Linked.reverse, Linked.to_list}\n"
+        ++ "def good : IO Unit := do {\n"
+        ++ "  let l <- Linked.from_list [1, 2, 3];\n"
+        ++ "  let r <- Linked.reverse l;\n"
+        ++ "  let _ <- Linked.to_list r;\n"
+        ++ "  return unit\n"
+        ++ "}\n";
+    let diags <- check_source_diags src "link_good";
+    return (List.is_empty diags)
+}
+
+// ── The swap functions (`init/src/view.mo`) ────────────────────────
+
+/// A swap exchanges two handles; it cannot be run on ONE handle twice, because
+/// the second use would need a second `Cell` from the same allocation.
+#[test]
+def test_a_cell_swap_needs_two_distinct_cells : IO Bool := do {
+    let src : String :=
+        "use init::view {Cell}\n"
+        ++ "def bad (c : Cell I64) : IO Unit := do {\n"
+        ++ "  let _ <- Cell.swap c c;\n"
+        ++ "  return unit\n"
+        ++ "}\n";
+    let diags <- check_source_diags src "cell_swap_alias";
+    return (diags_contain "is used 2 times" diags)
+}
+
+#[test]
+def test_a_slot_swap_needs_two_distinct_slots : IO Bool := do {
+    let src : String :=
+        "use init::view {Full, Slot}\n"
+        ++ "def bad (s : Slot Full (List I64)) : IO Unit := do {\n"
+        ++ "  let _ <- Slot.swap s s;\n"
+        ++ "  return unit\n"
+        ++ "}\n";
+    let diags <- check_source_diags src "slot_swap_alias";
+    return (diags_contain "is used 2 times" diags)
+}

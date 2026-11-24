@@ -635,6 +635,18 @@ milestone is the worked counterexample: both were removed in favour of
 `monad_bytebuf_take_ptr` (typed 8-byte buffer, validated). Do not
 reintroduce their shape under another name.
 
+**The safe alternative is the linear view types.** `Cell A` (one `Copy`
+payload) and `Slot s A` (empty or full, any payload) in `init/src/view.mo`
+are opaque linear handles: every operation consumes the handle and returns
+it, so a use-after-free or two cursors into one allocation are untypable.
+`Cell.swap`/`Slot.swap` exchange two handles' payloads, and
+`init/src/linked.mo` builds a mutable linked list whose nodes are `Slot`s —
+`Linked.reverse` and `Linked.swap_adjacent` relink in place by refilling
+each node's own handle, which is "pointer swapping" with no address in
+sight. A type that *contains* a linear handle must itself be `#[linear]`
+(`Link` is): the P11 rule does not look through a user inductive, so the
+marker is what keeps `Shared.of` of such a type untypable.
+
 ## Style Conventions
 
 4-space indent, lowercase for functions/variables, uppercase for

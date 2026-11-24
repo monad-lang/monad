@@ -7,7 +7,7 @@
 /// The type-level half (linearity, no Copy, no capture, no Shared) is
 /// asserted by `lang/src/module.mo`'s e2e fixtures; these pin the four
 /// natives round-tripping on a real runtime.
-use init::view {Cell, Empty, Slot}
+use init::view {Cell, Empty, Full, Slot}
 
 def finish_with_42 (p : Pair I64 (Cell I64)) : IO Bool :=
     match p {
@@ -143,4 +143,100 @@ def test_slot_empty_can_be_freed : IO Bool := do {
     let s : Slot Empty I64 <- Slot.empty;
     let _ <- Slot.free s;
     return true
+}
+
+// ── Swap ────────────────────────────────────────────────────────────
+
+def cell_swap_read (a : Cell I64) (b : Cell I64) : IO Bool := do {
+    let pa <- Cell.get a;
+    match pa {
+        Pair.pair va a2 => cell_swap_read_b va a2 b,
+    }
+}
+
+def cell_swap_read_b (va : I64) (a2 : Cell I64) (b : Cell I64) : IO Bool := do {
+    let _ <- Cell.free a2;
+    let pb <- Cell.get b;
+    match pb {
+        Pair.pair vb b2 => cell_swap_read_done va vb b2,
+    }
+}
+
+def cell_swap_read_done (va : I64) (vb : I64) (b2 : Cell I64) : IO Bool := do {
+    let _ <- Cell.free b2;
+    return (I64.beq va 42 && I64.beq vb 41)
+}
+
+#[test]
+def test_cell_swap_exchanges_payloads : IO Bool := do {
+    let a <- Cell.new 41;
+    let b <- Cell.new 42;
+    let p <- Cell.swap a b;
+    match p {
+        Pair.pair a2 b2 => cell_swap_read a2 b2,
+    }
+}
+
+/// A `String` payload goes through the same swap (both cells stay
+/// GC-scanned).
+#[test]
+def test_cell_swap_exchanges_strings : IO Bool := do {
+    let a <- Cell.new "left";
+    let b <- Cell.new "right";
+    let p <- Cell.swap a b;
+    match p {
+        Pair.pair a2 b2 => cell_swap_strings_read a2 b2,
+    }
+}
+
+def cell_swap_strings_read (a : Cell String) (b : Cell String) : IO Bool := do {
+    let pa <- Cell.get a;
+    match pa {
+        Pair.pair va a2 => cell_swap_strings_b va a2 b,
+    }
+}
+
+def cell_swap_strings_b (va : String) (a2 : Cell String) (b : Cell String) : IO Bool := do {
+    let _ <- Cell.free a2;
+    let pb <- Cell.get b;
+    match pb {
+        Pair.pair vb b2 => cell_swap_strings_done va vb b2,
+    }
+}
+
+def cell_swap_strings_done (va : String) (vb : String) (b2 : Cell String) : IO Bool := do {
+    let _ <- Cell.free b2;
+    return (String.beq va "right" && String.beq vb "left")
+}
+
+def slot_swap_read (a : Slot Full (List I64)) (b : Slot Full (List I64)) : IO Bool := do {
+    let pa <- Slot.take a;
+    match pa {
+        Pair.pair va ea => slot_swap_read_b va ea b,
+    }
+}
+
+def slot_swap_read_b (va : List I64) (ea : Slot Empty (List I64)) (b : Slot Full (List I64)) : IO Bool := do {
+    let _ <- Slot.free ea;
+    let pb <- Slot.take b;
+    match pb {
+        Pair.pair vb eb => slot_swap_read_done va vb eb,
+    }
+}
+
+def slot_swap_read_done (va : List I64) (vb : List I64) (eb : Slot Empty (List I64)) : IO Bool := do {
+    let _ <- Slot.free eb;
+    return (I64.beq (List.length va) 1i64 && I64.beq (List.length vb) 2i64)
+}
+
+/// The point of `Slot.swap` over `Cell.swap`: neither payload is `Copy`, so
+/// nothing is duplicated — the two lists move between the handles.
+#[test]
+def test_slot_swap_moves_non_copy_payloads : IO Bool := do {
+    let a <- Slot.new [1, 2];
+    let b <- Slot.new [3];
+    let p <- Slot.swap a b;
+    match p {
+        Pair.pair a2 b2 => slot_swap_read a2 b2,
+    }
 }
