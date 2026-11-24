@@ -7,7 +7,7 @@
 
 use std::list {}
 use lang::types {
-    DebugName, Identifier, InductConstructor, Inductive, ModulePath, NamePath, Scope,
+    Decl, DebugName, Identifier, InductConstructor, Inductive, ModulePath, NamePath, Scope,
     ScopeData, Similar, Term, sentinel,
 }
 use lib::module {try_parse_decls}
@@ -285,3 +285,39 @@ def test_a_variable_expected_length_never_clashes : Bool :=
 def test_a_nat_literal_unfolds_to_a_constructor_chain : Bool :=
     Similar.similar (nat_literal_term 2)
         (Term.app (named "Nat.succ") (Term.app (named "Nat.succ") (named "Nat.zero")))
+
+/// The decls as codegen's qualification pass leaves them: each inductive
+/// renamed `q::<name>`, its constructors' declared types left as written.
+def qualified_decls (ds : List Decl) : List Decl :=
+    List.map (fn (d : Decl) => match d {
+        Decl.inductive_d ind => match ind {
+            Inductive.mk name params typ ctors attrs vis =>
+                Decl.inductive_d (Inductive.mk (NamePath.mk [Identifier.id ("q::" ++ show_np name)]) params typ ctors attrs vis),
+        },
+        _ => d,
+    }) ds
+
+def show_np (n : NamePath) : String :=
+    match n { NamePath.mk ids => match ids { List.cons hd _ => match hd { Identifier.id s => s }, List.empty => "" } }
+
+def qualified_scope : Scope :=
+    let sd : ScopeData :=
+        match try_parse_decls source {
+            Option.some decl_list => build_scope_from_decls ctor_refine_test_path (qualified_decls decl_list),
+            Option.none => build_scope_from_decls ctor_refine_test_path List.empty,
+        } in
+    { module_id := ctor_refine_test_path, scope := sd, parent := Option.none, elaboration_pass := false }
+
+/// On the elaboration pass a family is named `prelude::Vec` while its
+/// constructors' field types still say `Vec`: the length is computed anyway.
+#[test]
+def test_a_module_qualified_family_computes_its_length : Bool :=
+    let t : Term := app2 (named "q::V.vcons") (named "x") (named "q::V.vnil") in
+    match intro_ctor qualified_scope t {
+        Option.some ic =>
+            match intro_indices qualified_scope no_types ic {
+                Option.some _ => true,
+                Option.none => false,
+            },
+        Option.none => false,
+    }

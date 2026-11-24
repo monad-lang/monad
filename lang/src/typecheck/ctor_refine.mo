@@ -426,6 +426,14 @@ def ctor_name_of (scope : Scope) (t : Term) : Option Identifier :=
 def is_ctor (scope : Scope) (id : Identifier) : Bool :=
     Bool.not (List.is_empty (scope_find_all_inductives_by_constructor (NamePath.mk (List.cons id List.empty)) scope))
 
+/// A name's last segment with any `module::` qualifier dropped: codegen's
+/// qualification pass names a family `prelude::Vec` while its constructors'
+/// declared types still say `Vec`, and both mean the same family.
+def name_tail (s : String) : String :=
+    let i : I64 := String.find_last s "::" in
+    if I64.lt i 0 then dotted_tail s
+    else dotted_tail (String.slice s (i + 2) (String.length s - i - 2))
+
 def dotted_tail (s : String) : String :=
     let i : I64 := String.find_last s "." in
     if I64.lt i 0 then s else String.slice s (i + 1) (String.length s - i - 1)
@@ -759,7 +767,7 @@ def names_family (ind : Inductive) (head : Term) : Bool :=
                     match id {
                         Identifier.id s =>
                             match family_bare_name ind {
-                                Option.some b => String.beq (dotted_tail s) b,
+                                Option.some b => String.beq (name_tail s) b,
                                 Option.none => false,
                             },
                     },
@@ -772,7 +780,7 @@ def family_bare_name (ind : Inductive) : Option String :=
     match ind.name {
         NamePath.mk ids =>
             match list_last ids {
-                Option.some id => match id { Identifier.id s => Option.some (dotted_tail s) },
+                Option.some id => match id { Identifier.id s => Option.some (name_tail s) },
                 Option.none => Option.none,
             },
     }
