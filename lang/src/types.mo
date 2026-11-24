@@ -2314,6 +2314,9 @@ pub type TypeError {
     /// A match leaves constructors of `inductive` uncovered (`missing`, in
     /// declaration order) that can build a value of the scrutinee's type.
     non_exhaustive_match (inductive : NamePath) (missing : List NamePath),
+    /// A match whose scrutinee's type is not a resolvable inductive, so its
+    /// coverage cannot be checked.
+    match_unresolved_inductive (scrutinee_type : Term),
 }
 
 /// `f #Named.Instance args`'s lowered marker argument: a sentinel `Term.var`

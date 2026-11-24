@@ -148,6 +148,9 @@ pub def type_error_message (e : TypeError) : String :=
                 (String.concat "` of `" (String.concat (show_name_path ind)
                     "` can occur here, so its minor cannot be `impossible`"))),
         TypeError.non_exhaustive_match ind missing => non_exhaustive_match_message ind missing,
+        TypeError.match_unresolved_inductive typ =>
+            String.concat "cannot match on a value of type " (String.concat (show_term typ)
+                ": it is not an inductive type in scope, so the match's coverage cannot be checked"),
     }
 
 /// `` `T.d` `` -- the constructor qualified by its OWN inductive's name.

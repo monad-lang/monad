@@ -938,3 +938,10 @@ def test_a_match_omitting_an_index_impossible_constructor_is_accepted : IO Bool 
     accepted
         ("def vhead2 {A : Type} {n : Nat} (v : Vec (Nat.succ n) A) : A :=\n"
             ++ "    match v { Vec.cons h _t => h }\n")
+
+/// A match on a value whose type is not an inductive in scope cannot have its
+/// coverage checked, so it is rejected rather than compiled unchecked.
+#[test]
+def test_a_match_on_a_non_inductive_scrutinee_is_rejected : IO Bool :=
+    rejected_with "pick_any" "is not an inductive type in scope"
+        "def pick_any {A : Type} (x : A) : I64 := match x { _ => 1 }\n"

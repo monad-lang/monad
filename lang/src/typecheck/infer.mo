@@ -1860,8 +1860,9 @@ def type_check_if (one : Term) (two : Term) (three : Term) (expected_type : Term
 /// first and, on success, its checked cases are REPACKAGED as an `Elim` with a
 /// constant motive (no re-checking -- the arms were just checked against
 /// `expected_type`), so every accepted corpus program keeps its exact
-/// semantics. Two cases stay on the old `Literal.match_` path: an
-/// unresolvable inductive (`maybe_ind = Option.none`) and a hole result type.
+/// semantics. An unresolvable inductive (`maybe_ind = Option.none`) is an
+/// error: its coverage cannot be checked. A hole result type stays on the old
+/// `Literal.match_` path (complete, since coverage was checked).
 /// A constructor the scrutinee's indices rule out is not missing: its minor is
 /// `impossible`. Only a match the old rule REJECTS can reach
 /// the dependent fallback, which derives a motive and runs `type_check_elim`.
@@ -1885,9 +1886,7 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
                                     match unify body_typ expected_type scope locals {
                                         ok unified_typ =>
                                             match maybe_ind {
-                                                Option.none =>
-                                                    let lit_val : Literal := Literal.match_ sc_term checked_cases in
-                                                    ok (mk_typed (Term.lit lit_val) unified_typ),
+                                                Option.none => err (TypeError.match_unresolved_inductive sc_typ),
                                                 Option.some ind =>
                                                     if List.is_empty (possibly_uncovered checked_cases ind sc_typ scope)
                                                         && Bool.not (is_hole unified_typ)
