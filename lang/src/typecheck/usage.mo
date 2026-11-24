@@ -1603,7 +1603,7 @@ def escape_go
             match e {
                 { inductive := _, levels := _, params := _, indices := _,
                     motive := _, minors := minors, scrutinee := scrutinee } =>
-                        escape_terms ctors shareds env ctx minors
+                        escape_terms ctors shareds env ctx (minor_bodies minors)
                             (escape_at ctors shareds env UsePos.up_scrutinee scrutinee acc2),
             },
     }
