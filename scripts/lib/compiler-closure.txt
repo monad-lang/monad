@@ -8,9 +8,8 @@
 #
 # A mote here is held to `[affine] mode = "error"`: no `[affine]` table in
 # its mote.toml, and zero affine diagnostics from a tree-built compiler.
-# Everything else (bench, slow_tests, examples, proofs, mlir, motes/serde
-# and the other library motes) is outside the closure and may stay in warn
-# mode.
+# Everything else (bench, slow_tests, examples, proofs, motes/serde and the
+# other library motes) is outside the closure and may stay in warn mode.
 init
 std
 sys
@@ -18,6 +17,10 @@ lang
 codegen
 cli
 llvm
+# `mlir` is a compiler input from Phase 2 on: `codegen`'s kernel emitter
+# imports it, so it is compiled INTO the binary. It carries no `[affine]`
+# table, so it joins the closure already at `error` -- at zero.
+mlir
 runtime
 build
 eval

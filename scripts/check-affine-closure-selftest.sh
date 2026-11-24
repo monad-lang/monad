@@ -105,15 +105,69 @@ printf '#[allow_non_affine "selftest"]\ndef f : I64 := 1\n' > "$tmp/alpha/src/x.
 run_static
 expect 1 "allow_non_affine" "escape hatch outside the test fails"
 
-# 7. Closure-list drift against build-self-hosted.sh.
+# 7. Closure-list drift against build-self-hosted.sh. The fixture's scan is
+# the real one in miniature, `motes/toolkit` line included: that line is what
+# closes the group, and the checker anchors on it.
+scan_fixture() { # extra-trees...  -- writes a build-self-hosted.sh whose find
+                  # list is the real prefix plus beta plus the given extras
+    local extras=""
+    [ "$#" -gt 0 ] && extras=" $* "
+    # shellcheck disable=SC2016  # the literal `$(find ...)` is the fixture's point
+    printf '  newer="$(find init std sys lang codegen cli llvm runtime build eval \\\n    motes/clap motes/fmt motes/json motes/log motes/lsp motes/parsec motes/toml motes/toolkit%s\\\n    \\( -name "*.mo" -print -quit)"\n' \
+        "$extras" > "$tmp/scripts/build-self-hosted.sh"
+}
+
 fixture
 manifest none alpha
 manifest none beta
 printf 'extra\n' >> "$tmp/scripts/lib/compiler-closure.txt"
-# shellcheck disable=SC2016  # the literal `$(find ...)` is the fixture's point
-printf '  newer="$(find init std sys lang codegen cli llvm runtime build eval \\\n    motes/clap motes/fmt motes/json motes/log motes/lsp motes/parsec motes/toml motes/toolkit \\\n    \\( -name "*.mo" -print -quit)"\n' > "$tmp/scripts/build-self-hosted.sh"
+scan_fixture
 run_static
 expect 1 "drift" "closure-list drift fails"
+
+# 8. THE REGRESSION THIS ANCHOR EXISTS FOR. A new tree joined the build's
+# find list (`mlir`, 8257f9af) and the closure list was not updated. The old
+# text anchor stopped matching entirely, so the parse was EMPTY and the diff
+# blamed all 19 closure motes for one missing line. The failure must instead
+# name the unmatched entries, which here are the fixture's alpha/beta/extra
+# against a list carrying only the real trees plus `zzznew`.
+fixture
+manifest none alpha
+manifest none beta
+scan_fixture zzznew
+run_static
+expect 1 "drift" "a newly added tree still reports drift, not an empty parse"
+if grep -q 'cannot parse' <<<"$out"; then
+    bad "case 8: an inserted tree must not be reported as an unparseable scan"
+elif ! grep -q -e '^+zzznew$' <<<"$out" || ! grep -q -e '^-alpha$' <<<"$out"; then
+    bad "case 8: drift diff must name both sides (+zzznew, -alpha)"
+else
+    pass "case 8: drift diff names the added and the missing entries"
+fi
+
+# 9. A scan the checker cannot read is its OWN failure, never "drift": an
+# empty parse must not render as every mote having drifted.
+fixture
+manifest none alpha
+manifest none beta
+printf '#!/usr/bin/env bash\necho no scan here\n' > "$tmp/scripts/build-self-hosted.sh"
+run_static
+expect 1 "cannot parse" "an unreadable scan fails loudly"
+if grep -q 'drift against' <<<"$out"; then
+    bad "case 9: an unparseable scan must not be reported as closure drift"
+else
+    pass "case 9: an unparseable scan is not reported as drift"
+fi
+
+# 10. A scan missing its closing `motes/toolkit` line is unparseable too: a
+# truncated read would otherwise silently grade a prefix of the closure.
+fixture
+manifest none alpha
+manifest none beta
+# shellcheck disable=SC2016  # the literal `$(find ...)` is the fixture's point
+printf '  newer="$(find init std sys lang codegen cli llvm runtime build eval \\\n    motes/clap motes/fmt \\\n    \\( -name "*.mo" -print -quit)"\n' > "$tmp/scripts/build-self-hosted.sh"
+run_static
+expect 1 "cannot parse" "a scan with no closing motes/toolkit fails loudly"
 
 # ── dynamic: a fake compiler with canned output ──────────────────────
 

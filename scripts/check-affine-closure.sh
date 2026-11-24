@@ -149,21 +149,39 @@ static_check() {
     echo "affine closure: ${#closure[@]} motes, ${#allowlisted[@]} allowlisted"
 
     # Drift: the closure list must match the self-hosted build's input list.
+    #
+    # The scan is anchored on its STRUCTURE -- the `find` that opens the
+    # staleness check, through the `motes/toolkit` that closes the group this
+    # list mirrors -- never on the tree list's literal text. It used to be
+    # the text: `/find init std sys lang codegen cli llvm runtime build eval/`.
+    # When `mlir` joined that list (8257f9af) the anchor matched nothing, the
+    # pipeline below produced an EMPTY list, and the diff rendered as "all 18
+    # closure motes are drift" -- a failure that names none of the entries it
+    # is complaining about. A parse that does not complete is now a failure in
+    # its own right, because an empty input to this comparison is never data.
     if [ -f "$build_script" ]; then
-        local from_build
+        # A parse that does not complete fails in its own right: an empty or
+        # truncated list is never data, and diffing against it blames every
+        # closure mote for one unreadable line. `parsed=0` keeps the per-mote
+        # diagnostics below running -- they are still true and still useful.
+        local from_build parsed=1 declared
         from_build=$(awk '
-            /find init std sys lang codegen cli llvm runtime build eval/ { found = 1 }
+            !found && /newer="\$\(find / { found = 1 }
             found {
                 line = $0
                 sub(/.*find /, "", line)
                 sub(/\\[[:space:]]*$/, "", line)
                 print line
-                if ($0 ~ /motes\/toolkit/) exit
+                if ($0 ~ /motes\/toolkit/) { closed = 1; exit }
             }
-        ' "$build_script" | tr ' ' '\n' | sed '/^[[:space:]]*$/d' | sort)
-        local declared
+            END { if (!found || !closed) exit 3 }
+        ' "$build_script" | tr ' ' '\n' | sed '/^[[:space:]]*$/d' | sort) || parsed=0
         declared=$(printf '%s\n' "${closure[@]}" | sort)
-        if [ "$from_build" != "$declared" ]; then
+        if [ "$parsed" -eq 0 ]; then
+            fail "cannot parse the input list from $build_script (no \`newer=\"\$(find \` line, or no motes/toolkit to close it)"
+        elif [ -z "$from_build" ]; then
+            fail "parsed an empty input list from $build_script"
+        elif [ "$from_build" != "$declared" ]; then
             fail "closure list drift against scripts/build-self-hosted.sh"
             diff -u <(printf '%s\n' "$declared") <(printf '%s\n' "$from_build") >&2 || true
         fi
