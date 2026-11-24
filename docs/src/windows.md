@@ -179,8 +179,8 @@ The refusal list is `windows_os_only_natives` in `codegen/src/natives.mo`, and
 removing a name from it is the *last* step, not the first:
 
 1. Implement the C body in `runtime/src/platform_win32.c` (see
-   [Adding Native Functions](./../AGENTS.md) in the developer guide for the
-   full wiring list).
+   `AGENTS.md`'s "Adding Native Functions" section in the developer guide for
+   the full wiring list).
 2. Prove it: add a fixture under `fixtures/windows/` and a case in
    `scripts/check-windows-target.sh`.
 3. Then delete its name from `windows_os_only_natives`.
