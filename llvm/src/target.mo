@@ -403,7 +403,11 @@ def TargetPlan.bad_sdk_message (root : String) (clang : String) : String :=
 /// distinction that matters to whoever reads it: a Windows-hosted `monad` is
 /// not what this builds, so "just install the Windows nightly" is not an
 /// answer to it.
-#[partial]
+///
+/// No `#[partial]`: this is a string literal with concatenation, not a table
+/// of clauses, so there is nothing for the attribute to mark. The neighbouring
+/// `*_message` builders carry one by copy-paste, and the style ratchet counts
+/// each of those.
 pub def TargetPlan.missing_cc_message (triple : String) (cc : String) : String :=
     "error: target `" ++ triple ++ "` (" ++ TargetKind.name TargetKind.windows ++ ") needs a mingw-w64 cross compiler, but `" ++ cc ++ "` is not executable. Install mingw-w64 (Debian/Ubuntu: `apt install gcc-mingw-w64-x86-64`; nix: the dev shell's `pkgsCross.mingwW64.stdenv.cc`, which `nix build .#monad-windows` wires up), or set `MONAD_WINDOWS_CC` to the compiler to use. The compiler still RUNS on this machine: `--target` only chooses what the output binary is for."
 
