@@ -10606,7 +10606,10 @@ def type_check_struct_update (base : Term) (fields : List StructLitField) (expec
                                                             let body : Term := Term.con (Con.mk mk_name typ_mp n args) in
                                                             let no_fp : Option FieldPattern := Option.none in
                                                             let case_ : MatchCase := MatchCase.mk mk_name binders body no_fp (Option.some (inductive_type_path ind)) in
-                                                            ok (mk_typed (Term.lit (Literal.match_ base_term (List.cons case_ List.empty))) base_typ),
+                                                            // One case over the struct's one constructor:
+                                                            // complete, so it is an `Elim` directly.
+                                                            let e : Elim := elim_from_checked_cases ind base_term base_typ [case_] base_typ in
+                                                            ok (mk_typed (Term.elim e) base_typ),
                                                         }
                                                     },
                                             }
@@ -11049,6 +11052,11 @@ def first_filled_case_arity (args : List (Option Term)) : I64 :=
 
 def match_first_case_arity (t : Term) : I64 :=
     match t {
+        Term.elim e =>
+            match e.minors {
+                List.cons m _ => match m { Minor.case body => lam_depth body, Minor.impossible => -1 },
+                List.empty => -1,
+            },
         Term.lit l =>
             match l {
                 Literal.match_ _ cases =>
@@ -11092,20 +11100,30 @@ def test_type_check_con_elaborates_a_field_access_arg : Bool :=
 /// one-case match at all.
 def struct_update_scrutinee (t : Term) : Option Term :=
     match t {
-        Term.lit l =>
-            match l {
-                Literal.match_ scrut cases =>
-                    match cases {
-                        List.cons _ rest =>
-                            match rest {
-                                List.empty => Option.some scrut,
-                                List.cons _ _ => Option.none,
-                            },
-                        List.empty => Option.none,
+        Term.elim e =>
+            match e.minors {
+                List.cons _ rest =>
+                    match rest {
+                        List.empty => Option.some e.scrutinee,
+                        List.cons _ _ => Option.none,
                     },
-                _ => Option.none,
+                List.empty => Option.none,
             },
         _ => Option.none,
+    }
+
+/// How many lambdas head `t` -- a minor's binder count.
+def lam_depth (t : Term) : I64 :=
+    match t {
+        Term.lam _ _ body => lam_depth body + 1,
+        _ => 0,
+    }
+
+/// `t` under its leading lambdas -- a minor's arm body.
+def under_lams (t : Term) : Term :=
+    match t {
+        Term.lam _ _ body => under_lams body,
+        _ => t,
     }
 
 def point_update_term : Result TypeError TypedTerm :=
@@ -11491,12 +11509,9 @@ def test_type_check_struct_update_unchanged_field_is_its_binder : Bool :=
 #[partial]
 def struct_update_arm_body (t : Term) : Option Term :=
     match t {
-        Term.lit l => match l {
-            Literal.match_ _scrut cases => match cases {
-                List.cons c _ => match c { MatchCase.mk _n _a body _fp _tn => Option.some body },
-                List.empty => Option.none,
-            },
-            _ => Option.none,
+        Term.elim e => match e.minors {
+            List.cons m _ => match m { Minor.case body => Option.some (under_lams body), Minor.impossible => Option.none },
+            List.empty => Option.none,
         },
         _ => Option.none,
     }
