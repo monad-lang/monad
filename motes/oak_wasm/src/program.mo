@@ -36,13 +36,26 @@ use web_wasm::dom {
 }
 use web_wasm::timer {Timer.after, Timer.is_id}
 use web_wasm::media {Media.watch, Media.unwatch}
-use web_wasm::types {WebSocket}
+use web_wasm::types {WebSocket, RequestId}
 use web_wasm::websocket {
     WebSocket.connect, WebSocket.close, WebSocket.free, WebSocket.watch, WebSocket.unwatch,
     WebSocket.drain, WebSocket.send,
 }
 use web_event::websocket {WsData, WsEvent}
+use web_event::sound {MediaCmd, SoundFx, Wave}
+use web_wasm::audio {
+    AudioCtx, Sound, Audio.beep, Audio.context, Audio.decode, Audio.decode_begin,
+    Audio.decode_poll, Audio.decode_sound, Audio.is_running, Audio.noise,
+    Audio.play_sound, Audio.resume, Audio.set_master, Audio.sound_duration_ms,
+    Audio.stop,
+}
+use web_wasm::media_element {
+    MediaElement.play, MediaElement.pause, MediaElement.seek,
+    MediaElement.set_volume, MediaElement.set_muted, MediaElement.set_loop,
+}
 use web_wasm::event {WebEvent.current, WebEvent.prevent_default, WebEvent.stop_propagation}
+use std::bytebuf {ByteBuf.free}
+use web_wasm::fetch {Fetch.begin, Fetch.poll, Fetch.get_bytes}
 use web_wasm::keep {Keep.load, Keep.save}
 use web_wasm::types {Node}
 use lib::patch {Patch.diff, Patch.apply, Patch.hydrate_root}
@@ -131,9 +144,10 @@ def Runtime.install_socket {Msg : Type} (url : String) (protocols : List String)
 def Runtime.add_socket {S : Type} {Msg : Type} (entry : WsSocket Msg)
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets,
+            audio, sounds } =>
             RuntimeState.st root last model queue stopped handlers subs timers focus paint
-                (List.cons entry sockets),
+                (List.cons entry sockets) audio sounds,
     }
 
 /// A watched socket woke up: drain its queue and enqueue one message per
@@ -188,8 +202,10 @@ def Runtime.fold_enqueue {S : Type} {Msg : Type} (msgs : List Msg) (state : Runt
 def Runtime.set_sockets {S : Type} {Msg : Type} (sockets : List (WsSocket Msg))
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, .. } =>
-            RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets,
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, audio,
+            sounds, .. } =>
+            RuntimeState.st root last model queue stopped handlers subs timers focus paint
+                sockets audio sounds,
     }
 
 /// The live sockets of a state value (pure).
@@ -235,11 +251,13 @@ def Runtime.find_socket {Msg : Type} (url : String) (sockets : List (WsSocket Ms
 def Runtime.drop_socket {S : Type} {Msg : Type} (key : String)
     (state : RuntimeState S Msg) : IO (RuntimeState S Msg) := do {
     match state {
-        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets,
+            audio, sounds } =>
             match Runtime.take_socket key sockets {
                 Pair.pair gone rest => do {
                     let _ <- Runtime.close_gone gone;
-                    IO.pure (RuntimeState.st root last model queue stopped handlers subs timers focus paint rest)
+                    IO.pure (RuntimeState.st root last model queue stopped handlers subs timers
+                        focus paint rest audio sounds)
                 }
             }
     }
@@ -392,6 +410,14 @@ pub type WsSocket (Msg : Type) {
     ws_socket (key : String) (url : String) (ws : WebSocket) (handler : WsEvent -> Msg)
 }
 
+/// A sound decoded from a URL: the url is the cache key, the `Sound` the
+/// host buffer a later `play_file` plays. A decode that is still running is
+/// NOT stored, so a burst of `play_file` commands for one url does not start
+/// one decode each (the pending one is remembered separately).
+pub type LoadedSound {
+    loaded_sound (url : String) (sound : Sound)
+}
+
 pub type RuntimeState (S : Type) (Msg : Type) {
     st (root : Node) (last : Html.Node) (model : S)
         (queue : List Msg) (stopped : Bool)
@@ -407,6 +433,16 @@ pub type RuntimeState (S : Type) (Msg : Type) {
         (paint : List (Unit -> IO (Option Msg)))
         /// The live WebSockets owned by subscriptions.
         (sockets : List (WsSocket Msg))
+        /// The page's `AudioContext`, opened lazily by the first
+        /// `Command.sound`. `none` until then, so an app that never plays a
+        /// sound never asks the browser for one (and never trips the
+        /// autoplay policy's console warning).
+        (audio : Option AudioCtx)
+        /// Sounds decoded from a URL by `SoundFx.file`, so the second
+        /// `Command.play_file url` reuses the first decode instead of
+        /// fetching and decoding again. Oldest first; a small app has a
+        /// handful.
+        (sounds : List (LoadedSound))
 }
 
 /// Mount a `Program` under the root the loader selected, and hand the state
@@ -430,7 +466,7 @@ pub def Runtime.mount {S : Type} {Msg : Type} {E : Type}
             let table := List.append handlers (Runtime.collect_sub_handlers subs);
             let state : Ref (RuntimeState S Msg) <-
                 Ref.new (RuntimeState.st root tree model List.empty false table subs
-                    List.empty List.empty List.empty List.empty);
+                    List.empty List.empty List.empty List.empty Option.none List.empty);
             let _ <- Keep.save state;
             // Subscriptions install AFTER the state exists: a WebSocket
             // subscription registers its socket through the state slot.
@@ -446,6 +482,10 @@ pub def Runtime.mount {S : Type} {Msg : Type} {E : Type}
 /// live event is snapshotted while the browser is still dispatching, so the
 /// pure handler sees a complete `WebEvent`.
 pub def Runtime.dispatch {S : Type} {Msg : Type} (handler : I64) : IO Unit := do {
+    // A real DOM event is the user gesture the autoplay policy waits for, so
+    // this is the one place that can un-suspend a context. It is a no-op
+    // until a `Command.sound` has opened one, and idempotent after.
+    let _ <- Runtime.resume_audio;
     let state <- Runtime.load_state;
     let snapshot : RuntimeState S Msg <- Ref.get state;
     match snapshot {
@@ -536,40 +576,47 @@ def Runtime.lookup_handler {Msg : Type} (id : U32)
 /// landed in one frame.
 def Runtime.enqueue {S : Type} {Msg : Type} (msg : Msg) (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets,
+            audio, sounds } =>
             RuntimeState.st root last model (List.append queue (List.cons msg List.empty))
-                stopped handlers subs timers focus paint sockets,
+                stopped handlers subs timers focus paint sockets audio sounds,
     }
 
 def Runtime.set_timers {S : Type} {Msg : Type} (timers : List (Pair I64 Msg))
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        { root, last, model, queue, stopped, handlers, subs, focus, paint, sockets, .. } =>
-            RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets,
+        { root, last, model, queue, stopped, handlers, subs, focus, paint, sockets, audio,
+            sounds, .. } =>
+            RuntimeState.st root last model queue stopped handlers subs timers focus paint
+                sockets audio sounds,
     }
 
 def Runtime.add_timer {S : Type} {Msg : Type} (id : I64) (msg : Msg)
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets,
+            audio, sounds } =>
             RuntimeState.st root last model queue stopped handlers subs
-                (List.append timers (List.cons (Pair.pair id msg) List.empty)) focus paint sockets,
+                (List.append timers (List.cons (Pair.pair id msg) List.empty)) focus paint
+                sockets audio sounds,
     }
 
 def Runtime.add_focus {S : Type} {Msg : Type} (selector : String)
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets,
+            audio, sounds } =>
             RuntimeState.st root last model queue stopped handlers subs timers
-                (List.append focus (List.cons selector List.empty)) paint sockets,
+                (List.append focus (List.cons selector List.empty)) paint sockets audio sounds,
     }
 
 def Runtime.add_paint {S : Type} {Msg : Type} (effect : Unit -> IO (Option Msg))
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets,
+            audio, sounds } =>
             RuntimeState.st root last model queue stopped handlers subs timers focus
-                (List.append paint (List.cons effect List.empty)) sockets,
+                (List.append paint (List.cons effect List.empty)) sockets audio sounds,
     }
 
 /// Run a batch's `after_render` effects in order, after the patch, and
@@ -629,7 +676,7 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
     let live_sockets := Runtime.state_sockets before;
     let drained : RuntimeState S Msg :=
         RuntimeState.st root last model List.empty false handlers subs timers List.empty
-            List.empty live_sockets;
+            List.empty live_sockets (Runtime.audio_of before) (Runtime.sounds_of before);
     let _ <- Ref.set state drained;
     let folded <- Runtime.run_batch prog host model queue;
     match folded {
@@ -651,7 +698,9 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
                     // handler just lowered, not the previous frame's table.
                     let staged : RuntimeState S Msg :=
                         RuntimeState.st root last model List.empty false table next_subs
-                            batch_timers batch_focus batch_paint (Runtime.state_sockets after_batch);
+                            batch_timers batch_focus batch_paint
+                            (Runtime.state_sockets after_batch)
+                            (Runtime.audio_of after_batch) (Runtime.sounds_of after_batch);
                     let _ <- Ref.set state staged;
                     let patches := Patch.diff last tree;
                     let _ <- Patch.apply root patches;
@@ -669,7 +718,8 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
                     let next : RuntimeState S Msg :=
                         RuntimeState.st root tree next_model pending quit table next_subs
                             (Runtime.timers_of after_paint) List.empty List.empty
-                            (Runtime.state_sockets after_paint);
+                            (Runtime.state_sockets after_paint)
+                            (Runtime.audio_of after_paint) (Runtime.sounds_of after_paint);
                     let _ <- Ref.set state next;
                     return unit
                 },
@@ -697,6 +747,254 @@ def Runtime.focus_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List
 def Runtime.paint_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List (Unit -> IO (Option Msg)) :=
     match state {
         { paint, .. } => paint,
+    }
+
+def Runtime.audio_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : Option AudioCtx :=
+    match state {
+        { audio, .. } => audio,
+    }
+
+def Runtime.sounds_of {S : Type} {Msg : Type} (state : RuntimeState S Msg) : List LoadedSound :=
+    match state {
+        { sounds, .. } => sounds,
+    }
+
+// ─── Sound and media, performed ──────────────────────────────────────
+//
+// A `Command.sound`/`Command.media` is pure data; this is where the browser
+// hears it. The `AudioContext` is opened LAZILY -- an app that never plays a
+// sound never asks for one, so a page that makes noise only in a game loop
+// does not warn at load -- and it is resumed on the first dispatched event,
+// because a context created before a gesture starts `suspended` and a
+// synthesized voice scheduled into a suspended context is silent.
+//
+// A decoded `SoundFx.file` caches by url, so a `play_file` in a hot update
+// fetches and decodes once. The decode itself is two-phase and driven to
+// completion here (`Audio.decode`, a bounded poll): this runs inside an
+// effect, where a short spin cannot starve the frame loop the way a
+// top-level spin would, and a sound that arrives a moment late is far
+// better than a `play_file` that never makes one.
+
+/// The audio context, opening it on first use. `none` when the browser has
+/// no Web Audio at all, which every caller treats as "play nothing".
+def Runtime.audio_context {S : Type} {Msg : Type} : IO (Option AudioCtx) := do {
+    let state <- Runtime.load_state;
+    let st : RuntimeState S Msg <- Ref.get state;
+    let current := Runtime.audio_of st;
+    match current {
+        Option.some c => IO.pure (Option.some c),
+        Option.none => do {
+            let c <- Audio.context;
+            if I64.beq c.id 0i64
+            then IO.pure Option.none
+            else do {
+                let _ <- Ref.update state (Runtime.set_audio (Option.some c));
+                // A context is created SUSPENDED. This code runs from an
+                // effect, which a `Command.sound` returns from a click, so it
+                // is (usually) inside the transient-activation window the
+                // policy wants; asking here is what makes the FIRST sound of
+                // a page audible, where `Runtime.dispatch`'s earlier resume
+                // had no context to resume.
+                let _ <- Audio.resume c;
+                IO.pure (Option.some c)
+            }
+        }
+    }
+}
+
+def Runtime.set_audio {S : Type} {Msg : Type} (audio : Option AudioCtx)
+    (state : RuntimeState S Msg) : RuntimeState S Msg :=
+    match state {
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint,
+            sockets, sounds, .. } =>
+            RuntimeState.st root last model queue stopped handlers subs timers focus paint
+                sockets audio sounds,
+    }
+
+def Runtime.set_sounds {S : Type} {Msg : Type} (sounds : List LoadedSound)
+    (state : RuntimeState S Msg) : RuntimeState S Msg :=
+    match state {
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint,
+            sockets, audio, .. } =>
+            RuntimeState.st root last model queue stopped handlers subs timers focus paint
+                sockets audio sounds,
+    }
+
+/// Resume a suspended context. This is the gesture hook: `Runtime.dispatch`
+/// runs it on every event, so the first click a page receives is what lets
+/// the next `Command.sound` be audible.
+pub def Runtime.resume_audio {S : Type} {Msg : Type} : IO Unit := do {
+    let state <- Runtime.load_state;
+    let st : RuntimeState S Msg <- Ref.get state;
+    let current := Runtime.audio_of st;
+    match current {
+        Option.none => IO.pure unit,
+        Option.some c => do {
+            let running <- Audio.is_running c;
+            if running then IO.pure unit else do {
+                let _ <- Audio.resume c;
+                IO.pure unit
+            }
+        }
+    }
+}
+
+/// Perform one `SoundFx`. A browser without Web Audio, or a `silence`, is a
+/// no-op rather than an error: an app must not break because a sound could
+/// not be made.
+pub def Runtime.play_fx {S : Type} {Msg : Type} (fx : SoundFx) : IO Unit :=
+    match fx {
+        SoundFx.silence => Runtime.silence_all,
+        SoundFx.beep wave freq gain duration_ms => do {
+            let found : Option AudioCtx <- Runtime.audio_context;
+            match found {
+                Option.none => IO.pure unit,
+                Option.some c => do {
+                    let _ <- Audio.beep c wave freq gain duration_ms;
+                    IO.pure unit
+                }
+            }
+        },
+        SoundFx.hit gain duration_ms lowpass_hz => do {
+            let found : Option AudioCtx <- Runtime.audio_context;
+            match found {
+                Option.none => IO.pure unit,
+                Option.some c => do {
+                    let _ <- Audio.noise c gain duration_ms lowpass_hz;
+                    IO.pure unit
+                }
+            }
+        },
+        SoundFx.file url gain => do {
+            let found : Option AudioCtx <- Runtime.audio_context;
+            match found {
+                Option.none => IO.pure unit,
+                Option.some c => do {
+                    let sound : Option Sound <- Runtime.sound_for_url c url;
+                    match sound {
+                        Option.none => IO.pure unit,
+                        Option.some s => do {
+                            let _ <- Audio.play_sound c s gain;
+                            IO.pure unit
+                        }
+                    }
+                }
+            }
+        },
+    }
+
+/// Stop every voice. The context is kept: `silence` is "the alarm is off",
+/// not "the page will never make a sound again", and closing it would
+/// require a gesture to reopen.
+def Runtime.silence_all {S : Type} {Msg : Type} : IO Unit := do {
+    let state <- Runtime.load_state;
+    let st : RuntimeState S Msg <- Ref.get state;
+    let current := Runtime.audio_of st;
+    match current {
+        Option.none => IO.pure unit,
+        // Gain to zero silences the graph without freeing the context; a
+        // later sound restores it to unity.
+        Option.some c => Audio.set_master c 0.0
+    }
+}
+
+/// The cached `Sound` for `url`, decoding it on first use. A failed fetch
+/// or decode is `none`, and nothing is cached, so a later command retries.
+def Runtime.sound_for_url {S : Type} {Msg : Type} (c : AudioCtx) (url : String)
+    : IO (Option Sound) := do {
+    let state <- Runtime.load_state;
+    let st : RuntimeState S Msg <- Ref.get state;
+    let cached := Runtime.sounds_of st;
+    let hit : Option Sound := Runtime.lookup_sound url cached;
+    match hit {
+        Option.some s => IO.pure (Option.some s),
+        Option.none => Runtime.decode_url c url
+    }
+}
+
+/// Drive a fetch to completion, bounded: `0` while still pending (and after
+/// the budget), `1` done, `2` failed. The same reasoning as `Audio.decode`'s
+/// poll applies -- this runs inside an effect, not a top-level spin.
+#[partial]
+def Runtime.await_fetch (req : RequestId) (budget : I64) : IO I64 := do {
+    let state <- Fetch.poll req;
+    if Bool.not (I64.beq state 0i64) then IO.pure state
+    else if Bool.not (I64.gt budget 0i64) then IO.pure 0i64
+    else Runtime.await_fetch req (I64.sub budget 1i64)
+}
+
+#[terminating]
+def Runtime.lookup_sound (url : String) (sounds : List LoadedSound) : Option Sound :=
+    match sounds {
+        List.empty => Option.none,
+        List.cons entry rest =>
+            match entry {
+                { url := key, sound, .. } =>
+                    if String.beq key url then Option.some sound else Runtime.lookup_sound url rest
+            }
+    }
+
+/// Fetch `url`, decode it, cache the `Sound`. Fetch is two-phase too, so
+/// this drives both phases; see `Runtime.sound_for_url` on why a bounded
+/// poll is acceptable here.
+def Runtime.decode_url {S : Type} {Msg : Type} (c : AudioCtx) (url : String)
+    : IO (Option Sound) := do {
+    let req <- Fetch.begin url 0i64 "";
+    let _ <- Runtime.await_fetch req 256i64;
+    let bytes <- Fetch.get_bytes (Shared.of req);
+    match bytes {
+        Option.none => IO.pure Option.none,
+        Option.some buf => do {
+            let decoded <- Audio.decode c (Shared.get buf) 256i64;
+            let _ <- ByteBuf.free buf;
+            match decoded {
+                Result.err _name => IO.pure Option.none,
+                Result.ok s => do {
+                    let state <- Runtime.load_state;
+                    let st : RuntimeState S Msg <- Ref.get state;
+                    let cached := Runtime.sounds_of st;
+                    let _ <- Ref.update state (Runtime.set_sounds
+                        (List.append cached (List.cons (LoadedSound.loaded_sound url s) List.empty)));
+                    IO.pure (Option.some s)
+                }
+            }
+        }
+    }
+}
+
+/// Perform one `<audio>`/`<video>` transport command. A missing element is
+/// silent: the selector may name an element this frame has not mounted yet,
+/// or never will, and a transport action is not the place to raise it.
+pub def Runtime.run_media (cmd : MediaCmd) : IO Unit :=
+    match cmd {
+        MediaCmd.play selector => do {
+            let _ <- MediaElement.play selector;
+            IO.pure unit
+        },
+        MediaCmd.pause selector => do {
+            let _ <- MediaElement.pause selector;
+            IO.pure unit
+        },
+        MediaCmd.seek selector ms => do {
+            let _ <- MediaElement.seek selector ms;
+            IO.pure unit
+        },
+        MediaCmd.volume selector volume => do {
+            let _ <- MediaElement.set_volume selector volume;
+            IO.pure unit
+        },
+        MediaCmd.mute selector => do {
+            let _ <- MediaElement.set_muted selector true;
+            IO.pure unit
+        },
+        MediaCmd.unmute selector => do {
+            let _ <- MediaElement.set_muted selector false;
+            IO.pure unit
+        },
+        MediaCmd.loop selector => do {
+            let _ <- MediaElement.set_loop selector true;
+            IO.pure unit
+        },
     }
 
 /// The state slot, typed for the caller. `Keep.load` is generic because the
@@ -796,6 +1094,14 @@ def Runtime.step_cmd {S : Type} {Msg : Type} {E : Type}
             let _ <- Runtime.send_on_socket url data;
             Runtime.step_batch prog host model rest
         },
+        Command.sound fx => do {
+            let _ <- Runtime.play_fx fx;
+            Runtime.step_batch prog host model rest
+        },
+        Command.media cmd => do {
+            let _ <- Runtime.run_media cmd;
+            Runtime.step_batch prog host model rest
+        },
     }
 
 def Runtime.paint_thunk {E : Type} {Msg : Type} (host : Host IO E Msg) (effect : E)
@@ -872,6 +1178,14 @@ def Runtime.collect_cmds {E : Type} {Msg : Type} (host : Host IO E Msg)
                     Runtime.collect_cmds host (List.append inner more) perf disp quit,
                 Command.ws_send url data => do {
                     let _ <- Runtime.send_on_socket url data;
+                    Runtime.collect_cmds host more perf disp quit
+                },
+                Command.sound fx => do {
+                    let _ <- Runtime.play_fx fx;
+                    Runtime.collect_cmds host more perf disp quit
+                },
+                Command.media cmd => do {
+                    let _ <- Runtime.run_media cmd;
                     Runtime.collect_cmds host more perf disp quit
                 },
             },

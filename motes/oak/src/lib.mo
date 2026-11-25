@@ -105,8 +105,13 @@ pub use lib::html_t {
 pub use lib::app {
     Program, Program.app, Program.with_subs, Program.subscriptions,
     Program.init, Program.run_batch, Program.step, Program.view,
-    Command, Host, Host.run_effect
+    Command, Host, Host.run_effect,
+    Command.beep, Command.hit, Command.play_file, Command.silence, Command.media_cmd
 }
+
+// The sound vocabulary a `Command.beep`/`Command.hit` carries, re-exported
+// so an app that depends on `oak` alone can name a `SoundFx`/`MediaCmd`.
+pub use web_event::sound {SoundFx, MediaCmd, Wave, SoundFx.is_silence, Wave.code}
 
 pub use lib::ssr {
     Ssr.render_page, Ssr.render_body, Ssr.to_response, Ssr.to_response_node,

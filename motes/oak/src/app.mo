@@ -11,6 +11,7 @@
 use lib::events {Subscription}
 use lib::typed {Oak.Node}
 use web_event::websocket {WsData}
+use web_event::sound {MediaCmd, SoundFx, Wave}
 
 // ═══ Types ═══
 //
@@ -43,7 +44,17 @@ pub type Command (E : Type) (Msg : Type) {
     /// for `url`. The pure fold has no socket and treats it as inert; the
     /// browser runtime sends it (and drops it when no subscription owns
     /// that url).
-    ws_send (url : String) (data : WsData)
+    ws_send (url : String) (data : WsData),
+    /// Play one short sound (`SoundFx`): a synthesized note, a percussive
+    /// hit, or a file the runtime decodes on first use. The sound is DATA,
+    /// not an effect, so `update` stays pure; the pure fold has no
+    /// AudioContext and treats it as inert. The browser runtime plays it
+    /// (and resumes a suspended context on the first user gesture).
+    sound (fx : SoundFx),
+    /// Drive an `<audio>`/`<video>` element the view mounted: play, pause,
+    /// seek, volume, mute, loop. Addressed by the element's selector, so a
+    /// re-render cannot leave a stale handle behind. Inert in the pure fold.
+    media (cmd : MediaCmd)
 }
 
 pub type Host (N : Type -> Type) (E : Type) (Msg : Type) {
@@ -101,6 +112,34 @@ with Program {
         (a : Program S Msg E) : S -> List (Subscription Msg) :=
         match a { Program.program _ _ _ subs => subs }
 }
+
+// ═══ Sound and media command helpers ═══
+//
+// `Command.sound (SoundFx.beep ...)` is the general form; these are the
+// call sites an app actually writes. They are pure constructors, so an
+// `update` that returns one stays pure and testable on any target.
+
+/// A note: `Command.beep Wave.sine 880.0 0.3 120i64`.
+pub def Command.beep {E : Type} {Msg : Type} (wave : Wave) (freq : F64) (gain : F64)
+    (duration_ms : I64) : Command E Msg :=
+    Command.sound (SoundFx.beep wave freq gain duration_ms)
+
+/// A percussive hit: a noise burst, optionally lowpassed.
+pub def Command.hit {E : Type} {Msg : Type} (gain : F64) (duration_ms : I64)
+    (lowpass_hz : F64) : Command E Msg :=
+    Command.sound (SoundFx.hit gain duration_ms lowpass_hz)
+
+/// A sound decoded from `url` and played once ready.
+pub def Command.play_file {E : Type} {Msg : Type} (url : String) (gain : F64) : Command E Msg :=
+    Command.sound (SoundFx.file url gain)
+
+/// Stop every sound this app started.
+pub def Command.silence {E : Type} {Msg : Type} : Command E Msg :=
+    Command.sound SoundFx.silence
+
+/// One `<audio>`/`<video>` transport action, by selector.
+pub def Command.media_cmd {E : Type} {Msg : Type} (cmd : MediaCmd) : Command E Msg :=
+    Command.media cmd
 
 /// Fold a batch to quiescence: run it, then drain the messages its
 /// `dispatch` commands queued as subsequent batches. Returns the final
@@ -167,7 +206,11 @@ def step_cmd [Monad N] {S : Type} {Msg : Type} {E : Type}
         Command.focus _selector => step_batch a h model rest,
         Command.after_render _effect => step_batch a h model rest,
         Command.batch cmds => step_cmds a h model rest cmds,
-        Command.ws_send _url _data => step_batch a h model rest
+        Command.ws_send _url _data => step_batch a h model rest,
+        // No AudioContext and no DOM in the pure fold: both are runtime
+        // commands `oak_wasm`'s fold implements.
+        Command.sound _fx => step_batch a h model rest,
+        Command.media _cmd => step_batch a h model rest
     }
 
 /// Several commands, left-to-right. `perform` effects run immediately in
@@ -233,6 +276,8 @@ def collect_cmds [Monad N] {E : Type} {Msg : Type} (h : Host N E Msg)
                 Command.after_render _effect => collect_cmds h more perf disp quit,
                 Command.batch inner => collect_cmds h (List.append inner more) perf disp quit,
                 Command.ws_send _url _data => collect_cmds h more perf disp quit,
+                Command.sound _fx => collect_cmds h more perf disp quit,
+                Command.media _cmd => collect_cmds h more perf disp quit,
             },
     }
 
