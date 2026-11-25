@@ -2655,23 +2655,28 @@ def compile_cubical_ir (c : CodegenCtx) (cub_ : Cubical) : CompileResult :=
         CubicalPrim.system => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     }
 
-// ── View do-bind fusion (view-types P2) ─────────────────────────────
+// ── View bind fusion (view-types P2) ────────────────────────────────
 //
-// `init/src/view.mo`'s four accessors return `IO`, and a read used to
-// cost three allocations: `RawIO.io`, `IO.mk`, and the `Pair` C builds
-// in `view_get_impl`. When a do-bind's initializer IS one of those
-// accessors and the continuation is the shape that consumes the result
-// without boxing, the bind is lowered DIRECTLY here: the payload comes
-// back as one i64 word (`monad_view_payload`) and the handle is passed
-// through unchanged -- `view_get_impl` returns the very word it was
-// given, which is what makes a single i64 result enough for both halves
-// of the pair.
+// A read used to cost three allocations: `RawIO.io`, `IO.mk`, and the
+// `Pair` C builds in `view_get_impl`. When a `let`'s initializer IS one
+// of the four `Cell` accessors and the continuation is the shape that
+// consumes the result without boxing, the binding is lowered DIRECTLY
+// here: the payload comes back as one i64 word (`monad_view_payload`)
+// and the handle is passed through unchanged -- `view_get_impl` returns
+// the very word it was given, which is what makes a single i64 result
+// enough for both halves of the pair.
+//
+// Two source shapes reach this plan: the pure `let x := Cell.get c in
+// body` (the accessors are pure linear mutations -- the native mutates
+// only the handle it consumes and returns, so there is nothing for `IO`
+// to track) and, for one transition, the IO do-bind the library used to
+// require. Both build the same `ViewBindPlan`.
 //
 // This is shape-selected, never a semantic change. An escaping pair (the
 // `finish_with_42`/`write_again` shape in `init/src/view_tests.mo`), a
-// hand-written bind, or any Monad other than IO falls straight through
-// to the v1 boxed path, which is unchanged and remains the reference
-// semantics (the Rust host interprets that path).
+// hand-written bind, or a continuation that is not the immediate match
+// falls straight through to the boxed path, which is unchanged and
+// remains the reference semantics (the Rust host interprets that path).
 //
 // The accessor head is matched by its RESOLVED symbol
 // (`init.view::Cell.get`, ...), not a bare name, so a user def that
@@ -2761,6 +2766,26 @@ def view_accessor_of (t : Term) : Option ViewAccessorCall :=
                     },
                 _ => Option.none,
             },
+    }
+
+/// `app (lam x => body) <accessor call>` -- the parser's desugaring of a
+/// PURE `let x := Cell.get c in body` (`lang/parser.mo`'s `let_term_body`).
+/// The accessor's result is not `IO`, so there is no bind head to peel;
+/// everything after the plan is built (`compile_view_bind_db`) is the same.
+def view_let_plan (fun : Term) (arg : Term) : Option ViewBindPlan :=
+    match term_peel fun {
+        Term.lam b _typ body =>
+            match view_accessor_of arg {
+                Option.some call =>
+                    match call {
+                        { op, args } =>
+                            let plan : ViewBindPlan :=
+                                { op := op, args := args, binder := b, body := body } in
+                            Option.some plan,
+                    },
+                Option.none => Option.none,
+            },
+        _ => Option.none,
     }
 
 /// `app (app <bind> <initializer>) (lam x => body)` -- the same shape
@@ -3129,9 +3154,17 @@ def compile_view_bind_db (c : CodegenCtx) (plan : ViewBindPlan) : Option Compile
 
 #[partial]
 def try_compile_view_bind_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option CompileResult :=
+    // Two shapes reach the same plan: the IO do-bind (`app (app bind m)
+    // lam`, before the accessors became pure) and the pure let
+    // (`app lam <accessor call>`, after). Keeping both costs one clause and
+    // lets the API flip land without a flag day in the golden IR.
     match view_bind_plan fun arg {
-        Option.none => Option.none,
         Option.some plan => compile_view_bind_db c plan,
+        Option.none =>
+            match view_let_plan fun arg {
+                Option.some plan => compile_view_bind_db c plan,
+                Option.none => Option.none,
+            },
     }
 
 // ── IO do-bind fusion (heapless-loops H1) ───────────────────────────
