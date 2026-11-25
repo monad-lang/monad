@@ -183,6 +183,72 @@ def WebImport.ws_free : WebImport :=
 def WebImport.ws_buffered : WebImport :=
     { module := "monad", name := "ws_buffered", params := ["i64"], result := "i64" }
 
+def WebImport.rtc_open : WebImport :=
+    { module := "monad", name := "rtc_open", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.rtc_peek : WebImport :=
+    { module := "monad", name := "rtc_peek", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.rtc_read : WebImport :=
+    { module := "monad", name := "rtc_read", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.rtc_info : WebImport :=
+    { module := "monad", name := "rtc_info", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.rtc_set_local : WebImport :=
+    { module := "monad", name := "rtc_set_local", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.rtc_set_remote : WebImport :=
+    { module := "monad", name := "rtc_set_remote", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.rtc_add_ice : WebImport :=
+    { module := "monad", name := "rtc_add_ice", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.rtc_open_channel : WebImport :=
+    { module := "monad", name := "rtc_open_channel", params := ["i64", "i64", "i64", "i64"], result := "i64" }
+
+def WebImport.rtc_send : WebImport :=
+    { module := "monad", name := "rtc_send", params := ["i64", "i64", "i64", "i64", "i64", "i64"], result := "i64" }
+
+def WebImport.rtc_add_stream : WebImport :=
+    { module := "monad", name := "rtc_add_stream", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.rtc_close : WebImport :=
+    { module := "monad", name := "rtc_close", params := ["i64"], result := "i64" }
+
+def WebImport.rtc_watch : WebImport :=
+    { module := "monad", name := "rtc_watch", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.rtc_unwatch : WebImport :=
+    { module := "monad", name := "rtc_unwatch", params := ["i64"], result := "i64" }
+
+def WebImport.rtc_free : WebImport :=
+    { module := "monad", name := "rtc_free", params := ["i64"], result := "i64" }
+
+def WebImport.media_get_begin : WebImport :=
+    { module := "monad", name := "media_get_begin", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.media_poll : WebImport :=
+    { module := "monad", name := "media_poll", params := ["i64"], result := "i64" }
+
+def WebImport.media_stream : WebImport :=
+    { module := "monad", name := "media_stream", params := ["i64"], result := "i64" }
+
+def WebImport.media_error : WebImport :=
+    { module := "monad", name := "media_error", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.media_free : WebImport :=
+    { module := "monad", name := "media_free", params := ["i64"], result := "i64" }
+
+def WebImport.media_stream_of : WebImport :=
+    { module := "monad", name := "media_stream_of", params := ["i64"], result := "i64" }
+
+def WebImport.media_free_op : WebImport :=
+    { module := "monad", name := "media_free_op", params := ["i64"], result := "i64" }
+
+def WebImport.dom_set_src_object : WebImport :=
+    { module := "monad", name := "dom_set_src_object", params := ["i64", "i64"], result := "i64" }
+
 def WebImport.now_ms : WebImport :=
     { module := "monad", name := "now_ms", params := List.empty, result := "i64" }
 
@@ -637,6 +703,15 @@ pub def WebAbi.default : WebAbi :=
             WebImport.ws_open, WebImport.ws_state, WebImport.ws_peek, WebImport.ws_read,
             WebImport.ws_info, WebImport.ws_text, WebImport.ws_send, WebImport.ws_close,
             WebImport.ws_watch, WebImport.ws_unwatch, WebImport.ws_buffered, WebImport.ws_free,
+            WebImport.rtc_open, WebImport.rtc_peek, WebImport.rtc_read, WebImport.rtc_info,
+            WebImport.rtc_set_local, WebImport.rtc_set_remote, WebImport.rtc_add_ice,
+            WebImport.rtc_open_channel, WebImport.rtc_send, WebImport.rtc_add_stream,
+            WebImport.rtc_close, WebImport.rtc_watch, WebImport.rtc_unwatch,
+            WebImport.rtc_free,
+            WebImport.media_get_begin, WebImport.media_poll, WebImport.media_stream,
+            WebImport.media_error, WebImport.media_free, WebImport.media_free_op,
+            WebImport.media_stream_of,
+            WebImport.dom_set_src_object,
             WebImport.now_ms, WebImport.storage_get_raw,
             WebImport.storage_set, WebImport.console_log, WebImport.try_result,
             WebImport.storage_has, WebImport.storage_remove, WebImport.storage_clear,

@@ -15,7 +15,10 @@
 /// rebase supplies `std::cstring`/`Ptr` for length-carrying calls; switch
 /// the multi-byte-string externs to `(ptr, len)` when that lands.
 
-use lib::types {Node, RequestId, ClipboardOp, CryptoOp, WebKey, WebSocket}
+use lib::types {
+    Node, RequestId, ClipboardOp, CryptoOp, WebKey, WebSocket, RtcPeer, MediaStream,
+    MediaStreamOp,
+}
 use std::bytebuf {ByteBuf}
 use std::buf {Buf}
 use std::ref {Ref}
@@ -168,6 +171,14 @@ def dom_attr_raw (n : Node) (name : String) : RawIO String
 
 #[extern "c" {link_name := "web_dom_focus"}]
 def dom_focus_raw (selector : String) : RawIO Unit
+
+/// Bind a media stream to a `<video>`/`<audio>` node as its `srcObject`, so
+/// the element plays it. This is the boundary's ONE object-property write,
+/// and it is deliberately not general: it takes a typed `MediaStream` and a
+/// `Node`, never a property name, so it cannot set an arbitrary JS property
+/// the way a `set_prop(name, value)` primitive would.
+#[extern "c" {link_name := "web_dom_set_src_object"}]
+def dom_set_src_object_raw (n : Node) (stream : MediaStream) : RawIO I64
 
 #[extern "c" {link_name := "web_timer_after"}]
 def timer_after_raw (ms : I64) : RawIO I64
@@ -637,3 +648,135 @@ def media_time_ms_raw (selector : String) (which : I64) : RawIO I64
 /// The media's `volume`, 0..1 (1 for a missing element).
 #[extern "c" {link_name := "web_media_volume"}]
 def media_volume_raw (selector : String) : RawIO F64
+
+// ── WebRTC (motes/web_wasm/src/rtc.mo, media_stream.mo) ────────────────
+//
+// The peer connection's callbacks only ever append to a per-peer queue, so
+// wasm is never re-entered from a browser callback and the Monad side drains
+// at its own pace -- the same contract as the WebSocket block above. What the
+// browser's own setters report (the description it produced, each candidate
+// it gathered, every connection- and channel-state change) arrives the same
+// way, which is what lets `set_local` answer at the call instead of returning
+// a promise.
+//
+// `getUserMedia` is the one genuinely promise-based operation, so it is
+// two-phase like `fetch`/`clipboard`/`crypto`: `*_begin`, then a poll.
+//
+// One extern per OPERATION, not one merged `(op, blob, num)` entry point. A
+// merged control word would have to carry a description, a flag byte and an
+// index at once, so its packing would be a second ABI the two sides could
+// drift on with no test to catch it. The `which`-selected READERS are the
+// other half of that judgement: there a selector only chooses among columns
+// of ONE queue entry, which is exactly the "merge twins behind an I64 flag"
+// case.
+
+/// Create a peer connection from an ICE-server blob (`encode_ice_servers`).
+#[extern "c" {link_name := "web_rtc_open"}]
+def rtc_open_raw (servers : String) : RawIO RtcPeer
+
+/// The queue's head, selected by `which`:
+/// 0 = the head entry's kind (0 when the queue is empty),
+/// 1 = the peer's live connection-state code,
+/// 2 = the head entry's payload length in bytes.
+#[extern "c" {link_name := "web_rtc_peek"}]
+def rtc_peek_raw (p : RtcPeer) (which : I64) : RawIO I64
+
+/// Read the head entry's payload into a caller-owned `ByteBuf` and pop it;
+/// answers the entry's kind, exactly like `ws_read`. One buffer for every
+/// kind: a description, a candidate blob, a channel label and a message body
+/// are all bytes, and the kind tells the caller how to read them.
+#[extern "c" {link_name := "web_rtc_read"}]
+def rtc_read_raw (p : RtcPeer) (buf : ByteBuf) : RawIO I64
+
+/// A numeric head-entry field, selected by `which`:
+/// 0 = the state code, 1 = `ordered` (0/1), 2 = `max_retransmits`,
+/// 3 = the binary flag (1 when the message payload is bytes).
+#[extern "c" {link_name := "web_rtc_info"}]
+def rtc_info_raw (p : RtcPeer) (which : I64) : RawIO I64
+
+/// `setLocalDescription`: `blob` is `encode_sdp`. 1 on success.
+#[extern "c" {link_name := "web_rtc_set_local"}]
+def rtc_set_local_raw (p : RtcPeer) (blob : String) : RawIO I64
+
+/// `setRemoteDescription`: `blob` is `encode_sdp`. 1 on success.
+#[extern "c" {link_name := "web_rtc_set_remote"}]
+def rtc_set_remote_raw (p : RtcPeer) (blob : String) : RawIO I64
+
+/// `addIceCandidate`: `blob` is `encode_ice`. 1 on success (also for the
+/// end-of-candidates marker).
+#[extern "c" {link_name := "web_rtc_add_ice"}]
+def rtc_add_ice_raw (p : RtcPeer) (blob : String) : RawIO I64
+
+/// `createDataChannel`. `num` packs `ordered` in bit 0 and
+/// `max_retransmits + 1` above it, so -1 (the "reliable" sentinel) becomes 0
+/// and a partially reliable channel keeps its small count.
+#[extern "c" {link_name := "web_rtc_open_channel"}]
+def rtc_open_channel_raw (p : RtcPeer) (label : String) (num : I64) : RawIO I64
+
+/// Send one message on the channel called `label`. `payload` is a `ByteBuf`
+/// of the message's bytes and `is_binary` says which way to send it.
+#[extern "c" {link_name := "web_rtc_send"}]
+def rtc_send_raw (p : RtcPeer) (label : String) (payload : ByteBuf) (is_binary : I64)
+    : RawIO I64
+
+/// Send a `MediaStream`'s tracks over the peer. 1 when at least one track was
+/// added.
+#[extern "c" {link_name := "web_rtc_add_stream"}]
+def rtc_add_stream_raw (p : RtcPeer) (stream : MediaStream) : RawIO I64
+
+/// `RTCPeerConnection.close`. Always 1.
+#[extern "c" {link_name := "web_rtc_close"}]
+def rtc_close_raw (p : RtcPeer) : RawIO I64
+
+/// Have the host dispatch `handler` (an oak handler id) when the peer's queue
+/// gains entries. One dispatch drains everything queued.
+#[extern "c" {link_name := "web_rtc_watch"}]
+def rtc_watch_raw (p : RtcPeer) (handler : U32) : RawIO I64
+
+#[extern "c" {link_name := "web_rtc_unwatch"}]
+def rtc_unwatch_raw (p : RtcPeer) : RawIO I64
+
+#[extern "c" {link_name := "web_rtc_free"}]
+def rtc_free_raw (p : RtcPeer) : RawIO I64
+
+/// Start a media request for `constraints` (the browser's
+/// `MediaStreamConstraints`/`DisplayMediaStreamOptions` as JSON text).
+///
+/// `display` picks the API: 0 is `getUserMedia` (camera/microphone), 1 is
+/// `getDisplayMedia` (screen). One native behind a flag rather than two:
+/// the request, the polling and the result are identical, and only the
+/// call differs -- a duplicated native would mean two of everything.
+#[extern "c" {link_name := "web_media_get_begin"}]
+def media_get_begin_raw (constraints : String) (display : I64) : RawIO MediaStreamOp
+
+/// 0 pending, 1 done, 2 failed.
+#[extern "c" {link_name := "web_media_poll"}]
+def media_poll_raw (op : MediaStreamOp) : RawIO I64
+
+/// The stream a finished operation produced (the null handle until done).
+#[extern "c" {link_name := "web_media_stream"}]
+def media_stream_raw (op : MediaStreamOp) : RawIO MediaStream
+
+/// The permission error's DOMException name (`NotAllowedError`,
+/// `NotFoundError`, ...).
+#[extern "c" {link_name := "web_media_error"}]
+def media_error_raw (op : MediaStreamOp) : RawIO String
+
+/// Release a stream's host slot (the tracks themselves are the browser's).
+#[extern "c" {link_name := "web_media_free"}]
+def media_free_raw (stream : MediaStream) : RawIO I64
+
+/// The `MediaStream` a `RtcEvent.track` id names.
+///
+/// A pure `RtcEvent` carries a bare `I64` (the pure layer must not name a
+/// `web_wasm` handle), so this is the bridge back to a typed handle. The host
+/// answers the null handle when the id is not a live stream slot, which
+/// `MediaStream.attach`/`Rtc.add_stream` already refuse.
+#[extern "c" {link_name := "web_media_stream_of"}]
+def media_stream_of_raw (id : I64) : RawIO MediaStream
+
+/// Release a finished operation's host slot. `MediaStream.stop` reclaims the
+/// op that produced a stream; a FAILED request produces no stream, so its op
+/// is released here instead.
+#[extern "c" {link_name := "web_media_free_op"}]
+def media_free_op_raw (op : MediaStreamOp) : RawIO I64
