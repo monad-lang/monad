@@ -12,6 +12,7 @@
 
 use web_event::event {WebEvent, HandlerResult, ListenerFlags}
 use web_event::websocket {WsEvent}
+use web_event::rtc {RtcEvent, RtcIceServer}
 use xml_html::html {Html.Attr}
 use lib::typed {Oak.Attr}
 
@@ -39,7 +40,23 @@ pub type Subscription (Msg : Type) {
     /// the subscription appears, reports each `WsEvent` (opened, message,
     /// closed, failed) through `handler`, and closes it when the
     /// subscription goes away. Sending is `Command.ws_send url data`.
-    websocket (url : String) (protocols : List String) (handler : WsEvent -> Msg)
+    websocket (url : String) (protocols : List String) (handler : WsEvent -> Msg),
+    /// A WebRTC peer connection, owned by the subscription: the runtime
+    /// creates it when the subscription appears, reports every `RtcEvent`
+    /// (a local description or candidate to signal, a state change, a data
+    /// channel and its messages) through `handler`, and closes it when the
+    /// subscription goes away.
+    ///
+    /// `key` distinguishes two subscriptions in one program (an app that
+    /// offers AND answers has two peers); it only has to be unique within
+    /// the subscription list.
+    ///
+    /// Signalling is NOT the runtime's job: forward
+    /// `RtcEvent.local_description`/`local_candidate` over a WebSocket, and
+    /// hand the peer's reply back with `Command.rtc_set_remote`/
+    /// `Command.rtc_add_ice`. `key` names the peer to send or open a
+    /// channel on (`Command.rtc_send`, `Command.rtc_open_channel`).
+    rtc (key : String) (servers : List RtcIceServer) (handler : RtcEvent -> Msg)
 }
 
 pub def Subscription.window_msg {Msg : Type} (event : String) (m : Msg) : Subscription Msg :=
