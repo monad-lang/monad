@@ -230,22 +230,25 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "cell_set" then Option.some (NativeWrapKind.raw_io_passthrough "monad_cell_set")
             else if String.beq target "cell_update" then Option.some (NativeWrapKind.raw_io_passthrough "monad_cell_update")
             else if String.beq target "cell_add_i64" then Option.some (NativeWrapKind.raw_io_passthrough "monad_cell_add_i64")
-            // `init/src/view.mo`: the linear `Cell` handle. All four are
-            // `RawIO`-typed with a thin `.mo` wrapper. `view_free`
-            // POISONS rather than freeing (the block is Boehm-owned), so
-            // this is not a real free until ownership O3/O4.
-            else if String.beq target "view_new" then Option.some (NativeWrapKind.raw_io_passthrough "monad_view_new")
-            else if String.beq target "view_get" then Option.some (NativeWrapKind.raw_io_passthrough "monad_view_get")
-            else if String.beq target "view_set" then Option.some (NativeWrapKind.raw_io_passthrough "monad_view_set")
-            else if String.beq target "view_free" then Option.some (NativeWrapKind.raw_io_passthrough "monad_view_free")
+            // `init/src/view.mo`: the linear `Cell` handle. These are PURE
+            // (`passthrough`): the write is confined to the handle the native
+            // consumes and returns, so there is no `RawIO.io` box to build and
+            // no `IO.mk` wrapper. `view_free` POISONS rather than freeing (the
+            // block is Boehm-owned), so this is not a real free until
+            // ownership O3/O4.
+            else if String.beq target "view_new" then Option.some (NativeWrapKind.passthrough "monad_view_new")
+            else if String.beq target "view_get" then Option.some (NativeWrapKind.passthrough "monad_view_get")
+            else if String.beq target "view_set" then Option.some (NativeWrapKind.passthrough "monad_view_set")
+            else if String.beq target "view_free" then Option.some (NativeWrapKind.passthrough "monad_view_free")
             // `init/src/view.mo`'s `Slot Empty/Full`: same one-word handle
-            // ABI as `Cell`; `slot_empty` takes no argument.
-            else if String.beq target "slot_new" then Option.some (NativeWrapKind.raw_io_passthrough "monad_slot_new")
-            else if String.beq target "slot_empty" then Option.some (NativeWrapKind.raw_io_passthrough "monad_slot_empty")
-            else if String.beq target "slot_take" then Option.some (NativeWrapKind.raw_io_passthrough "monad_slot_take")
-            else if String.beq target "slot_fill" then Option.some (NativeWrapKind.raw_io_passthrough "monad_slot_fill")
-            else if String.beq target "slot_peek" then Option.some (NativeWrapKind.raw_io_passthrough "monad_slot_peek")
-            else if String.beq target "slot_free" then Option.some (NativeWrapKind.raw_io_passthrough "monad_slot_free")
+            // ABI as `Cell`; `slot_empty` takes no argument. Pure for the
+            // same reason -- the mutation is confined to the handle.
+            else if String.beq target "slot_new" then Option.some (NativeWrapKind.passthrough "monad_slot_new")
+            else if String.beq target "slot_empty" then Option.some (NativeWrapKind.passthrough "monad_slot_empty")
+            else if String.beq target "slot_take" then Option.some (NativeWrapKind.passthrough "monad_slot_take")
+            else if String.beq target "slot_fill" then Option.some (NativeWrapKind.passthrough "monad_slot_fill")
+            else if String.beq target "slot_peek" then Option.some (NativeWrapKind.passthrough "monad_slot_peek")
+            else if String.beq target "slot_free" then Option.some (NativeWrapKind.passthrough "monad_slot_free")
             // `String.hash`'s `#[native string_hash]` -- pure `U64`
             // result, same shape as `string_length`. `IO.file_exists`/
             // `is_dir` (`std/io.mo`, `#[native "X_native"]` on the

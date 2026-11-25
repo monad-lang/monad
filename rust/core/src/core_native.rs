@@ -203,6 +203,23 @@ const PURE_NATIVES: &[&str] = &[
   "buf_get_u8",
   // `std_fd` (std/stream.mo): names one of the preassigned stdio slots.
   "std_fd",
+  // `init/src/view.mo`'s linear `Cell` accessors. Pure by the
+  // linear-mutation rule: each mutates only the handle it consumes and
+  // returns (or consumes for good, like `view_free`), and the checker
+  // guarantees the caller holds the only reference, so the write is
+  // unobservable. The `Slot` accessors stay `RawIO` until their half of
+  // the change lands.
+  "view_new",
+  "view_get",
+  "view_set",
+  "view_free",
+  // The `Slot` accessors, on the same rule.
+  "slot_new",
+  "slot_empty",
+  "slot_take",
+  "slot_fill",
+  "slot_peek",
+  "slot_free",
 ];
 
 /// Explicitly excluded (for documentation/grep-ability, not consulted by
@@ -2446,7 +2463,7 @@ fn view_slot(handle: u64, name: &str) -> Result<usize, CoreEvalError> {
     .map_err(|_| CoreEvalError::NativeArgError(format!("{name}: no such Cell {handle}")))
 }
 
-fn view_new(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+fn view_new(args: &[Value], _natives: &NativeTable) -> Result<Value, CoreEvalError> {
   let init = args
     .first()
     .ok_or_else(|| CoreEvalError::NativeArgError("view_new needs 1 arg".into()))?;
@@ -2454,7 +2471,7 @@ fn view_new(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
   reg.push(Some(init.clone()));
   let id = (reg.len() - 1) as u64;
   drop(reg);
-  raw_io_wrap(natives, handle_value(VIEW_HANDLE_BASE + id))
+  Ok(handle_value(VIEW_HANDLE_BASE + id))
 }
 
 fn view_get(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
@@ -2479,10 +2496,10 @@ fn view_get(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
     tag: pair_ctor.tag,
     args: std::sync::Arc::new(vec![value, handle_value(handle)].into()),
   };
-  raw_io_wrap(natives, pair)
+  Ok(pair)
 }
 
-fn view_set(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+fn view_set(args: &[Value], _natives: &NativeTable) -> Result<Value, CoreEvalError> {
   if args.len() < 2 {
     return Err(CoreEvalError::NativeArgError(
       "view_set needs 2 args".into(),
@@ -2501,10 +2518,10 @@ fn view_set(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
   }
   *slot = Some(args[1].clone());
   drop(reg);
-  raw_io_wrap(natives, handle_value(handle))
+  Ok(handle_value(handle))
 }
 
-fn view_free(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+fn view_free(args: &[Value], _natives: &NativeTable) -> Result<Value, CoreEvalError> {
   let handle = extract_handle_id(
     args
       .first()
@@ -2517,7 +2534,7 @@ fn view_free(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
     .ok_or_else(|| CoreEvalError::NativeArgError(format!("view_free: no such Cell {handle}")))?;
   *slot = None;
   drop(reg);
-  raw_io_wrap(natives, unit_value())
+  Ok(unit_value())
 }
 
 // ── Slot (init/src/view.mo) ────────────────────────────────────────────
@@ -2553,7 +2570,7 @@ fn slot_index(handle: u64, name: &str) -> Result<usize, CoreEvalError> {
     .map_err(|_| CoreEvalError::NativeArgError(format!("{name}: no such Slot {handle}")))
 }
 
-fn slot_new(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+fn slot_new(args: &[Value], _natives: &NativeTable) -> Result<Value, CoreEvalError> {
   let init = args
     .first()
     .ok_or_else(|| CoreEvalError::NativeArgError("slot_new needs 1 arg".into()))?;
@@ -2564,10 +2581,10 @@ fn slot_new(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
   }));
   let id = (reg.len() - 1) as u64;
   drop(reg);
-  raw_io_wrap(natives, handle_value(SLOT_HANDLE_BASE + id))
+  Ok(handle_value(SLOT_HANDLE_BASE + id))
 }
 
-fn slot_empty(_args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+fn slot_empty(_args: &[Value], _natives: &NativeTable) -> Result<Value, CoreEvalError> {
   let mut reg = slot_states()?;
   reg.push(Some(SlotState {
     full: false,
@@ -2575,7 +2592,7 @@ fn slot_empty(_args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalE
   }));
   let id = (reg.len() - 1) as u64;
   drop(reg);
-  raw_io_wrap(natives, handle_value(SLOT_HANDLE_BASE + id))
+  Ok(handle_value(SLOT_HANDLE_BASE + id))
 }
 
 fn slot_take(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
@@ -2605,10 +2622,10 @@ fn slot_take(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
     tag: pair_ctor.tag,
     args: std::sync::Arc::new(vec![value, handle_value(handle)].into()),
   };
-  raw_io_wrap(natives, pair)
+  Ok(pair)
 }
 
-fn slot_fill(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+fn slot_fill(args: &[Value], _natives: &NativeTable) -> Result<Value, CoreEvalError> {
   if args.len() < 2 {
     return Err(CoreEvalError::NativeArgError(
       "slot_fill needs 2 args".into(),
@@ -2624,7 +2641,7 @@ fn slot_fill(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
   state.payload = Some(args[1].clone());
   state.full = true;
   drop(reg);
-  raw_io_wrap(natives, handle_value(handle))
+  Ok(handle_value(handle))
 }
 
 fn slot_peek(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
@@ -2653,10 +2670,10 @@ fn slot_peek(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
     tag: pair_ctor.tag,
     args: std::sync::Arc::new(vec![value, handle_value(handle)].into()),
   };
-  raw_io_wrap(natives, pair)
+  Ok(pair)
 }
 
-fn slot_free(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+fn slot_free(args: &[Value], _natives: &NativeTable) -> Result<Value, CoreEvalError> {
   let handle = extract_handle_id(
     args
       .first()
@@ -2669,7 +2686,7 @@ fn slot_free(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
     .ok_or_else(|| CoreEvalError::NativeArgError(format!("slot_free: no such Slot {handle}")))?;
   *slot = None;
   drop(reg);
-  raw_io_wrap(natives, unit_value())
+  Ok(unit_value())
 }
 
 /// `Ref.update (r : Ref A) (f : A -> A) : IO A` — evaluator-backed because
@@ -5284,33 +5301,26 @@ mod tests {
   /// `view_get` is the REFERENCE SEMANTICS for view-types P2: the
   /// payload and the SAME handle travel as one `Pair`, because the `.mo`
   /// wrapper is linear and may not use the handle twice. The self-hosted
-  /// compiler's fused do-bind (`try_compile_view_bind_db`,
+  /// compiler's fused `let` (`try_compile_view_bind_db`,
   /// `codegen/src/emit.mo`) relies on exactly this pairing: it
   /// reads the payload with `monad_view_payload` and passes the input
   /// handle through instead of returning both, so `view_get_impl` and
   /// `view_set_impl` must keep returning the word they were given. This
   /// pins the evaluator half; `view_ir_tests.mo` pins the compiled half.
+  ///
+  /// The accessors are PURE (`init/src/view.mo`): the handle IS the value,
+  /// with no `RawIO.io` wrapper to peel.
   #[test]
   fn test_view_get_keeps_payload_and_same_handle() {
     let natives = test_natives();
-    let raw = natives.well_known.raw_io_io.unwrap();
     let pair_ctor = require_ctor(natives.well_known.pair_pair, "Pair.pair").unwrap();
 
     let created = view_new(&[int(41)], &natives).unwrap();
-    let Value::Con { tag, ref args } = created else {
-      panic!("view_new did not return a RawIO wrapper: {created:?}")
-    };
-    assert_eq!(tag, raw.tag);
-    let handle = extract_handle_id(&args.first().cloned().unwrap()).unwrap();
+    let handle = extract_handle_id(&created).unwrap();
 
     let read = view_get(&[handle_value(handle)], &natives).unwrap();
     let Value::Con { tag, ref args } = read else {
-      panic!("view_get did not return a RawIO wrapper: {read:?}")
-    };
-    assert_eq!(tag, raw.tag);
-    let pair = args.first().cloned().unwrap();
-    let Value::Con { tag, ref args } = pair else {
-      panic!("view_get did not return a Pair: {pair:?}")
+      panic!("view_get did not return a Pair: {read:?}")
     };
     assert_eq!(tag, pair_ctor.tag);
     assert!(matches!(args.first(), Some(Value::Lit(IrLit::Num(41, _)))));
@@ -5318,14 +5328,7 @@ mod tests {
 
     // The same-word invariant the fused `get`/`set` lowerings rely on.
     let written = view_set(&[handle_value(handle), int(7)], &natives).unwrap();
-    let Value::Con { tag, ref args } = written else {
-      panic!("view_set did not return a RawIO wrapper: {written:?}")
-    };
-    assert_eq!(tag, raw.tag);
-    assert_eq!(
-      extract_handle_id(&args.first().cloned().unwrap()).unwrap(),
-      handle
-    );
+    assert_eq!(extract_handle_id(&written).unwrap(), handle);
   }
 
   #[test]
