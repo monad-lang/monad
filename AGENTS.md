@@ -578,6 +578,23 @@ signature differs). Wiring only the first two compiles and fails at runtime.
    Prefer this split for new native families: the C stays a raw payload
    producer, and the `.mo` wrapper owns naming, defaults and the
    user-facing type.
+- **A mutation through a linearly-owned value is not an effect.** A native
+  that writes only memory reached through a `#[linear]` value it consumes
+  and returns (or consumes for good, like a `free`), and exposes no other
+  state, is declared with its BARE return type — not `RawIO A`, and with
+  no `IO.mk` wrapper. The handle's linearity is what makes the write
+  unobservable: the checker guarantees the caller holds the only reference
+  and gets it back (or gives it up), so no other reference can witness the
+  change. `init/src/view.mo`'s `Cell`/`Slot` accessors are the standing
+  family (`view_get_raw : [Copy A] (c : Cell A) : Pair A (Cell A)`);
+  allocation qualifies too (`Cell.new`, `Slot.new`, `Slot.empty`), because
+  the fresh handle is the only route to the new block. Two consequences
+  follow. A nullary def may not return a linear value at all (P12: a
+  global is named, not moved, so every reference would hand out the same
+  handle). And anything mutated but not reached through the returned
+  handle — a shared registry, an out-parameter, a foreign object — is
+  still `RawIO`; the rule is about *who can observe*, not about whether
+  memory was written.
 - **Merge twin natives behind an I64 flag rather than duplicating them** —
   `proc_read`'s stream flag (stdout/stderr) and `proc_wait`'s kill flag
   (reap only / SIGKILL-then-reap) are the standing examples. The dispatch
@@ -639,7 +656,10 @@ reintroduce their shape under another name.
 payload) and `Slot s A` (empty or full, any payload) in `init/src/view.mo`
 are opaque linear handles: every operation consumes the handle and returns
 it, so a use-after-free or two cursors into one allocation are untypable.
-`Cell.swap`/`Slot.swap` exchange two handles' payloads, and
+Those operations are also **pure** — the native mutates only the handle it
+consumes and returns, so there is no `IO`/`RawIO` wrapper (see "The IO
+wrapping rules") and callers use plain `let`s. `Cell.swap`/`Slot.swap`
+exchange two handles' payloads, and
 `init/src/linked.mo` builds a mutable linked list whose nodes are `Slot`s —
 `Linked.reverse` and `Linked.swap_adjacent` relink in place by refilling
 each node's own handle, which is "pointer swapping" with no address in

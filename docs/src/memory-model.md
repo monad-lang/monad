@@ -96,27 +96,27 @@ or refcount traffic. The v1 handles are:
 Neither handle has a `Copy` or `Clone` instance. Every mutating operation
 consumes the handle, and `get`/`set`/`take`/`fill` return the new one, so a
 use-after-free or double-free would require duplicating a handle — which the
-affine rule rejects.
+affine rule rejects. The operations are *pure*: the native mutates only the
+handle it consumes and returns, so no other reference can witness the change
+and there is no `IO`/`RawIO` wrapper (AGENTS.md, "a mutation through a
+linearly-owned value is not an effect").
 
 ```monad
 use init::view {Cell}
 
-def main (_args : List String) : IO Unit := do {
-    let c0 <- Cell.new 41;
-    let p <- Cell.get c0;
+def main (_args : List String) : IO Unit :=
+    let c0 := Cell.new 41 in
+    let p := Cell.get c0 in
     match p {
-        Pair.pair x c1 => do {
-            let c2 <- Cell.set c1 (I64.add x 1);
-            let p2 <- Cell.get c2;
+        Pair.pair x c1 =>
+            let c2 := Cell.set c1 (I64.add x 1) in
+            let p2 := Cell.get c2 in
             match p2 {
-                Pair.pair y c3 => do {
-                    let _ <- Cell.free c3;
-                    IO.println (I64.to_string y)
-                },
-            }
-        },
+                Pair.pair y c3 =>
+                    let _ := Cell.free c3 in
+                    IO.println (I64.to_string y),
+            },
     }
-}
 ```
 
 `Slice n A`, an indexed array view with an erased `Fits i n` bounds proof, is
