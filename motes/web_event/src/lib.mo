@@ -14,5 +14,5 @@ pub use lib::rtc {
     RtcSdp.kind_of, RtcSdp.text_of, RtcData.text_of, RtcData.bytes_of,
     RtcState.channel_name, RtcState.connection_name,
     encode_sdp, decode_sdp, encode_ice, decode_ice, decode_message,
-    encode_ice_servers, state_of_code,
+    decode_message_bytes, encode_ice_servers, state_of_code,
 }

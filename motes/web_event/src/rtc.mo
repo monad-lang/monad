@@ -382,6 +382,63 @@ pub def decode_message (s : String) : Option (Pair String String) :=
             Pair.pair label body => Option.some (Pair.pair label body),
         },
     }
+
+/// Split a message entry's payload into its label and its BODY BYTES.
+///
+/// `decode_message` answers a `String` body and is what an all-text protocol
+/// wants, but a Monad `String` is NUL-terminated: decoding a binary frame
+/// through it truncates at the first `0x00`, and any non-UTF-8 byte is
+/// lossy. A binary channel carries arbitrary bytes, so the boundary uses
+/// this one instead -- the label is text (the host wrote it), the body is
+/// not necessarily.
+///
+/// Byte-level twin of `take_part`: the digit run is read from `List U8`, and
+/// the label is decoded to a `String` only after its length is known to be
+/// in range.
+#[terminating]
+def take_uint_bytes (bytes : List U8) (acc : I64) (digits : I64)
+    : Option (Pair I64 (List U8)) :=
+    match bytes {
+        List.empty => Option.none,
+        List.cons b rest =>
+            let v : I64 := U8.to_i64 b in
+            if I64.beq v 58i64
+            then
+                if I64.beq digits 0i64
+                then Option.none
+                else Option.some (Pair.pair acc rest)
+            else
+                if v < 48i64 || I64.gt v 57i64
+                then Option.none
+                else take_uint_bytes rest
+                        (I64.add (I64.mul acc 10i64) (v - 48i64))
+                        (I64.add digits 1i64),
+    }
+
+/// The first `n` bytes as a list, plus the rest; `none` when there are fewer.
+#[terminating]
+def take_n_bytes (bytes : List U8) (n : I64) (acc : List U8)
+    : Option (Pair (List U8) (List U8)) :=
+    if I64.beq n 0i64
+    then Option.some (Pair.pair (List.reverse acc) bytes)
+    else match bytes {
+        List.empty => Option.none,
+        List.cons b rest => take_n_bytes rest (I64.sub n 1i64) (List.cons b acc),
+    }
+
+pub def decode_message_bytes (bytes : List U8) : Option (Pair String (List U8)) :=
+    match take_uint_bytes bytes 0i64 0i64 {
+        Option.none => Option.none,
+        Option.some p => match p {
+            Pair.pair n rest => match take_n_bytes rest n List.empty {
+                Option.none => Option.none,
+                Option.some l => match l {
+                    Pair.pair label body =>
+                        Option.some (Pair.pair (String.from_list label) body),
+                },
+            },
+        },
+    }
 // ─── State vocabulary ────────────────────────────────────────────────
 
 /// The host's numeric state code: the data-channel mapping, shared with

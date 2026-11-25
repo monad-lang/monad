@@ -11,7 +11,7 @@
 use lib::rtc {
     RtcSdp, RtcIce, RtcState, RtcData, RtcChannel, RtcIceServer,
     encode_sdp, decode_sdp, encode_ice, decode_ice, state_of_code,
-    encode_ice_servers, decode_message,
+    encode_ice_servers, decode_message, decode_message_bytes,
     RtcSdp.kind_of, RtcSdp.text_of, RtcData.text_of, RtcData.bytes_of,
     RtcState.channel_name, RtcState.connection_name,
 }
@@ -247,6 +247,79 @@ def test_message_payload_splits_the_label_from_the_body : Bool :=
         Option.none => false,
         Option.some p => match p {
             Pair.pair label body => String.beq label "chat" && String.beq body "hello",
+        },
+    }
+
+/// The byte-level twin: same label, and a body that survives NUL and
+/// non-UTF-8 bytes. This is the one the boundary uses, because a Monad
+/// `String` is NUL-terminated and would truncate a binary frame.
+#[test]
+def test_message_bytes_splits_the_label_from_the_body : Bool :=
+    match decode_message_bytes (String.to_list "4:chathello") {
+        Option.none => false,
+        Option.some p => match p {
+            Pair.pair label body =>
+                String.beq label "chat" && I64.beq (List.length body) 5i64,
+        },
+    }
+
+/// The body `[0x00, 0x07, 0xFF]` exactly: length three, and the three bytes in
+/// order. Takes the list once, so no `Copy` instance is needed.
+def body_is_nul_7_ff (body : List U8) : Bool :=
+    match body {
+        List.cons a rest => match rest {
+            List.cons b rest2 => match rest2 {
+                List.cons c tail =>
+                    I64.beq (U8.to_i64 a) 0i64
+                        && I64.beq (U8.to_i64 b) 7i64
+                        && I64.beq (U8.to_i64 c) 255i64
+                        && List.is_empty tail,
+                List.empty => false,
+            },
+            List.empty => false,
+        },
+        List.empty => false,
+    }
+
+/// The regression this exists for: a binary body containing `0x00` keeps its
+/// tail. `decode_message` on the same bytes loses everything from the NUL on.
+#[test]
+def test_message_bytes_preserves_a_nul_in_the_body : Bool :=
+    let payload : List U8 := [49u8, 58u8, 120u8, 0u8, 7u8, 255u8] in
+    match decode_message_bytes payload {
+        Option.none => false,
+        Option.some p => match p {
+            Pair.pair label body =>
+                String.beq label "x"
+                    && body_is_nul_7_ff body,
+        },
+    }
+
+/// The label's bytes are text, so a NUL in the LABEL is not a thing the host
+/// can produce -- but a missing prefix or an overrun must still be rejected
+/// rather than silently answering a short body.
+#[test]
+def test_message_bytes_rejects_a_missing_prefix : Bool :=
+    match decode_message_bytes (String.to_list "nope") {
+        Option.none => true,
+        Option.some _ => false,
+    }
+
+#[test]
+def test_message_bytes_rejects_an_overlong_label : Bool :=
+    match decode_message_bytes [57u8, 58u8, 97u8] {
+        Option.none => true,
+        Option.some _ => false,
+    }
+
+/// An empty label is legal here too.
+#[test]
+def test_message_bytes_allows_an_empty_label : Bool :=
+    match decode_message_bytes [48u8, 58u8, 104u8, 105u8] {
+        Option.none => false,
+        Option.some p => match p {
+            Pair.pair label body =>
+                String.beq label "" && I64.beq (List.length body) 2i64,
         },
     }
 

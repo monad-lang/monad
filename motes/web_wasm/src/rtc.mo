@@ -37,8 +37,8 @@ use lib::ffi {
 use lib::types {RtcPeer, MediaStream}
 use web_event::rtc {
     RtcSdp, RtcIce, RtcData, RtcState, RtcEvent, RtcIceServer, RtcChannel,
-    encode_sdp, decode_sdp, encode_ice, decode_ice, decode_message, encode_ice_servers,
-    state_of_code,
+    encode_sdp, decode_sdp, encode_ice, decode_ice, encode_ice_servers,
+    decode_message_bytes, state_of_code,
 }
 
 // ─── Selector numbers ────────────────────────────────────────────────
@@ -279,19 +279,22 @@ def Rtc.next_ice (p : RtcPeer) : IO (Option RtcEvent) := do {
 /// flag. A separate def rather than a `let ... := if ...` inside the drain
 /// arm: a `let` binding a conditional does not parse as a do-block or
 /// match-arm statement.
-def message_data (is_binary : I64) (body : String) : RtcData :=
+def message_data (is_binary : I64) (body : List U8) : RtcData :=
     if I64.beq is_binary 1i64
-    then RtcData.binary (String.to_list body)
-    else RtcData.text body
+    then RtcData.binary body
+    else RtcData.text (String.from_list body)
 
 /// A message entry's payload is `<label length>:<label><body>` (see
-/// `decode_message`), so one buffer carries both halves. `is_binary` decides
-/// whether the body is handed over as bytes or decoded as its UTF-8 text.
+/// `decode_message_bytes`), so one buffer carries both halves.
+///
+/// The split happens on the BYTES, not on a `String` made from them: a Monad
+/// `String` is NUL-terminated, so decoding the payload through one would
+/// truncate every binary frame at its first `0x00` and lose any non-UTF-8
+/// byte. The label is text (the host wrote it); the body is not.
 def Rtc.next_message (p : RtcPeer) : IO (Option RtcEvent) := do {
     let is_binary <- IO.mk (rtc_info_raw p info_binary);
     let raw <- Rtc.take_bytes p;
-    let text := String.from_list raw;
-    match decode_message text {
+    match decode_message_bytes raw {
         Option.none => IO.pure Option.none,
         Option.some parts => match parts {
             Pair.pair label body =>
