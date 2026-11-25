@@ -77,6 +77,7 @@ def kind_connection : I64 := 3i64
 def kind_channel : I64 := 4i64
 def kind_channel_state : I64 := 5i64
 def kind_message : I64 := 6i64
+def kind_track : I64 := 7i64
 
 // ─── Lifecycle ───────────────────────────────────────────────────────
 
@@ -251,6 +252,14 @@ pub def Rtc.next (p : RtcPeer) : IO (Option RtcEvent) := do {
     }
     else if I64.beq kind kind_message
     then Rtc.next_message p
+    else if I64.beq kind kind_track
+    then do {
+        // The stream id rides in the state column, and the entry has no
+        // payload -- but `rtc_read` is still the one pop.
+        let sid <- IO.mk (rtc_info_raw p info_state);
+        let _ <- Rtc.take p;
+        IO.pure (Option.some (RtcEvent.track sid))
+    }
     else do {
         // A kind this build does not know. Pop it (payload and all, so a stale
         // entry cannot wedge the queue) and report nothing.

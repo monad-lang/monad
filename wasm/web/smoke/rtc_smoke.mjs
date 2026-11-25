@@ -93,6 +93,13 @@ class FakePeerConnection {
     if (this.ondatachannel) this.ondatachannel({ channel: ch });
     return ch;
   }
+  // The remote peer starts sending a stream: the spec delivers one `track`
+  // event per track, each carrying the stream it belongs to.
+  fireTrack(stream) {
+    const track = { kind: 'video', id: 'remote-track' };
+    if (this.ontrack) this.ontrack({ track, streams: [stream] });
+    return track;
+  }
 }
 
 class FakeDataChannel {
@@ -260,6 +267,20 @@ expectLog(sendLogs, 'send:bytes=0');
 // ── sending on a label with no channel fails rather than throwing ──
 const closedLogs = captureLogs(() => instance.exports.imp_closed_send());
 expectLog(closedLogs, 'closed:send=0');
+
+// ── a remote stream: `ontrack` must REGISTER the stream, so the app gets a
+// handle it can attach -- that is the receive half of media, and the pure
+// layer names it `RtcEvent.track`. Before the fix nothing was registered and
+// the only handles that ever existed were local cameras. ──
+const remote = new FakeMediaStream();
+const remoteBefore = streamsCreated.length;
+pc.fireTrack(remote);
+await settle();
+instance.exports.oak_tick();
+// The subscription's `update` counts a track as +1 (see the fixture's
+// `bump`), so the count moves by one and the event carried a usable id.
+if (count() !== '101113') fail(`after a remote track the count is ${count()}`);
+if (streamsCreated.length !== remoteBefore) fail('a remote track created a local capture');
 
 // ── the camera: begin, poll, attach to a `<video>`, stop ──
 const camLogs = captureLogs(() => instance.exports.imp_camera());

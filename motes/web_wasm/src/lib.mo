@@ -108,5 +108,5 @@ pub use lib::media_stream {
     MediaStream.request_av, MediaStream.request_video,
     MediaStream.request_audio, MediaStream.request_display,
     MediaStream.poll, MediaStream.result, MediaStream.error, MediaStream.await,
-    MediaStream.attach, MediaStream.stop, MediaStream.release,
+    MediaStream.attach, MediaStream.stop, MediaStream.release, MediaStream.of_track,
 }

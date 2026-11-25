@@ -138,7 +138,16 @@ pub type RtcEvent {
     /// A data channel opened, closed or failed; `label` names which.
     channel_state (label : String) (state : RtcState),
     /// A whole message arrived on the channel called `label`.
-    message (label : String) (data : RtcData)
+    message (label : String) (data : RtcData),
+    /// The remote peer is sending a media stream; `stream` is the host's id
+    /// for it, which `web_wasm::MediaStream` reads with
+    /// `MediaStream.attach`. It arrives once per stream, before the track's
+    /// frames, so a UI can bind it to a `<video>` when the event lands.
+    ///
+    /// The id is a bare `I64` on purpose: this module is pure vocabulary and
+    /// must not name a `web_wasm` handle type, so the concrete handle is
+    /// produced at the boundary (`web_wasm::Rtc.remote_stream`).
+    track (stream : I64)
 }
 
 // ─── Accessors ───────────────────────────────────────────────────────
@@ -411,8 +420,8 @@ def take_uint_bytes (bytes : List U8) (acc : I64) (digits : I64)
                 if v < 48i64 || I64.gt v 57i64
                 then Option.none
                 else take_uint_bytes rest
-                        (I64.add (I64.mul acc 10i64) (v - 48i64))
-                        (I64.add digits 1i64),
+                    (I64.add (I64.mul acc 10i64) (v - 48i64))
+                    (I64.add digits 1i64),
     }
 
 /// The first `n` bytes as a list, plus the rest; `none` when there are fewer.

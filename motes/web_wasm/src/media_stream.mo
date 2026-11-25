@@ -26,7 +26,7 @@
 use lib::types {MediaStream, MediaStreamOp, Node}
 use lib::ffi {
     media_get_begin_raw, media_poll_raw, media_stream_raw, media_error_raw,
-    media_free_raw, media_free_op_raw, dom_set_src_object_raw,
+    media_free_raw, media_free_op_raw, media_stream_of_raw, dom_set_src_object_raw,
 }
 
 // ─── Poll answers ────────────────────────────────────────────────────
@@ -134,6 +134,16 @@ pub def MediaStream.stop (stream : MediaStream) : IO Unit := do {
     let _ <- IO.mk (media_free_raw stream);
     IO.pure unit
 }
+
+/// The stream a `RtcEvent.track` id names, as a typed handle.
+///
+/// `RtcEvent.track` carries a bare `I64` because the pure layer must not name
+/// a `web_wasm` handle type; this is the bridge back. The null handle comes
+/// back for an id whose slot is gone (a stream already `stop`ped), which
+/// `attach` and `Rtc.add_stream` both refuse, so a stale id is inert rather
+/// than dangerous.
+pub def MediaStream.of_track (id : I64) : IO MediaStream :=
+    IO.mk (media_stream_of_raw id)
 
 /// Release a finished operation's host slot, for a request that FAILED and so
 /// produced no stream to `stop`. Without it a page that retries a refused

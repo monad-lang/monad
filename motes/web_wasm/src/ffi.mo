@@ -609,6 +609,15 @@ def media_error_raw (op : MediaStreamOp) : RawIO String
 #[extern "c" {link_name := "web_media_free"}]
 def media_free_raw (stream : MediaStream) : RawIO I64
 
+/// The `MediaStream` a `RtcEvent.track` id names.
+///
+/// A pure `RtcEvent` carries a bare `I64` (the pure layer must not name a
+/// `web_wasm` handle), so this is the bridge back to a typed handle. The host
+/// answers the null handle when the id is not a live stream slot, which
+/// `MediaStream.attach`/`Rtc.add_stream` already refuse.
+#[extern "c" {link_name := "web_media_stream_of"}]
+def media_stream_of_raw (id : I64) : RawIO MediaStream
+
 /// Release a finished operation's host slot. `MediaStream.stop` reclaims the
 /// op that produced a stream; a FAILED request produces no stream, so its op
 /// is released here instead.

@@ -106,6 +106,7 @@ const RTC_KIND_CONNECTION = 3;
 const RTC_KIND_CHANNEL = 4;
 const RTC_KIND_CHANNEL_STATE = 5;
 const RTC_KIND_MESSAGE = 6;
+const RTC_KIND_TRACK = 7;
 
 // The data channel's state mapping, which RtcState's codes follow: 0
 // connecting, 1 open/ready, 2 closing, 3 closed, 4 failed.
@@ -1602,12 +1603,25 @@ export const host = {
       rec.state = rtcStateCode(pc.connectionState);
       push({ kind: RTC_KIND_CONNECTION, state: rec.state });
     };
-    // An incoming stream: the app learns about it through `track`, and plays
-    // it with `MediaStream.attach`.
-    pc.ontrack = () => {
-      // Tracks arrive on the connection's own streams; `rtc_streams` exposes
-      // them, and the handler dispatch below tells the app to re-read.
-      push({ kind: RTC_KIND_CONNECTION, state: rec.state });
+    // An incoming stream. Registering it in `mediaStreams` is what makes
+    // `MediaStream.attach` and `Rtc.add_stream` able to reach it at all --
+    // until it is registered, the browser's stream has no table id.
+    //
+    // `streams` is usually one entry, but the spec allows several, so each
+    // new one gets its own id and its own `track` event.
+    pc.ontrack = (ev) => {
+      let incoming = ev.streams;
+      if ((!incoming || incoming.length === 0) && ev.track
+          && typeof MediaStream === 'function') {
+        incoming = [new MediaStream([ev.track])];
+      }
+      if (!incoming) return;
+      for (const stream of incoming) {
+        if (rec.streams.indexOf(stream) >= 0) continue;
+        rec.streams.push(stream);
+        mediaStreams.push(stream);
+        push({ kind: RTC_KIND_TRACK, state: BigInt(mediaStreams.length - 1) });
+      }
     };
     return id;
   },
@@ -1820,7 +1834,10 @@ export const host = {
   },
 
   // ── getUserMedia (two-phase, like fetch/clipboard/crypto) ───────────
-  media_get_begin(cptr, clen) {
+  // `display` picks the API: 0 getUserMedia (camera/mic), 1 getDisplayMedia
+  // (screen). Both answer a promise of a MediaStream, so everything after the
+  // call is shared.
+  media_get_begin(cptr, clen, display) {
     const constraintsText = str(cptr, clen);
     const rec = { state: 0, stream: 0n, error: '', freed: false };
     mediaOps.push(rec);
@@ -1832,14 +1849,19 @@ export const host = {
     } catch (e) {
       constraints = {};
     }
-    if (!md || typeof md.getUserMedia !== 'function') {
+    const wantDisplay = display !== 0n;
+    const begin = wantDisplay ? (md && md.getDisplayMedia) : (md && md.getUserMedia);
+    if (!md || typeof begin !== 'function') {
       rec.state = 2;
+      // The same error name either way: the app asked for a channel the
+      // browser has no API for (screen capture on a browser without
+      // getDisplayMedia is the common instance).
       rec.error = 'NotSupportedError';
       return id;
     }
     let p;
     try {
-      p = md.getUserMedia(constraints);
+      p = wantDisplay ? md.getDisplayMedia(constraints) : md.getUserMedia(constraints);
     } catch (e) {
       rec.state = 2;
       rec.error = (e && e.name) || 'Error';
@@ -1875,6 +1897,24 @@ export const host = {
     return rec && rec.state === 1 ? rec.stream : 0n;
   },
 
+  // Release an op's slot once the caller has read its answer, so a page that
+  // retries a denied prompt does not accumulate one record per attempt for
+  // its whole lifetime. `freed` makes a still-pending promise's callbacks a
+  // no-op when it resolves later.
+  // The handle a `RtcEvent.track` id names, or 0 when the slot is not live.
+  media_stream_of(id) {
+    return mediaStreams[Number(id)] ? id : 0n;
+  },
+
+  media_free_op(op) {
+    const i = Number(op);
+    const rec = mediaOps[i];
+    if (!rec) return 0n;
+    rec.freed = true;
+    mediaOps[i] = null;
+    return 1n;
+  },
+
   media_error(op, ptr, max) {
     const rec = mediaOps[Number(op)];
     return writeBytes(ptr, encoder.encode(rec ? rec.error || '' : ''), max);
@@ -1887,6 +1927,15 @@ export const host = {
     const s = mediaStreams[i];
     if (!s) return 0n;
     mediaStreams[i] = null;
+    // The op that produced it is finished with, so reclaim it here as well:
+    // stopping a stream is the end of its request's life.
+    for (let j = 0; j < mediaOps.length; j += 1) {
+      const op = mediaOps[j];
+      if (op && op.stream === stream) {
+        op.freed = true;
+        mediaOps[j] = null;
+      }
+    }
     try {
       for (const t of s.getTracks()) t.stop();
     } catch (e) {

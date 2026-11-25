@@ -1109,7 +1109,7 @@ __attribute__((import_module("monad"), import_name("rtc_free")))
 extern int64_t monad_js_rtc_free(int64_t id);
 
 __attribute__((import_module("monad"), import_name("media_get_begin")))
-extern int64_t monad_js_media_get_begin(int64_t ptr, int64_t len);
+extern int64_t monad_js_media_get_begin(int64_t ptr, int64_t len, int64_t display);
 
 __attribute__((import_module("monad"), import_name("media_poll")))
 extern int64_t monad_js_media_poll(int64_t op);
@@ -1122,6 +1122,8 @@ extern int64_t monad_js_media_error(int64_t op, int64_t ptr, int64_t max);
 
 __attribute__((import_module("monad"), import_name("media_free")))
 extern int64_t monad_js_media_free(int64_t stream);
+extern int64_t monad_js_media_free_op(int64_t op);
+extern int64_t monad_js_media_stream_of(int64_t id);
 
 __attribute__((import_module("monad"), import_name("dom_set_src_object")))
 extern int64_t monad_js_dom_set_src_object(int64_t node, int64_t stream);
@@ -1205,8 +1207,9 @@ int64_t web_rtc_free(int64_t id) {
     return monad_js_rtc_free(id);
 }
 
-int64_t web_media_get_begin(const char* constraints) {
-    return monad_js_media_get_begin(web_str_ptr(constraints), web_str_len(constraints));
+int64_t web_media_get_begin(const char* constraints, int64_t display) {
+    return monad_js_media_get_begin(web_str_ptr(constraints), web_str_len(constraints),
+                                    display);
 }
 
 int64_t web_media_poll(int64_t op) {
@@ -1225,6 +1228,14 @@ char* web_media_error(int64_t op) {
 
 int64_t web_media_free(int64_t stream) {
     return monad_js_media_free(stream);
+}
+
+int64_t web_media_free_op(int64_t op) {
+    return monad_js_media_free_op(op);
+}
+
+int64_t web_media_stream_of(int64_t id) {
+    return monad_js_media_stream_of(id);
 }
 
 /* `video.srcObject = stream`. The ONE object-property write in this boundary,

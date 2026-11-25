@@ -51,6 +51,7 @@ def bump (ev : RtcEvent) : I64 :=
         RtcEvent.message _label _data => 1000i64,
         RtcEvent.local_description _d => 10000i64,
         RtcEvent.local_candidate _c => 100000i64,
+        RtcEvent.track _stream => 1i64,
     }
 
 /// The update is pure: it never touches the peer. On a ready channel it
@@ -111,6 +112,7 @@ def count_kind (events : List RtcEvent) (desc : I64) (cand : I64) (state : I64)
                 RtcEvent.message _label _data => count_kind rest desc cand state (I64.add msg 1i64),
                 RtcEvent.data_channel _ch => count_kind rest desc cand state msg,
                 RtcEvent.channel_state _label _st => count_kind rest desc cand state msg,
+                RtcEvent.track _stream => count_kind rest desc cand state msg,
             },
     }
 
