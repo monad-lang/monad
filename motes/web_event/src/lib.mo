@@ -8,3 +8,9 @@ pub use lib::event {
 }
 
 pub use lib::websocket {WsData, WsEvent, WsData.text_of, WsData.bytes_of}
+
+// The sound-effect and media-transport vocabulary: pure DATA an `update`
+// returns (`Command.sound`/`Command.media`), with no handle and no IO.
+pub use lib::sound {
+    SoundFx, MediaCmd, Wave, SoundFx.is_silence, Wave.code,
+}
