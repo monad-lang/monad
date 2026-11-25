@@ -63,13 +63,47 @@ Functions: `Bool.not/and/or`, `List.is_empty/append/first/last/flatten/tail/map`
 Re-exports the modules below, defines the `From` class, `BEq (Option A)`, and
 rebinds `infix (+) := I64.add`.
 
-### `init.number` / `init.math`
+### `init.number`
 
-The numeric workhorse — about 600 lines of instances. For **each** of `I8`,
-`I16`, `I32`, `I64`, `U8`, `U16`, `U32`, `U64`, `F32`, `F64`: `add`, `sub`,
-`mul`, `div`, `beq`, `lt`, `gt`, `to_string` natives plus `Add`, `Sub`, `HMul`,
-`Div`, `BEq`, `BOrd`, and `ToString` instances. Also `Hashable I64`/`U64`, `U32`
-bitwise operations (`and`, `or`, `xor`, `shl`, `shr`), and width conversions.
+The arithmetic workhorse — about 600 lines of instances. For **each** of
+`I8`, `I16`, `I32`, `I64`, `U8`, `U16`, `U32`, `U64`, `F32`, `F64`: `add`,
+`sub`, `mul`, `div`, `beq`, `lt`, `gt`, `to_string` natives plus `Add`, `Sub`,
+`HMul`, `Div`, `BEq`, `BOrd`, and `ToString` instances. Also `Hashable
+I64`/`U64`, `U32` bitwise operations (`and`, `or`, `xor`, `shl`, `shr`), and
+width conversions (`to_i64`, `to_f64`, `to_f32`, `to_u32`, `to_u64`).
+
+### `init.math`
+
+The elementary functions, in **pure Monad** over `init.number`'s arithmetic —
+no native and no `libm`, so they work on every target (native, wasi and web
+alike) and under `monad eval` and the bootstrap host. Accuracy is a few ulp
+(Taylor series, range reduction and Newton iteration in ordinary double
+arithmetic), not correctly-rounded libm parity; where exactness is promised
+(`F64.sqrt 9.0` is `3.0`) it is tested bit-exactly.
+
+| Group | Members |
+|-------|---------|
+| constants | `F64.pi`, `tau`, `e`, `half_pi`, `ln_2`, `ln_10`, `epsilon`, `integer_limit`, `max_value`, `infinity`, `nan` |
+| predicates | `is_nan`, `is_infinite`, `is_finite`, `is_zero`, `is_integer` |
+| sign/order | `abs`, `neg`, `signum`, `min`, `max`, `clamp` |
+| rounding | `trunc`, `floor`, `ceil`, `round` (half away from zero), `round_half_even`, `fract`, `round_to`, `trunc_i64` |
+| scaling | `ldexp`, `halvings2`, `halvings4`, `halvings8` |
+| roots | `sqrt`, `cbrt`, `hypot`, `hypot_all`, `distance` |
+| exp/log | `exp`, `exp_m1`, `ln`, `ln_1p`, `log2`, `log10`, `log_base`, `pow`, `pow_f64`, `square_n` |
+| trig | `sin`, `cos`, `tan`, `sec`, `csc`, `cot`, `reduce_turn` |
+| inverse trig | `asin`, `acos`, `atan`, `atan2` |
+| hyperbolic | `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh` |
+| integers | `I64.abs`, `signum`, `min`, `max`, `clamp`, `gcd`, `lcm`, `pow` |
+| comparison | `F64.approx`, `F64.approx_rel` |
+
+Out of domain the convention is C's: `F64.ln` of a negative is NaN, `F64.ln
+0.0` is `-inf`, `F64.sqrt` of a negative is NaN. Nothing returns `Result` —
+ask with `F64.is_nan`.
+
+> [!NOTE]
+> The language has no decimal-exponent literal form: `1.0e-9` lexes as `1.0`
+> followed by the identifier `e`. Spell constants positionally
+> (`0.000000001`), as this module's own do.
 
 ### `init.string`
 

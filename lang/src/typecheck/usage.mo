@@ -72,9 +72,9 @@ use std::list {}
 
 // ─── Use counting ──────────────────────────────────────────────────
 
-/// Larger of two counts. No `I64.max` exists in `init/src/number.mo`
-/// (only `lt`/`gt`/`beq`), and branch combination needs one at every
-/// `if_`/`match_` node, so it lives here.
+/// Larger of two counts. Branch combination needs one at every
+/// `if_`/`match_` node, so it lives here rather than in `init.math`
+/// (`I64.max`), which this module has no reason to pull in.
 def i64_max (a : I64) (b : I64) : I64 := if I64.lt a b then b else a
 
 /// Runtime-position uses of the de-Bruijn index `target` inside `t`.

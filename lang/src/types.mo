@@ -3013,9 +3013,10 @@ pub instance Similar DebugName {
 // live here rather than there because `Similar Term` below needs level
 // equality, and a `levels` module would have to import this one -- a cycle.
 
-/// The larger of two `I64`s. `I64.max` is not a function in this tree (the
-/// sentinel comment that mentions it means `I64`'s maximum value), so the
-/// two-line version is spelled out.
+/// The larger of two `I64`s. `I64.max` does exist now (`init/src/math.mo`,
+/// re-exported ambiently), but this two-line version stays: it keeps the
+/// sort-level code independent of `init.math`, and it is what the sentinel
+/// comment above means when it names `I64.max` as a VALUE.
 def level_i64_max (a : I64) (b : I64) : I64 := if I64.gt a b then a else b
 
 /// The concrete value of a level, when it has one.
