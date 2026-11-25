@@ -30,7 +30,13 @@
  *     stops and answers its index, and a fiber parked there is woken by
  *     `monad_cancel_fiber` rather than by a timeout, so a cancelled racer
  *     leaves its park promptly. `monad_channel_take_any` parks on a SET of
- *     channels and must wake when a value arrives on any of them.
+ *     channels and must wake when a value arrives on any of them;
+ *   * a cancel racing a blocked channel wait -- the registry's lock order,
+ *     which `channel_wait` and the cancel-walk take in OPPOSITE directions.
+ *     A cancel landing while waiters are registering deadlocked AB-BA, and
+ *     nothing here cancelled a channel-blocked fiber before this phase, so
+ *     the inversion was unreachable from the gate. It fails by HANGING, so
+ *     it is watched by a deadline and a watchdog thread.
  *
  * It checks every line it reads, so a lost or corrupted carry is a
  * failure even without a sanitizer, and `scripts/check-runtime-threads.sh`
@@ -659,6 +665,129 @@ static void check_channel_take_any(void) {
     }
 }
 
+/* ── a cancel racing a blocked channel wait ────────────────────────────
+   The lock-order inversion that `channel_wake_cancelled` had, reproduced.
+
+   Two paths touch the `ChanReg` registry, and they used to take the two
+   locks in OPPOSITE orders:
+
+     * a channel wait REGISTERS while holding its channel's lock --
+       `channel_wait` runs with `c->lock` held and then takes
+       `chan_reg_lock` (the permitted order: one channel lock, then the
+       registry);
+     * `monad_cancel_fiber` -> `channel_wake_cancelled` used to hold
+       `chan_reg_lock` and take each `chan->lock` INSIDE the walk (the
+       forbidden one).
+
+   A waiter registering at the moment a cancel fires deadlocks AB-BA. That
+   is exactly the path the pushed cancel wake exists for -- a cancel
+   arriving while a fiber is parking on, or scanning, a channel -- so the
+   race is the feature, not an edge case.
+
+   WHY THIS PHASE HAD TO BE WRITTEN. Nothing in the harness cancelled a
+   fiber that was blocked on a channel, so the inversion was unreachable
+   here: `check_channels` blocks without cancelling, `check_channel_take_any`
+   never cancels, and `check_wait_any`'s cancel case parks in
+   `monad_fiber_wait_any`, a different condvar and a different lock. TSAN
+   cannot help either -- it reports DATA races, and a lock-order inversion
+   is not one, so the sanitizer run stayed clean throughout.
+
+   Both registry-registering waits are exercised: a plain
+   `monad_channel_take` (whose registration happens inside `channel_wait`,
+   the leg that holds a channel lock) and a `monad_channel_take_any` over
+   two channels (one node per channel, all parking on the first). Fibers,
+   not plain threads, because only a fiber's own thread-local cancel flag
+   makes the park give up; a plain thread would wait forever and the phase
+   could never join it. */
+
+#define CANCEL_RACE_WAITERS 6
+#define CANCEL_RACE_ROUNDS 150
+#define CANCEL_RACE_STAGGER_NS 100000 /* 100 us between cancels */
+#define CANCEL_RACE_TIMEOUT_MS 60000
+
+static void* cancel_race_channels[2];
+static int cancel_race_done;
+
+/* Park in `monad_channel_take` on a channel nothing ever fills, so the
+   wait reaches `channel_wait`'s registration. The cancel releases it. */
+static int64_t take_waiter_body(int64_t closure, int64_t unit) {
+    (void)closure;
+    (void)unit;
+    (void)monad_channel_take(cancel_race_channels[0]);
+    return (int64_t)(intptr_t)monad_io_pure(0);
+}
+
+/* Park in `take_any` over both channels; it parks on the first one's
+   condvar but registers a node on each. */
+static int64_t take_any_waiter_body(int64_t closure, int64_t unit) {
+    (void)closure;
+    (void)unit;
+    void* chans = cons_cell(cancel_race_channels[0],
+                            cons_cell(cancel_race_channels[1], NULL));
+    (void)monad_channel_take_any(chans);
+    return (int64_t)(intptr_t)monad_io_pure(0);
+}
+
+/* Fork the waiters, cancel them one at a time so the cancels land at
+   different points of their park/registration, then reap them. Repeating
+   it re-creates the registration window on every round. */
+static void* cancel_race_body(void* arg) {
+    (void)arg;
+    cancel_race_channels[0] = monad_channel_new();
+    cancel_race_channels[1] = monad_channel_new();
+    if (!cancel_race_channels[0] || !cancel_race_channels[1]) {
+        fail();
+        __atomic_store_n(&cancel_race_done, 1, __ATOMIC_RELEASE);
+        return NULL;
+    }
+    struct timespec stagger = {0, CANCEL_RACE_STAGGER_NS};
+    for (int round = 0; round < CANCEL_RACE_ROUNDS; round++) {
+        void* fibers[CANCEL_RACE_WAITERS];
+        for (int i = 0; i < CANCEL_RACE_WAITERS; i++) {
+            void* entry = (i % 2 == 0) ? (void*)take_waiter_body
+                                       : (void*)take_any_waiter_body;
+            fibers[i] = monad_fork_io(alloc_closure(entry, 1, 0));
+        }
+        for (int i = 0; i < CANCEL_RACE_WAITERS; i++) {
+            nanosleep(&stagger, NULL);
+            monad_cancel_fiber(fibers[i]);
+        }
+        for (int i = 0; i < CANCEL_RACE_WAITERS; i++) monad_await_fiber(fibers[i]);
+    }
+    __atomic_store_n(&cancel_race_done, 1, __ATOMIC_RELEASE);
+    return NULL;
+}
+
+/* The phase can only fail by HANGING, so its assertion is a deadline
+   rather than a counter, and it runs on its own thread so the main thread
+   can watch it. `_exit` on expiry is deliberate: a wedged phase thread
+   cannot be joined, so a normal return would block in `pthread_join`
+   forever and turn the gate's failure into a CI stall. The non-zero exit
+   status still makes the runner call it a failure. */
+static void check_cancel_race(void) {
+    __atomic_store_n(&cancel_race_done, 0, __ATOMIC_RELEASE);
+    pthread_t t;
+    if (pthread_create(&t, NULL, cancel_race_body, NULL) != 0) {
+        fprintf(stderr, "thread_stress: could not start the cancel-race phase\n");
+        fail();
+        return;
+    }
+    int64_t start = now_ms();
+    struct timespec tick = {0, 5 * 1000000};
+    while (!__atomic_load_n(&cancel_race_done, __ATOMIC_ACQUIRE)) {
+        if (now_ms() - start > CANCEL_RACE_TIMEOUT_MS) {
+            fprintf(stderr,
+                    "thread_stress: DEADLOCK -- a cancel racing a blocked channel "
+                    "wait did not finish in %d ms\n",
+                    CANCEL_RACE_TIMEOUT_MS);
+            fflush(stderr);
+            _exit(1);
+        }
+        nanosleep(&tick, NULL);
+    }
+    pthread_join(t, NULL);
+}
+
 static void run(void* (*worker)(void*), int threads) {
     pthread_t t[PIPE_THREADS];
     for (int i = 0; i < threads; i++)
@@ -693,6 +822,7 @@ int main(void) {
     check_channels();
     check_wait_any();
     check_channel_take_any();
+    check_cancel_race();
     printf("thread_stress: %d failure(s)\n", failures);
     return failures != 0;
 }
