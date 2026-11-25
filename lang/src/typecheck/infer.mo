@@ -11887,3 +11887,136 @@ def test_global_field_access_rebuilds_the_qualified_subject : Bool :=
         err _ => false,
         ok tt => term_scrutinee_names tt.term "simple::vzero",
     }
+
+/// The `Nat.of_i64 <lit>` application `apply_nat_rewrite` writes for a
+/// small literal at a `Nat` position.
+def of_i64_term (n : I64) : Term :=
+    Term.app (Term.var sentinel (DebugName.named (Identifier.id "Nat.of_i64")))
+        (Term.lit (Literal.num n NumSuffix.i64))
+
+/// A parameter whose declared type is `Nat` (by head name).
+def param_is_nat (p : Param) : Bool :=
+    match p {
+        Param.mk _name ptype _mult _default _attrs =>
+            match type_head_name (term_peel ptype) {
+                Option.some id => String.beq (show_identifier id) "Nat",
+                Option.none => false,
+            },
+    }
+
+/// The parameters a spine head refers to: an inductive's or a def's.
+def spine_head_params (scope : Scope) (head : Term) : Option (List Param) :=
+    match head {
+        Term.var idx dbg =>
+            if I64.beq idx sentinel then
+                match dbg {
+                    DebugName.named id =>
+                        let np : NamePath := NamePath.mk (List.cons id List.empty) in
+                        match scope_find_inductive np scope {
+                            Result.ok ind => match ind {
+                                Inductive.mk _ params _ _ _ _ => Option.some params,
+                            },
+                            Result.err _ => scope_find_def_params np scope,
+                        },
+                    DebugName.unnamed => Option.none,
+                }
+            else Option.none,
+        _ => Option.none,
+    }
+
+/// A SIGNATURE's twin of the literal retag. Declared types are used as
+/// parsed (`module.mo` checks a body against `typ` as written), so a literal
+/// index written in a signature (`def f (s : Slice 3 I64)`) stays an `I64`
+/// literal, and `whnf` is type-blind: no reduction can turn it into a `Nat`
+/// chain. Rewrite a literal at a `Nat`-typed INDUCTIVE or DEF argument
+/// position to the `Nat.of_i64 <lit>` application; a `let` annotation and a
+/// call argument already retag through `type_check_num_lit`.
+#[terminating]
+pub def retag_nat_index_literals (scope : Scope) (t : Term) : Term :=
+    match term_peel t {
+        Term.pi b arg ret =>
+            Term.pi b (retag_nat_index_literals scope arg)
+                (retag_nat_index_literals scope ret),
+        Term.lam b typ body =>
+            Term.lam b (retag_nat_index_literals scope typ)
+                (retag_nat_index_literals scope body),
+        Term.ctx loc inner => Term.ctx loc (retag_nat_index_literals scope inner),
+        Term.app _ _ =>
+            match flatten_call_spine t {
+                CallSpine.mk head args =>
+                    match spine_head_params scope head {
+                        Option.some params => rebuild_call head (retag_index_args scope params args),
+                        Option.none =>
+                            rebuild_call (retag_nat_index_literals scope head)
+                                (retag_index_args scope List.empty args),
+                    },
+            },
+        _ => t,
+    }
+
+/// `retag_nat_index_literals` over an argument list, by parameter position.
+#[terminating]
+def retag_index_args (scope : Scope) (params : List Param) (args : List Term) : List Term :=
+    match args {
+        List.empty => List.empty,
+        List.cons a rest =>
+            List.cons (retag_one_arg scope params a)
+                (retag_index_args scope (param_tail params) rest),
+    }
+
+def param_tail (params : List Param) : List Param :=
+    match params {
+        List.cons _p rest => rest,
+        List.empty => List.empty,
+    }
+
+#[terminating]
+def retag_one_arg (scope : Scope) (params : List Param) (a : Term) : Term :=
+    match params {
+        List.cons p _rest =>
+            if param_is_nat p
+            then retag_literal_arg scope a
+            else retag_nat_index_literals scope a,
+        List.empty => retag_nat_index_literals scope a,
+    }
+
+#[terminating]
+def retag_literal_arg (scope : Scope) (a : Term) : Term :=
+    match term_peel a {
+        Term.lit l => retag_literal_value scope a l,
+        _ => retag_nat_index_literals scope a,
+    }
+
+/// Nested constructor patterns do not parse, so the suffix is peeled here
+/// rather than matched as `Literal.num n NumSuffix.i64`.
+#[terminating]
+def retag_literal_value (scope : Scope) (a : Term) (l : Literal) : Term :=
+    match l {
+        Literal.num n suffix =>
+            if suffix_is_default suffix
+            then of_i64_term n
+            else retag_nat_index_literals scope a,
+        _ => retag_nat_index_literals scope a,
+    }
+
+def suffix_is_default (s : NumSuffix) : Bool :=
+    match s {
+        NumSuffix.i64 => true,
+        _ => false,
+    }
+
+/// A def's body is its leading `Term.lam` chain (`build_param_pi_chain`), and
+/// the lam's own annotations are the parameter types the body is checked
+/// with. `retag_nat_index_literals` on the declared `typ` alone therefore
+/// leaves `def f (s : Vec 2 I64)`'s binder annotated with the raw literal;
+/// apply the same retag to those leading domains. Only the parameter chain
+/// is touched -- an expression's literals are already retagged by
+/// `type_check_num_lit`'s expectation.
+#[terminating]
+pub def retag_leading_lam_domains (scope : Scope) (body : Term) : Term :=
+    match term_peel body {
+        Term.lam b typ rest =>
+            Term.lam b (retag_nat_index_literals scope typ)
+                (retag_leading_lam_domains scope rest),
+        _ => body,
+    }

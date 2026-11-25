@@ -70,7 +70,10 @@ use lib::scope {
 use lib::termination {check_termination_all}
 use lib::typecheck::diagnostic {render_type_error, render_type_warning}
 use lib::typecheck::instance_sig {instance_signature_errors, unannotated_methods}
-use lib::typecheck::infer {body_type_error, empty_local_types, empty_locals, type_check}
+use lib::typecheck::infer {
+    body_type_error, empty_local_types, empty_locals, retag_leading_lam_domains,
+    retag_nat_index_literals, type_check,
+}
 // `--affine` (Phase 5 of the enforcement plan): the M2 usage rule as
 // real diagnostics. Built once per module by the affine walk below,
 // exactly how `affine.mo`'s own doc on `check_def` prescribes.
@@ -2727,10 +2730,17 @@ def check_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) (path 
 pub def def_body_diagnostics (df : Def) (scope : Scope) (locals : LocalScope) (path : Option String) : List String :=
     match df {
         Def.mk {name, typ, term := body, constraints := _constraints, vis := _vis, ..} =>
-            let locals_ : LocalScope := locals_with_def_typevars typ body scope locals in
+            // A literal index written in a SIGNATURE is an `I64` literal, not
+            // the `Nat.of_i64` the retag emits for term positions, and
+            // `whnf` is type-blind -- so retag the declared type before it is
+            // used as the body's expectation (`def f (s : Slice 3 I64)`).
+            let checked_typ : Term := retag_nat_index_literals scope typ in
+            let checked_body : Term := retag_leading_lam_domains scope body in
+            let locals_ : LocalScope := locals_with_def_typevars checked_typ body scope locals in
             list_append
-                (declared_type_diagnostics (show_name_path name) typ scope locals_ path)
-                (body_signature_diagnostics (show_name_path name) typ body scope locals_ path)
+                (declared_type_diagnostics (show_name_path name) checked_typ scope locals_ path)
+                (body_signature_diagnostics (show_name_path name) checked_typ checked_body
+                    scope locals_ path)
     }
 
 /// The pure signature check shared by both def-body entry points: check
@@ -2813,7 +2823,11 @@ def elaborate_def_with_scope ({ name, typ, term := body, constraints, attrs, vis
     if is_term_hole body then
         Result.ok (Def.mk name typ body constraints attrs vis params)
     else
-        let locals_ : LocalScope := locals_with_def_typevars typ body scope locals in
+        // The signature's literal indices are retagged for the BODY check
+        // only; the stored `typ` stays as written so codegen's copy of it is
+        // unchanged (see `def_body_diagnostics`).
+        let checked_typ : Term := retag_nat_index_literals scope typ in
+        let locals_ : LocalScope := locals_with_def_typevars checked_typ body scope locals in
         let body_scope : Scope := scope_for_elab_body scope in
         // Plain `type_check` here, NOT `body_signature_diagnostics`: this is
         // the COMPILE path, where a rejection is swallowed by
@@ -2826,7 +2840,8 @@ def elaborate_def_with_scope ({ name, typ, term := body, constraints, attrs, vis
         // signature check belongs on `check`'s path, which reports it;
         // every def that reaches here has already been through
         // `check_def_with_scope`.
-        match type_check body typ body_scope empty_local_types locals_ {
+        let checked_body : Term := retag_leading_lam_domains scope body in
+        match type_check checked_body checked_typ body_scope empty_local_types locals_ {
             Result.ok tt => Result.ok (Def.mk name typ (close_named_vars List.empty tt.term) constraints attrs vis params),
             Result.err e => Result.err (render_type_error (show_name_path name) Option.none e),
         }
