@@ -378,7 +378,8 @@ infix (operator) := functionName
 | `>` | 40 | Left | `BOrd.gt` |
 | `<=` | 40 | Left | `BOrd.lte` |
 | `>=` | 40 | Left | `BOrd.gte` |
-| `!=`, `=` | 40 | Left | — |
+| `!=` | 40 | Left | `BEq.not_beq` |
+| `=` | 40 | Left | — |
 | `++` | 50 | Right | `Append.append` |
 | `@` | 50 | Right | — |
 | `>>`, `<<` | 60 | Left | — |
@@ -388,14 +389,15 @@ infix (operator) := functionName
 | `/` | 70 | Left | `Div.div` |
 
 Operators marked — have a precedence but no binding in the prelude, so using
-them is an error until you bind one yourself. `!=` and `=` are commented out
-in `init/prelude.mo` pending default-method support on `BEq`. `<=` and `>=`
-are bound to `BOrd.lte`/`BOrd.gte`, which mean `not gt` / `not lt`.
+them is an error until you bind one yourself. `=` will be bound to a
+propositional-equality helper in the prelude; until then, write `Eq A a b`.
+`<=` and `>=` are bound to `BOrd.lte`/`BOrd.gte`, which mean `not gt` /
+`not lt`.
 
 `@` is deliberately left free for libraries to claim.
 
-Note that `init/lib.mo` rebinds `infix (+) := I64.add`, shadowing the prelude's
-class-based `HAdd.add` where `init` is in scope.
+The prelude's arithmetic operators go through the class-based `HAdd.add` and
+friends, which each numeric type's `Add` instance resolves.
 
 ## Type Definitions
 

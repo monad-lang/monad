@@ -323,9 +323,11 @@ any type with the right instance:
 | `<\|` | `fun_apply` | Backward pipe (`f <\| x`) |
 
 A handful of operator *tokens* have a precedence but no binding in the prelude
-yet, so using them is an error: `!=`, `<*>`, `<\|>`, `>>`, `<<`, and
-`@`. The [Reference](./reference.md#built-in-operators) has the full precedence
-table, and you can bind any of them yourself with `infix (op) := someFunction`.
+yet, so using them is an error: `=`, `<*>`, `<\|>`, `>>`, `<<`, and `@`.
+(`=` will be propositional equality, `Eq A a b`; until it is bound, write that
+out.) The [Reference](./reference.md#built-in-operators) has the full
+precedence table, and you can bind any of them yourself with
+`infix (op) := someFunction`.
 
 ## Summary
 

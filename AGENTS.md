@@ -440,7 +440,7 @@ Attributes come before visibility: `#[test] pub def ...`, never
 | `#[returns expr]` / `#[returns decls]` | On a `defmacro`: what its body produces, checked against the body form at the definition site |
 
 Operators (precedence low→high): `|>`/`<|` (5), `>>=` (10), `<*>` (15),
-`<|>` (20), `||` (25), `&&` (30), `==`/`!=`/`<=`/`>=` (40), `++` (50),
+`<|>` (20), `||` (25), `&&` (30), `==`/`!=`/`=`/`<=`/`>=` (40), `++` (50),
 `>>`/`<<` (60), `+`/`-` (65), `*`/`/` (70), `.` (12, right; also path
 concatenation).
 Declare with `infix (>>=) := Monad.bind`; precedence comes from the fixed

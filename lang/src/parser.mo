@@ -33,7 +33,7 @@ use lang::parser::lower_parse {
 use parsec::core {ParseResult, custom, is_empty, parse_error_remaining}
 use lang::parser::op_table {
     op_char_member, op_chars, op_entry_prec, op_entry_rassoc, op_lookup_entry,
-    op_lookup_prec, op_table,
+    op_lookup_prec, op_lookup_rassoc, op_table,
 }
 use parsec::char_preds {
     is_ident_char_byte, is_prefix, is_space, is_space_byte,
@@ -11390,6 +11390,36 @@ def test_infix_parser : Bool :=
                 infix_d op path _vis => String.beq rem "",
                 _ => false
             },
+        fail _ => false
+    }
+
+/// `=` is a real operator, at the Rust reference's own precedence and
+/// associativity (`operator_precedence`, `rust/core/src/parser.rs`). The
+/// two tables must agree: a mismatch is a source file that parses in one
+/// compiler and not the other.
+#[test]
+def test_eq_operator : Bool :=
+    I64.beq (op_precedence "=") 40 && Bool.not (op_lookup_rassoc "=" op_table)
+
+/// `a = b` parses as an operator application, in a term and in a TYPE
+/// annotation (`(a = a)`; the Rust host's type grammar takes no infix
+/// operator at all, so this pin is the self-hosted surface).
+#[test]
+def test_eq_operator_parses : Bool :=
+    match decl_parser "def p (a : I64) (b : I64) : Prop := a = b" {
+        success rem _ =>
+            String.beq rem "" && match decl_parser "def q (a : I64) : (a = a) := Eq.refl a" {
+                success rem2 _ => String.beq rem2 "",
+                fail _ => false
+            },
+        fail _ => false
+    }
+
+/// The spelling the prelude will use once a nightly carries `=`.
+#[test]
+def test_infix_eq_parser : Bool :=
+    match infix_parser "infix (=) := Eq.eq" {
+        success rem _ => String.beq rem "",
         fail _ => false
     }
 

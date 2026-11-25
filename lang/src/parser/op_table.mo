@@ -25,6 +25,12 @@ pub def op_table : List OpEntry :=
         OpEntry.mk "&&" 30 true,
         OpEntry.mk "==" 40 false,
         OpEntry.mk "!=" 40 false,
+        // `=` has a precedence in the Rust reference
+        // (`rust/core/src/parser.rs`'s `operator_precedence`) but was
+        // missing here, so `infix (=) := Eq.eq` was "unknown operator"
+        // self-hosted while the host accepted it. Nothing binds it yet:
+        // the prelude takes it once a published nightly can parse it.
+        OpEntry.mk "=" 40 false,
         // Same precedence level as ==/!= (40), matching the Rust
         // reference's operator_precedence (rust/core/src/parser.rs) exactly --
         // missing here, `infix (<) := BOrd.lt`/`infix (>) := BOrd.gt`
