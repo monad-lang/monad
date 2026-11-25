@@ -14,3 +14,11 @@ pub use lib::websocket {WsData, WsEvent, WsData.text_of, WsData.bytes_of}
 pub use lib::sound {
     SoundFx, MediaCmd, Wave, SoundFx.is_silence, Wave.code,
 }
+
+pub use lib::rtc {
+    RtcSdp, RtcIce, RtcIceServer, RtcState, RtcData, RtcChannel, RtcEvent,
+    RtcSdp.kind_of, RtcSdp.text_of, RtcData.text_of, RtcData.bytes_of,
+    RtcState.channel_name, RtcState.connection_name,
+    encode_sdp, decode_sdp, encode_ice, decode_ice, decode_message,
+    decode_message_bytes, encode_ice_servers, state_of_code,
+}
