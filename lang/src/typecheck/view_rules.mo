@@ -35,6 +35,7 @@
 use lib::types {
     Decl, Def, Identifier, InductConstructor, Inductive, Instance, NamePath,
     Param, Scope, Struct, StructField, Term, TypeError, show_identifier, show_name_path,
+    term_peel,
 }
 use lib::typecheck::usage {
     BinderUse, attribute_binder_types, collect_binder_uses_with_params,
@@ -44,6 +45,7 @@ use lib::typecheck::type_kinds {
     TypeKinds, container_wraps_linear, is_linear_or_proof, is_proof_type,
     mentions_linear_or_proof, type_kinds,
 }
+use lib::typecheck::affine {def_body, def_has_no_body}
 use std::map {HashMap}
 use lib::typecheck::diagnostic {render_type_error}
 
@@ -154,8 +156,45 @@ def check_def_view (kinds : TypeKinds) (ctors : HashMap String Bool) (borrows : 
         else List.empty in
     let params : List TypeError := check_param_shapes kinds d.params in
     let returned : List TypeError := check_return_shape kinds d.typ in
+    // P12's decision, computed once here: a def that is a VALUE (a body,
+    // and no leading binder) whose type mentions a linear/proof kind.
+    let offending : Bool :=
+        Bool.not (def_has_no_body (def_body d))
+            && Bool.not (has_leading_binder d.typ)
+            && mentions_linear_or_proof kinds d.typ in
+    let global : List TypeError := global_value_error d.typ offending in
     let body : List TypeError := check_def_body_view kinds scope ctors borrows d in
-    List.append shape (List.append params (List.append returned body))
+    List.append shape (List.append params (List.append returned (List.append global body)))
+
+/// P12: a global VALUE may not be linear or proof.
+///
+/// A nullary def is a value, not a function: the source can only NAME it,
+/// so `def c : Cell I64 := Cell.new 1` hands out one handle on every
+/// reference, and the Rust host memoises a nullary def while compiled code
+/// re-runs it -- the two backends would not even agree. The old guard was
+/// that a view handle could only be produced in `IO`; a pure `Cell.new`
+/// removes it, so the rule has to be stated.
+///
+/// A def with ANY leading binder -- an explicit parameter or an implicit
+/// `{A : Type}`, both `Term.pi` -- is a function: each application produces
+/// its own value. `Slot.empty {A : Type} : Slot Empty A` is therefore fine.
+/// A declaration (`#[native]`/`#[extern "c"]`, or a bodyless source def) is
+/// called per reference, never read as a value, so it is exempt.
+///
+/// The decision is computed in `check_def_view` and the offending type is
+/// used exactly once here, so the rule adds no diagnostics of its own to
+/// the affine gate's count for this mote.
+def global_value_error (t : Term) (offending : Bool) : List TypeError :=
+    if offending
+    then List.cons (TypeError.linear_global_value t) List.empty
+    else List.empty
+
+/// Does this declared type start with a binder?
+def has_leading_binder (t : Term) : Bool :=
+    match term_peel t {
+        Term.pi _b _arg _ret => true,
+        _ => false,
+    }
 
 #[partial]
 def check_param_shapes (kinds : TypeKinds) (params : List Param) : List TypeError :=
@@ -202,7 +241,7 @@ def pi_codomain (t : Term) : Term :=
 #[partial]
 def check_def_body_view (kinds : TypeKinds) (scope : Scope) (ctors : HashMap String Bool) (borrows : HashMap String Bool) (d : Def) : List TypeError :=
     let us : List BinderUse :=
-        attribute_binder_types scope
+        attribute_binder_types kinds scope
             (collect_binder_uses_with_params d.params ctors borrows d.term) in
     check_binder_view_go kinds us
 

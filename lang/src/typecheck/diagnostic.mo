@@ -130,6 +130,9 @@ pub def type_error_message (e : TypeError) : String :=
             String.concat "linear `" (String.concat (show_identifier name)
                 (String.concat "` : " (String.concat (show_term typ)
                     " cannot be erased with `%`; a linear value has a run-time representation"))),
+        TypeError.linear_global_value typ =>
+            String.concat "`" (String.concat (show_term typ)
+                "` cannot be a global value: a linear value is moved, not named, so every reference would hand out the same handle; give the def at least one parameter"),
         TypeError.instance_method_signature cls method expected found =>
             String.concat "instance method `" (String.concat (show_identifier method)
                 (String.concat "` of class `" (String.concat (show_name_path cls)

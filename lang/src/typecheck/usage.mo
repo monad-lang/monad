@@ -66,6 +66,7 @@ use lib::scope {
     find_constructor_in_inductive, scope_data_empty, scope_find_all_inductives_by_constructor,
     scope_find_def_return_type, scope_globals,
 }
+use lib::typecheck::type_kinds {TypeKinds, mentions_linear_or_proof, type_kinds_empty}
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::map {HashMap}
 use std::list {}
@@ -261,7 +262,7 @@ def captured_uses_go (free : I64) (target : I64) (inside : Bool) (t : Term) : I6
             then captured_uses_go free (target + 1) inside ret
             else 0,
         Term.app callee arg =>
-            captured_uses_go free target inside callee
+            captured_uses_go (apply_free free callee) target inside callee
                 + captured_uses_go (bind_free free callee arg) target inside arg,
         Term.lit value => captured_uses_literal free target inside value,
         Term.ntv n => captured_uses_native free target inside n,
@@ -1064,11 +1065,16 @@ def owning_at_opt_args (ctors : HashMap String Bool) (borrows : HashMap String B
 
 /// Where a binder came from. Enough to read a report by; deliberately
 /// NOT enough to reconstruct the binding site, which the report does not
-/// need and which `Term` cannot supply anyway (a `let` is already
-/// desugared to `app (lam ...) value` by the time it gets here, so a
-/// let-bound name is indistinguishable from a lambda parameter).
+/// need and which `Term` cannot supply anyway.
+///
+/// `bk_let` is a `let` / beta-redex (`app (lam x body) value`), which the
+/// parser produces for both `let x := e in ...` and `let x <- e; ...`'s
+/// continuation. It is distinguished from `bk_lam` because the two
+/// attribute differently: a do-bind binder takes the callee's `IO`
+/// payload, while a plain `let` binder takes the value itself.
 pub type BinderKind {
     bk_lam,
+    bk_let,
     bk_match,
 }
 
@@ -1908,8 +1914,9 @@ def callee_is_bind_app (callee : Term) : Bool :=
 /// A do-bind's continuation lambda is not a closure: the IO bind runs it
 /// once per execution, not many times. Raising the free budget by one makes
 /// the capture walker cross that lambda without marking it a capture. Only
-/// a `Term.lam` ARGUMENT of a `bind` application qualifies; a lambda
-/// anywhere else is still a closure.
+/// a `Term.lam` ARGUMENT of a `bind` application qualifies; the other
+/// once-run lambda is a `let`'s, and `apply_free` covers that one. A lambda
+/// in any other position is still a closure.
 ///
 /// The exemption assumes a once-per-execution bind. A multi-shot Monad
 /// (List's bind calls the continuation per element) would duplicate a
@@ -1922,18 +1929,59 @@ def bind_free (free : I64) (callee : Term) (arg : Term) : I64 :=
         _ => free,
     }
 
-/// The type of a do-bind binder, recovered from its initializer's declared
-/// `IO` payload: `let c <- Cell.new 1` makes `c : Cell I64` even though the
-/// source wrote no annotation. Only a call whose head is a global def with
-/// a declared `IO`/`RawIO` return type is resolved; anything computed
-/// (an `if`, a local helper's local) stays a hole and fails open.
-#[partial]
-def init_payload_type (s : Scope) (m : Term) : Option Term :=
+/// A lambda in CALLEE position runs exactly once: `app (lam x body) arg`
+/// is the parser's own spelling of `let x := arg in body` (and of a
+/// directly applied `fn x => body`). Its body is not a closure, so a free
+/// variable there is not a capture -- the same reasoning as `bind_free`,
+/// for the redex instead of the bind. Without this, every plain `let`
+/// would make its continuations look like closures and a linear value
+/// used after one would be `view_captured`.
+def apply_free (free : I64) (callee : Term) : I64 :=
+    match term_peel callee {
+        Term.lam _ _ _ => free + 1,
+        _ => free,
+    }
+
+/// The declared return type of the def a call's head names, when that head
+/// is a global def. Anything computed (an `if`, a lambda application, a
+/// local helper) answers `none` and the binder stays a hole.
+def init_def_return (s : Scope) (m : Term) : Option Term :=
     match spine_head_name m {
         Option.some id =>
-            match scope_find_def_return_type (NamePath.mk (List.cons (Identifier.id id) List.empty)) s {
-                Option.some ret => io_payload ret,
-                Option.none => Option.none,
+            scope_find_def_return_type (NamePath.mk (List.cons (Identifier.id id) List.empty)) s,
+        Option.none => Option.none,
+    }
+
+/// The type of a DO-BIND binder, recovered from its initializer's declared
+/// `IO` payload: `let c <- Cell.new 1` makes `c : Cell I64` even though the
+/// source wrote no annotation.
+#[partial]
+def init_payload_type (s : Scope) (m : Term) : Option Term :=
+    match init_def_return s m {
+        Option.some ret => io_payload ret,
+        Option.none => Option.none,
+    }
+
+/// The type of a PLAIN `let` binder: the initializer's value type.
+///
+/// Gated deliberately. The affine rule is enforced on attributed types, so
+/// attributing every pure let would turn `let xs := List.map f ys` used
+/// twice into an over-use error -- such binders are holes today and have
+/// always failed open. Only a return type that mentions a linear/proof kind
+/// is attributed, because that is the answer linearity depends on.
+///
+/// An `IO`/`RawIO`-headed return is NOT attributed: a plain let binds the
+/// action, not its payload (`let a := Proc.read_line c` has type
+/// `IO (Result ...)`), and unwrapping is the do-bind path's job.
+def init_value_type (kinds : TypeKinds) (s : Scope) (m : Term) : Option Term :=
+    match init_def_return s m {
+        Option.some ret =>
+            match io_payload ret {
+                Option.some _payload => Option.none,
+                Option.none =>
+                    if mentions_linear_or_proof kinds ret
+                    then Option.some ret
+                    else Option.none,
             },
         Option.none => Option.none,
     }
@@ -1998,7 +2046,7 @@ def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
                             let own : I64 := owning_uses ctors borrows 0 r.body in
                             let u : BinderUse :=
                                 { name := binder_ident r.binder,
-                                    kind := BinderKind.bk_lam,
+                                    kind := BinderKind.bk_let,
                                     typ := r.typ,
                                     count := raw,
                                     borrowed := raw - borrow_aware_uses borrows 0 r.body,
@@ -2008,7 +2056,7 @@ def collect_uses_term (ctors : HashMap String Bool) (borrows : HashMap String Bo
                                     pos := 0 - 1,
                                     view := v,
                                     declared := binder_mult r.binder,
-                                    init := Option.none,
+                                    init := Option.some arg,
                                     captured := captured_uses_of 0 r.body } in
                             collect_uses_term ctors borrows (view_push v venv) r.body
                                 (collect_uses_term ctors borrows venv arg (List.cons u acc)),
@@ -2200,48 +2248,54 @@ def collect_uses_opt_args (ctors : HashMap String Bool) (borrows : HashMap Strin
 // the 2,419 over-used binders reported as unknown -- 30% of the number
 // the whole experiment turns on, unattributed.
 
-/// Fill in `typ` for every `bk_match` binder whose constructor resolves
-/// unambiguously. Leaves the rest at `Term.hole`.
+/// Fill in `typ` for every binder whose type the source left unwritten:
+/// a `bk_let` from its initializer's value type, a `bk_lam` from the
+/// callee's `IO` payload, a `bk_match` from its constructor. Leaves the
+/// rest at `Term.hole`.
 #[partial]
-pub def attribute_binder_types (s : Scope) (us : List BinderUse) : List BinderUse :=
-    List.reverse (attribute_binder_types_go s us List.empty)
+pub def attribute_binder_types (kinds : TypeKinds) (s : Scope) (us : List BinderUse) : List BinderUse :=
+    List.reverse (attribute_binder_types_go kinds s us List.empty)
 
 #[partial]
-def attribute_binder_types_go (s : Scope) (us : List BinderUse) (acc : List BinderUse) : List BinderUse :=
+def attribute_binder_types_go (kinds : TypeKinds) (s : Scope) (us : List BinderUse) (acc : List BinderUse) : List BinderUse :=
     match us {
         List.empty => acc,
-        List.cons u rest => attribute_binder_types_go s rest (List.cons (attribute_one s u) acc),
+        List.cons u rest => attribute_binder_types_go kinds s rest (List.cons (attribute_one kinds s u) acc),
     }
 
-/// One binder. A `bk_lam` binder already carries its annotation and its
-/// declared multiplicity, and a `bk_match` binder is resolved through its
-/// constructor -- or left unknown, which is the honest answer whenever it
-/// cannot be. A match binder's `declared` comes from the constructor
-/// FIELD's own `Param.mult` (`#[linear] struct` fields), for the same
-/// reason its type does.
-def attribute_one (s : Scope) (u : BinderUse) : BinderUse :=
+/// One binder. A binder with a written type already carries its
+/// annotation and its declared multiplicity, and a `bk_match` binder is
+/// resolved through its constructor -- or left unknown, which is the
+/// honest answer whenever it cannot be. A match binder's `declared` comes
+/// from the constructor FIELD's own `Param.mult` (`#[linear] struct`
+/// fields), for the same reason its type does.
+def attribute_one (kinds : TypeKinds) (s : Scope) (u : BinderUse) : BinderUse :=
     match BinderUse.kind u {
-        BinderKind.bk_lam =>
-            // An unannotated do-bind binder (`let c <- Cell.new 1`) has a
-            // hole for its type. Recover it from the initializer's declared
-            // `IO` payload, or every linear/proof rule fails open on it. A
-            // written type wins: for `let a : Assets <- Ref.get r` the
-            // payload is the bare `A`, which would hide `Copy Assets`.
-            match BinderUse.init u {
-                Option.some m =>
-                    if type_unwritten u.typ
-                    then match init_payload_type s m {
-                        Option.some t => { u with typ := t },
-                        Option.none => u,
-                    }
-                    else u,
-                Option.none => u,
-            },
+        // A do-bind binder (`let c <- Cell.new 1`) takes the callee's
+        // declared `IO` payload; a plain `let` binder takes the value
+        // itself, and only when it mentions a linear/proof kind. A written
+        // type wins either way: for `let a : Assets <- Ref.get r` the
+        // payload is the bare `A`, which would hide `Copy Assets`.
         BinderKind.bk_match =>
             match ctor_field_param s (BinderUse.ctor u) (BinderUse.pos u) {
                 Option.some p =>
                     { u with typ := param_type_of p, declared := param_mult_of p },
                 Option.none => u,
+            },
+        _ =>
+            if Bool.not (type_unwritten u.typ) then u
+            else match BinderUse.init u {
+                Option.none => u,
+                Option.some m =>
+                    let found : Option Term :=
+                        match BinderUse.kind u {
+                            BinderKind.bk_let => init_value_type kinds s m,
+                            _ => init_payload_type s m,
+                        } in
+                    match found {
+                        Option.some t => { u with typ := t },
+                        Option.none => u,
+                    },
             },
     }
 
@@ -2433,7 +2487,7 @@ def test_match_binder_takes_field_mult : Bool :=
         { name := Identifier.id "x", kind := BinderKind.bk_match, typ := Term.hole,
             count := 1, owning := 1, ctor := Identifier.id "mkp", pos := 0,
             view := false, declared := Multiplicity.many, init := Option.none } in
-    match attribute_binder_types linear_field_scope (List.cons u List.empty) {
+    match attribute_binder_types type_kinds_empty linear_field_scope (List.cons u List.empty) {
         List.cons out _rest =>
             match BinderUse.declared out {
                 Multiplicity.linear => true,
@@ -2651,7 +2705,7 @@ def test_attribute_leaves_lambda_binders_alone : Bool :=
         { name := Identifier.id "x", kind := BinderKind.bk_lam, typ := annotated,
             count := 1, owning := 1, ctor := Identifier.id "", pos := 0 - 1,
             view := false, declared := Multiplicity.many, init := Option.none } in
-    match attribute_binder_types empty_scope (List.cons u List.empty) {
+    match attribute_binder_types type_kinds_empty empty_scope (List.cons u List.empty) {
         List.cons out _rest =>
             match BinderUse.typ out {
                 Term.var _idx dbg =>
@@ -2672,7 +2726,7 @@ def test_attribute_fails_closed_on_an_unknown_constructor : Bool :=
         { name := Identifier.id "f", kind := BinderKind.bk_match, typ := Term.hole,
             count := 2, owning := 2, ctor := Identifier.id "nope", pos := 0,
             view := false, declared := Multiplicity.many, init := Option.none } in
-    match attribute_binder_types empty_scope (List.cons u List.empty) {
+    match attribute_binder_types type_kinds_empty empty_scope (List.cons u List.empty) {
         List.cons out _rest =>
             match BinderUse.typ out {
                 Term.hole => true,

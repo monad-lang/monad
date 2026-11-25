@@ -308,6 +308,10 @@ def totals_empty : Totals :=
 def residue_key (u : BinderUse) : String :=
     match BinderUse.kind u {
         BinderKind.bk_lam => "(lambda, no annotation)",
+        // A plain `let`: its initializer's type is the one this report's
+        // residue is about, and a hole there means the initializer's head
+        // was not a global def.
+        BinderKind.bk_let => "(let, no annotation)",
         // A blank name here is the third case, and a small one: a
         // destructured parameter's field pattern is elaborated with
         // `Identifier.id ""` as its case name (`lam_parsed_params_loop`,
@@ -405,7 +409,7 @@ def tally_decls (kinds : TypeKinds) (ctors : HashMap String Bool) (borrows : Has
                 Decl.def_d def_ =>
                     let raw : List BinderUse := collect_binder_uses ctors borrows (def_term def_) in
                     let counted : Totals :=
-                        tally_binders s (copy_vars_of_def def_) (attribute_binder_types s raw) acc in
+                        tally_binders s (copy_vars_of_def def_) (attribute_binder_types kinds s raw) acc in
                     // The Milestone 2 rule, run over the same def. The
                     // STRICT variant: the report's numbers must stay a
                     // fail-closed upper bound, unlike enforcement.

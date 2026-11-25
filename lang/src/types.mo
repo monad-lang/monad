@@ -2299,6 +2299,14 @@ pub type TypeError {
     /// A `#[linear]`-typed binder annotated `%` (erased). A linear value
     /// has a run-time representation, so it cannot be erased.
     linear_erased_binder (name : Identifier) (typ : Term),
+    /// A def with NO parameter whose declared type mentions a linear or
+    /// proof type (P12). A global is named, not moved, so
+    /// `def c : Cell I64 := Cell.new 1` would hand out one handle on every
+    /// reference -- and the Rust host memoises a nullary def while compiled
+    /// code re-runs it, so the two backends would not even agree. Give the
+    /// producer at least one parameter so each application makes its own
+    /// value.
+    linear_global_value (typ : Term),
     /// An instance method whose written signature is not the class's
     /// declared one at this instance (ISSUE-14). `expected` is the class
     /// signature with the instance's arguments substituted.

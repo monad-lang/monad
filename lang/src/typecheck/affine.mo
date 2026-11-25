@@ -196,6 +196,7 @@ pub def check_binder_with (kinds : TypeKinds) (scope : Scope) (copy_vars : List 
     let is_fn : Bool :=
         match BinderUse.kind u {
             BinderKind.bk_lam => typ_is_function typ,
+            BinderKind.bk_let => typ_is_function typ,
             BinderKind.bk_match => false,
         } in
     let budget : I64 := if is_fn then BinderUse.moves u else uses - borrowed in
@@ -363,7 +364,7 @@ def check_def_with (kinds : TypeKinds) (scope : Scope) (ctors : HashMap String B
         // parameter binders, which are not closures.
         let raw : List BinderUse :=
             collect_binder_uses_with_params d.params ctors borrows (def_body d) in
-        let attributed : List BinderUse := attribute_binder_types scope raw in
+        let attributed : List BinderUse := attribute_binder_types kinds scope raw in
         let copy_vars : List Identifier := copy_vars_of_def d in
         let binder_errors : List TypeError :=
             List.reverse (check_binders_go kinds scope copy_vars strict attributed List.empty) in
@@ -418,7 +419,7 @@ def payload_unattributable (t : Term) : Bool :=
 /// Does this term end its leading lambda chain in a hole -- i.e. is the
 /// def a declaration rather than a definition?
 #[terminating]
-def def_has_no_body (t : Term) : Bool :=
+pub def def_has_no_body (t : Term) : Bool :=
     match t {
         Term.ctx _loc inner => def_has_no_body inner,
         Term.lam _b _typ body => def_has_no_body body,

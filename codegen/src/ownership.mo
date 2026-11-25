@@ -761,13 +761,18 @@ def not_zero_mult (m : Multiplicity) : Bool :=
 def binder_droppable (tables : OwnershipTables) (u : BinderUse) : Bool :=
     match BinderUse.kind u {
         BinderKind.bk_match => false,
-        BinderKind.bk_lam =>
-            I64.beq (BinderUse.count u) 0
-                && Bool.not (BinderUse.view u)
-                && I64.beq (BinderUse.captured u) 0
-                && not_zero_mult (BinderUse.declared u)
-                && Bool.not (typ_is_function (BinderUse.typ u)),
+        // A plain `let` binds a value exactly like a lambda parameter: its
+        // initializer has already been compiled, so the binder is the only
+        // reference, and the v1 drop rule is the same.
+        _ => binder_droppable_lam tables u,
     }
+
+def binder_droppable_lam (tables : OwnershipTables) (u : BinderUse) : Bool :=
+    I64.beq (BinderUse.count u) 0
+        && Bool.not (BinderUse.view u)
+        && I64.beq (BinderUse.captured u) 0
+        && not_zero_mult (BinderUse.declared u)
+        && Bool.not (typ_is_function (BinderUse.typ u))
 
 /// A binder whose name occurs more than once cannot be matched to a bind
 /// site reliably (shadowing), so it is dropped nowhere.
