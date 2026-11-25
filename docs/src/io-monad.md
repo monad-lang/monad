@@ -331,10 +331,8 @@ while a pure getter keeps its raw return type. Not every IO operation is a nativ
 `IO.read_file` and `IO.write_file` are ordinary Monad over `std/stream.mo`'s
 byte streams.
 
-Of the natives declared across `init/` and `std/`, one -- `eq_rec` -- is
-declared but not implemented anywhere, and calling it fails at run time with
-`unknown native`. The compiler backend wires a subset of
-the rest; see [Compiling and Running](./compiling.md#native-coverage). The four
+The compiler backend wires a subset of the declared natives; see
+[Compiling and Running](./compiling.md#native-coverage). The four
 `tcp_*` natives above are among the wired ones, but only in the self-hosted
 backend — the Rust host has no TCP implementation at all.
 

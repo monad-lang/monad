@@ -338,9 +338,11 @@ cooperative, so the two backends disagree about what a `forkIO` means.
   implements it.
 - **Duplicate `Show`.** `std.list` declares a local `class Show A` alongside its
   import of `std.show`'s. Prefer `std.show`.
-- **One declared-but-unimplemented native**: `eq_rec` (so `Eq.rec` cannot be
-  called). `string_to_chars`/`string_from_chars` were deleted -- they were
-  wired in no backend and nothing called them.
+- **No native fails only at run time.** `eq_rec` (the `Eq.rec` native) and
+  `string_to_chars`/`string_from_chars` were deleted -- they were wired in no
+  backend and nothing could call them safely. A native in the *unwired*
+  concurrency surface is still rejected, but at compile time (see
+  [Compiling and Running](./compiling.md#native-coverage)).
 - **TCP timeouts are caller-enforced.** `IO.tcp_connect_timeout` bounds the
   connect (one deadline across every address tried; the `getaddrinfo` lookup
   itself is unbounded), `FdStream.set_timeout` applies `SO_RCVTIMEO`/

@@ -511,8 +511,13 @@ The `tcp_*` natives are wired here and nowhere else. The Rust bootstrap host has
 no TCP implementation, so a socket test cannot run under `cargo run -- test`;
 `motes/moon` and `motes/moose` are exercised by the self-hosted runner.
 
-One native is declared but unimplemented in both implementations -- `eq_rec`
--- and fails at run time with `unknown native`.
+There is no longer a native that passes the compile-time gate and then fails
+at run time. `eq_rec` (the `Eq.rec` J eliminator) was the last one: declared,
+wired in neither backend, and reported as `unknown native` only when called,
+so the declaration was deleted. J returns as an ordinary `#[proof]` def once
+the checker can infer an `Eq` match's motive. A native in the *unwired*
+concurrency surface still fails, but at compile time and by design (the gate
+above).
 
 A few natives are not written in C at all: `runtime/src/natives.mo` emits
 LLVM IR directly for thirteen simple operations.

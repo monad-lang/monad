@@ -39,7 +39,7 @@ where the `monad` binary itself comes from.
 ## Key Features
 
 - **Dependent types**: types can depend on values, including a `Prop` universe,
-  propositional equality with a J eliminator, and length-indexed vectors
+  propositional equality, and length-indexed vectors
 - **Type classes**: ad-hoc polymorphism with constraints and instance resolution
 - **Termination checking**: recursive definitions must be structurally
   decreasing unless you opt out

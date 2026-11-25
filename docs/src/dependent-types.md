@@ -90,12 +90,11 @@ single constructor `refl`:
 type Eq (A : Sort 1) (a : A) (b : A) : Prop {
     refl : Eq A a a
 }
-
-/// The J eliminator
-#[native "eq_rec"]
-def Eq.rec (A : Sort 1) (a : A) (P : (b : A) -> Eq A a b -> Sort 1)
-    (h : P a (Eq.refl a)) (b : A) (e : Eq A a b) : P b e
 ```
+
+There is no J eliminator (`Eq.rec`) yet. It used to be declared as an
+`eq_rec` native that no backend implemented, so every call type-checked and
+then crashed at run time; it was deleted rather than left as a trap.
 
 Because `refl` only builds `Eq A a a`, a value of type `Eq A x y` is a proof
 that `x` and `y` are definitionally equal:
@@ -107,13 +106,15 @@ def a_is_a : Eq String "a" "a" := Eq.refl "a"
 
 > [!WARNING]
 > **`Eq` is type-checking-only today.** Constructing and annotating an equality
-> proof works, but there is no way to *use* one: `Eq.rec`'s native (`eq_rec`) is
-> declared and not implemented, and pattern matching on `refl` fails at run time
-> with `expected 0 constructor fields, got 1`. The prelude's own tests for `Eq`
-> acknowledge this — they check that construction type-checks and stop there.
+> proof works, but there is no way to *use* one: the prelude declares no
+> eliminator, and pattern matching on `refl` fails at run time with `expected 0
+> constructor fields, got 1`. The prelude's own tests for `Eq` acknowledge this
+> — they check that construction type-checks and stop there.
 >
 > So `Eq` currently documents an intent in the type system rather than enabling
-> proof-carrying code.
+> proof-carrying code. J comes back as an ordinary `#[proof]` def written with
+> a `match` once the checker can infer an `Eq` match's motive, which differs
+> from the scrutinee (the scrutinee is `e : Eq A a b`, not the motive's `b`).
 
 ## Length-Indexed Vectors
 
@@ -208,7 +209,7 @@ rest of the language.
 - `{A : Type}` introduces implicit arguments, inferred at the call site
 - Holes `_` infer a type inside a definition, but never the definition's own signature
 - Universes are `Sort N`; `Prop` is `Sort 0` and `Type` is `Sort 1`
-- `Eq`/`refl` and `Eq.rec` give propositional equality with a J eliminator
+- `Eq`/`refl` give propositional equality; there is no J eliminator yet
 - `Vec` is a working length-indexed vector
 
 Next, we'll explore **macros and derive**.

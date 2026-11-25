@@ -262,10 +262,11 @@ pub type Eq (A : Sort 1) (a : A) (b : A) : Prop {
     refl : Eq A a a
 }
 
-/// Native J eliminator for propositional equality
-#[native "eq_rec"]
-pub def Eq.rec (A : Sort 1) (a : A) (P : (b : A) -> Eq A a b -> Sort 1)
-    (h : P a (Eq.refl a)) (b : A) (e : Eq A a b) : P b e
+// No `Eq.rec` yet. It was declared `#[native "eq_rec"]` and never
+// implemented in either backend, so every call was a compile-time-valid
+// runtime crash. J comes back as a `#[proof]` def written with a `match`
+// once the checker infers an `Eq` match's motive from the scrutinee and
+// its index (the scrutinee is not the motive's binder there).
 
 /// Equals
 pub class BEq A {
