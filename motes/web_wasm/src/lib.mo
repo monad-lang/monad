@@ -4,7 +4,7 @@
 // generated loader, and the thin IO wrappers over the RawIO externs.
 // Nothing outside this mote declares a web extern.
 
-pub use lib::types {Node, RequestId, ClipboardOp, CryptoOp, WebKey}
+pub use lib::types {Node, RequestId, ClipboardOp, CryptoOp, WebKey, RtcPeer, MediaStream, MediaStreamOp}
 pub use web_event::event {WebEvent, FileInfo}
 // The pure sound vocabulary, re-exported beside the event one so an app that
 // depends on `web_wasm` alone can name a `SoundFx`/`MediaCmd`/`Wave`.
@@ -119,4 +119,17 @@ pub use lib::websocket {
     WebSocket.connect, WebSocket.state, WebSocket.close, WebSocket.free, WebSocket.send,
     WebSocket.send_bytes, WebSocket.next, WebSocket.drain, WebSocket.pending,
     WebSocket.watch, WebSocket.unwatch,
+}
+
+pub use lib::rtc {
+    Rtc.connect, Rtc.state, Rtc.free, Rtc.set_local, Rtc.set_remote, Rtc.add_ice,
+    Rtc.create_data_channel, Rtc.send, Rtc.send_bytes, Rtc.close, Rtc.add_stream,
+    Rtc.next, Rtc.drain, Rtc.watch, Rtc.unwatch,
+}
+pub use lib::media_stream {
+    MediaStream.get_user_media_begin, MediaStream.get_display_media_begin,
+    MediaStream.request_av, MediaStream.request_video,
+    MediaStream.request_audio, MediaStream.request_display,
+    MediaStream.poll, MediaStream.result, MediaStream.error, MediaStream.await,
+    MediaStream.attach, MediaStream.stop, MediaStream.release, MediaStream.of_track,
 }
