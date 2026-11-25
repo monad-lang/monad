@@ -414,8 +414,9 @@ pub type WsSocket (Msg : Type) {
 /// host buffer a later `play_file` plays. A decode that is still running is
 /// NOT stored, so a burst of `play_file` commands for one url does not start
 /// one decode each (the pending one is remembered separately).
-pub type LoadedSound {
-    loaded_sound (url : String) (sound : Sound)
+pub struct LoadedSound {
+    url : String,
+    sound : Sound
 }
 
 pub type RuntimeState (S : Type) (Msg : Type) {
@@ -954,7 +955,7 @@ def Runtime.decode_url {S : Type} {Msg : Type} (c : AudioCtx) (url : String)
                     let st : RuntimeState S Msg <- Ref.get state;
                     let cached := Runtime.sounds_of st;
                     let _ <- Ref.update state (Runtime.set_sounds
-                        (List.append cached (List.cons (LoadedSound.loaded_sound url s) List.empty)));
+                        (List.append cached (List.cons ({ url := url, sound := s } : LoadedSound) List.empty)));
                     IO.pure (Option.some s)
                 }
             }
