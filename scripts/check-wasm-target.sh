@@ -269,6 +269,28 @@ for mode in webgl2 webgl1 webgl1-nodepth incomplete none; do
     node wasm/web/smoke/webgl_shadow_smoke.mjs "$tmp/webgl_shadow.wasm" "$mode"
 done
 
+echo "== web: sound (Web Audio synthesis, media transport) =="
+# `Command.beep`/`hit`/`silence` from an Oak update plus `<audio>` transport
+# by selector, over the recording Web Audio stub. Run once per environment:
+# Web Audio present, absent, and an autoplay-blocked `play()`.
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_sound.mo \
+    -o "$tmp/oak_sound.wasm" --no-cache
+for mode in full none blocked-play; do
+    node wasm/web/smoke/audio_smoke.mjs "$tmp/oak_sound.wasm" "$mode"
+done
+
+echo "== web: sound (PCM playback, binary fetch, decode pipeline) =="
+# The imperative surface: a `Buf F32` of PCM crosses whole, and a file body
+# with NUL bytes in it survives the binary channel (`fetch_len` /
+# `fetch_read_bytes`) that the NUL-terminated `Fetch.read` would truncate.
+# The decode is two-phase, so the harness drives the fixture's state machine
+# across export calls. Run once per decode outcome.
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_audio_direct.mo \
+    -o "$tmp/web_audio_direct.wasm" --no-cache
+for mode in ok no_body decode_fail; do
+    node wasm/web/smoke/audio_direct_smoke.mjs "$tmp/web_audio_direct.wasm" "$mode"
+done
+
 echo "== web: render allocation guard (256 buttons, two handlers each) =="
 "$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/oak_spa_alloc.mo \
     -o "$tmp/oak_spa_alloc.wasm" --no-cache

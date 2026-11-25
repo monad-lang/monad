@@ -77,8 +77,8 @@ re-render. Use it for a `keydown` that only cares about one key.
 
 ## Commands
 
-`Command` has `none`, `quit`, `dispatch`, `perform`, and four runtime
-commands:
+`Command` has `none`, `quit`, `dispatch`, `perform`, `sound`, `media`, and
+four runtime commands:
 
 - `Command.after ms msg` schedules one `setTimeout`; the message is parked
   in the runtime state (never in JS), and the host calls
@@ -94,6 +94,29 @@ commands:
   immediately in order, `dispatch` messages queue for the next batch, and
   `quit` stops later commands. The pure `oak::app` fold treats `after`,
   `focus` and `after_render` as inert (it has no scheduler or DOM).
+
+## Sound
+
+Two runtime commands, performed here because `oak::app` has neither an
+`AudioContext` nor a DOM:
+
+- `Command.sound fx` plays a short `SoundFx` (`beep`, `hit`, `play_file`,
+  `silence`). The `AudioContext` is opened **lazily** by the first sound and
+  resumed there — a context created before a user gesture starts
+  `suspended`, and `Runtime.dispatch` also resumes on every event, so the
+  first click is what unblocks playback.
+- `Command.media cmd` drives an `<audio>`/`<video>` element the view mounted,
+  addressed by selector (`play`/`pause`/`seek`/`volume`/`mute`/`loop`).
+
+`SoundFx.file` caches its decoded `Sound` **by url** in the runtime state, so
+a `play_file` in a hot update fetches and decodes once. The fetch/decode are
+two-phase and driven to completion inside the effect (`Runtime.decode_url`
+polls a bounded number of times), because a promise cannot settle inside one
+export call.
+
+`RuntimeState` carries the context (`Option AudioCtx`) and that cache
+(`List LoadedSound`) beside the sockets; `Runtime.drain` carries both across
+its staging write, like the timer and paint lists.
 
 ## Canvas and WebGL
 
@@ -218,5 +241,6 @@ clipboard), `event_smoke.mjs` (the raw snapshot), `clipboard_smoke.mjs`
 (async clipboard), `subs_smoke.mjs` (window/document/frame), and
 `webgl_smoke.mjs`/`webgl_texture_smoke.mjs`/`webgl_triangle_smoke.mjs`
 (`after_render` drawing, textures and `Buf` uploads over the recording
-`stub_gl.mjs`).
+`stub_gl.mjs`), and `audio_smoke.mjs` (`Command.beep`/`hit`/`silence` and the
+`<audio>` transport over `stub_audio.mjs`).
 `scripts/check-wasm-target.sh` builds and runs them (all of it runs in CI).

@@ -96,6 +96,67 @@ commands:
 event when it returns `Option.none`: a `keydown` that only cares about
 Escape should use it instead of re-rendering on every key.
 
+## Sound and audio
+
+The browser has two audio APIs and Oak uses both, for different jobs.
+
+**Short sounds are `Command`s.** `update` stays pure: it returns the sound as
+data, and the runtime plays it.
+
+```monad,ignore
+def update (m : Model) (msg : Msg) : Pair Model (Command Unit Msg) :=
+    match msg {
+        Msg.pickup => Pair.pair m (Command.beep Wave.square 880.0 0.3 90i64),
+        Msg.explode => Pair.pair m (Command.hit 0.6 250i64 700.0),
+        Msg.fanfare => Pair.pair m (Command.play_file "/sfx/fanfare.ogg" 0.8),
+        Msg.mute => Pair.pair m Command.silence,
+    }
+```
+
+`Command.beep` is an oscillator note (waveform, Hz, peak gain, length);
+`Command.hit` is a noise burst through an optional lowpass — a percussive
+sound with no sample file; `Command.play_file` decodes a URL once and caches
+it by url; `Command.silence` takes the master gain to zero. All four are
+`SoundFx` values, so a test can inspect one without a browser.
+
+The runtime opens the `AudioContext` **lazily**, on the first sound, and
+resumes it there: a context created before a user gesture starts
+`suspended`, and a sound scheduled into a suspended context is silent. A
+page that never plays a sound never asks the browser for a context.
+
+**Background music is a media element.** A long track is streamed and
+scrubbed by an `<audio>` element the view mounts, driven by `Command.media`:
+
+```monad,ignore
+def view (m : Model) : Oak.Node Msg :=
+    Html.div [Html.id_ "app"]
+        [Html.audio [Html.id_ "player", Html.src "/song.mp3", Html.attr "preload" "metadata"]
+            List.empty,
+            Html.button [Html.on_click (Msg.media (MediaCmd.play "#player"))] [Html.text "play"],
+            Html.button [Html.on_click (Msg.media (MediaCmd.seek "#player" 30000i64))] [Html.text "0:30"]]
+```
+
+`MediaCmd` is `play`/`pause`/`seek`/`volume`/`mute`/`unmute`/`loop`, each
+addressed by the element's **selector**. A selector re-resolves on every
+call, so a re-render can never leave a stale handle behind — the same reason
+`Command.focus` takes one.
+
+Do not use `autoplay`: a policy that blocks it fails **silently**.
+`MediaElement.play` reports the block as `PlayOutcome.blocked`, which is a
+"tap to play" affordance rather than an error to retry.
+
+**Why the split.** An `AudioContext` decodes a whole file into memory, so a
+five-minute track would cost five minutes of PCM before the first note; a
+media element streams and seeks. Conversely a media element cannot mix a
+dozen overlapping one-shot sounds the way a Web Audio graph can. Use
+`Command.beep`/`hit`/`play_file` for effects, and an `<audio>` element for
+music.
+
+The imperative surface (`web_wasm::audio`, `web_wasm::media_element`) is
+there for an app with its own loop — a game engine drawing with
+`Command.after_render` can call `Audio.play_pcm` with a `Buf F32` it
+synthesized, or poll `Audio.decode_poll` itself.
+
 ## Handler ids and view shape
 
 A handler id is an integer hash of the node's patch path and event name. It
@@ -161,6 +222,8 @@ for a per-frame poll), `next`, `send`, `close`, `watch`/`unwatch`.
 | `window` / `memory` | `origin`/`href`/`pathname`/`search`/`search_param` reads, `reload`/`navigate`/`replace`, committed/used heap |
 | `timer` | the `Command.after` bridge |
 | `websocket` | `WebSocket.connect`/`drain`/`next`/`send`/`close`/`watch` — the imperative socket behind `Subscription.websocket` |
+| `audio` | Web Audio: `Audio.context`/`state`/`resume`/`set_master`, `tone`/`beep`/`noise` (synthesized), `play_pcm` (`Buf F32`), and two-phase `decode_begin`/`decode_poll` -> `Sound` |
+| `media_element` | `<audio>`/`<video>` transport by selector: `play`/`pause`/`seek`/`set_volume`/`set_muted`/`set_loop`, plus a whole `state` snapshot |
 
 `Fetch.begin_with` and `Fetch.response_headers` carry headers as
 length-prefixed blobs; that is what an authenticated API (bearer tokens,

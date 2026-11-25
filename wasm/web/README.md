@@ -19,6 +19,7 @@ Each `*_smoke.mjs` drives a built fixture through the real `../web.js` + `../web
 |---|---|
 | `stub_dom.mjs` | The stub DOM every Node harness drives the real runtime over. Its `insertBefore` detaches a moved node (as the real DOM does), which the keyed diff's `move` relies on. |
 | `stub_gl.mjs` | A recording fake of WebGL2/WebGL1/no WebGL for the GL harnesses: every call becomes `[name, ...args]` with objects as stable labels and typed-array uploads as decoded values. |
+| `stub_audio.mjs` | A recording fake of `AudioContext`/`AudioBuffer` (oscillators, buffer sources, gains with automation, `decodeAudioData`) plus an `HTMLMediaElement` surface on stub `<audio>`/`<video>` nodes. Modes: `full`, `none` (no Web Audio), `blocked-play` (the autoplay policy). |
 | `smoke.mjs` | Node smoke test for `monad_main` (hello/wide-value fixtures). |
 | `export_smoke.mjs` | Node test for `#[export "c"]`: exports, eager `IO`, the exports-only module, and the `Keep` slot. |
 | `dom_smoke.mjs` | Node test driving `fixtures/wasm/web_dom.mo` through `web.js` + `web_runtime.js` over the stub DOM, including the read-only introspection report. |
@@ -35,6 +36,8 @@ Each `*_smoke.mjs` drives a built fixture through the real `../web.js` + `../web
 | `webgl_smoke.mjs` | Node test driving `fixtures/wasm/oak_webgl.mo`: `Command.after_render` setup and drawing, canvas fit, the WebGL2 → WebGL1 fallback, a compile-error log and the golden GL stream. |
 | `webgl_texture_smoke.mjs` | Node test driving `fixtures/wasm/webgl_texture.mo`: two-phase image loading and texture state. |
 | `webgl_triangle_smoke.mjs` | Node test driving `fixtures/wasm/webgl_triangle.mo`: `Buf F32`/`I32`/`U8` uploads, the short-buffer refusals and a missing `OES_element_index_uint`. |
+| `audio_smoke.mjs` | Node test driving `fixtures/wasm/oak_sound.mo`: lazy context open, resume-on-gesture, one oscillator per `Command.beep` through an enveloped gain, a filtered noise `Command.hit`, `Command.silence` at the master gain, and `MediaCmd.play`/`pause` reaching the mounted `<audio>`. Run per environment (`full`/`none`/`blocked-play`). |
+| `audio_direct_smoke.mjs` | Node test driving `fixtures/wasm/web_audio_direct.mo`: PCM from a `Buf F32` played whole at its declared rate, and a fetch -> `decodeAudioData` -> `Sound` pipeline over a body with NUL bytes in it (which the NUL-terminated `Fetch.read` would truncate). Run per outcome (`ok`/`no_body`/`decode_fail`). |
 | `try_abi_smoke.mjs` | Node test for the /try staging ABI: the C-only `try_alloc` export and a `#[export "c"]` def taking a `String` parameter. |
 | `try_engine_smoke.mjs` | Node test for `motes/try_engine`: takes a built /try directory, frames the served `sources/` files the way `worker.js` does, evaluates programs through `try_run(sources, source)` and asserts the rendered `value : Type`, including parse/type/lower errors and the no-sources / malformed-payload paths. |
 | `try_ui_smoke.mjs` | Node test for `motes/try_ui`: the Oak page's run/poll/render/cancel loop over the stub DOM and a fake Worker. |
