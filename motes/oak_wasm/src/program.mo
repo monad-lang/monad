@@ -36,13 +36,18 @@ use web_wasm::dom {
 }
 use web_wasm::timer {Timer.after, Timer.is_id}
 use web_wasm::media {Media.watch, Media.unwatch}
-use web_wasm::types {WebSocket}
+use web_wasm::types {WebSocket, RtcPeer}
 use web_wasm::websocket {
     WebSocket.connect, WebSocket.close, WebSocket.free, WebSocket.watch, WebSocket.unwatch,
     WebSocket.drain, WebSocket.send,
 }
 use web_event::websocket {WsData, WsEvent}
+use web_event::rtc {RtcEvent, RtcData, RtcSdp, RtcIce, RtcIceServer}
 use web_wasm::event {WebEvent.current, WebEvent.prevent_default, WebEvent.stop_propagation}
+use web_wasm::rtc {
+    Rtc.connect, Rtc.close, Rtc.free, Rtc.drain, Rtc.watch, Rtc.unwatch,
+    Rtc.set_remote, Rtc.add_ice, Rtc.create_data_channel, Rtc.send,
+}
 use web_wasm::keep {Keep.load, Keep.save}
 use web_wasm::types {Node}
 use lib::patch {Patch.diff, Patch.apply, Patch.hydrate_root}
@@ -66,6 +71,7 @@ def Runtime.sub_key {Msg : Type} (sub : Subscription Msg) : String :=
         Subscription.media query _handler => String.concat "media:" query,
         Subscription.websocket url protocols _handler =>
             String.concat "ws:" (String.concat url (String.concat "|" (Runtime.join_protocols protocols))),
+        Subscription.rtc key _servers _handler => String.concat "rtc:" key,
     }
 
 #[terminating]
@@ -113,6 +119,7 @@ pub def Runtime.install_sub {Msg : Type} (sub : Subscription Msg) : IO Unit :=
             Dom.on_window event (Runtime.window_filter_spec event),
         Subscription.media query _handler => Media.watch query (Runtime.media_spec query),
         Subscription.websocket url protocols handler => Runtime.install_socket url protocols handler,
+        Subscription.rtc key servers handler => Runtime.install_peer key servers handler,
     }
 
 /// Open the subscription's socket and start waking the app with its key's
@@ -128,13 +135,191 @@ def Runtime.install_socket {Msg : Type} (url : String) (protocols : List String)
     IO.pure unit
 }
 
+/// Create the subscription's peer connection and start waking the app with
+/// its key's dispatch id. A browser without WebRTC still installs (every
+/// operation then fails), so a later batch sees `RtcEvent.connection` rather
+/// than a crash.
+def Runtime.install_peer {Msg : Type} (key : String) (servers : List RtcIceServer)
+    (handler : RtcEvent -> Msg) : IO Unit := do {
+    let peer <- Rtc.connect servers;
+    let rkey := String.concat "rtc:" key;
+    let id : U32 := Runtime.socket_id rkey;
+    let _ <- Rtc.watch peer id;
+    let state <- Runtime.load_state;
+    // The id is stored, not recomputed: it is the exact word the host was
+    // given, so `peer_for_id` can never disagree with the host about it.
+    let _ <- Ref.update state
+        (Runtime.add_peer (RtcPeerEntry.rtc_peer_entry rkey (U32.to_i64 id) peer handler));
+    IO.pure unit
+}
+
 def Runtime.add_socket {S : Type} {Msg : Type} (entry : WsSocket Msg)
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets, peers } =>
             RuntimeState.st root last model queue stopped handlers subs timers focus paint
-                (List.cons entry sockets),
+                (List.cons entry sockets) peers,
     }
+
+def Runtime.add_peer {S : Type} {Msg : Type} (entry : RtcPeerEntry Msg)
+    (state : RuntimeState S Msg) : RuntimeState S Msg :=
+    match state {
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets, peers } =>
+            RuntimeState.st root last model queue stopped handlers subs timers focus paint
+                sockets (List.cons entry peers),
+    }
+
+def Runtime.set_peers {S : Type} {Msg : Type} (peers : List (RtcPeerEntry Msg))
+    (state : RuntimeState S Msg) : RuntimeState S Msg :=
+    match state {
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets, .. } =>
+            RuntimeState.st root last model queue stopped handlers subs timers focus paint
+                sockets peers,
+    }
+
+def Runtime.close_peer_gone {Msg : Type} (gone : Option (RtcPeerEntry Msg)) : IO Unit :=
+    match gone {
+        Option.none => IO.pure unit,
+        Option.some e =>
+            match e {
+                { peer, .. } => do {
+                    let _ <- Rtc.unwatch peer;
+                    let _ <- Rtc.close peer;
+                    Rtc.free peer
+                }
+            }
+    }
+
+def Runtime.take_peer {Msg : Type} (key : String) (peers : List (RtcPeerEntry Msg))
+    : Pair (Option (RtcPeerEntry Msg)) (List (RtcPeerEntry Msg)) :=
+    Runtime.take_peer_go key peers List.empty
+
+#[terminating]
+def Runtime.take_peer_go {Msg : Type} (key : String) (peers : List (RtcPeerEntry Msg))
+    (acc : List (RtcPeerEntry Msg))
+    : Pair (Option (RtcPeerEntry Msg)) (List (RtcPeerEntry Msg)) :=
+    match peers {
+        List.empty => Pair.pair Option.none (List.reverse acc),
+        List.cons e rest =>
+            match e {
+                { key := k, .. } =>
+                    if String.beq k key
+                    then Pair.pair (Option.some e) (List.append (List.reverse acc) rest)
+                    else Runtime.take_peer_go key rest (List.cons e acc)
+            }
+    }
+
+/// The peer a `Command.rtc_*` names, by its SUBSCRIPTION key.
+///
+/// The stored key carries the `rtc:` prefix that keeps it from colliding with
+/// a WebSocket's key; the app writes the bare key (`Subscription.rtc "chat"`),
+/// so the prefix is added here rather than by every caller.
+#[terminating]
+def Runtime.find_peer {Msg : Type} (key : String) (peers : List (RtcPeerEntry Msg))
+    : Option RtcPeer :=
+    match peers {
+        List.empty => Option.none,
+        List.cons e rest =>
+            match e {
+                { key := k, peer, .. } =>
+                    if String.beq k (String.concat "rtc:" key)
+                    then Option.some peer
+                    else Runtime.find_peer key rest
+            }
+    }
+
+/// A failed `Command.rtc_*`: `Err` means the peer refused the call (it is
+/// closed, the label names no open channel, the local description was
+/// malformed). It is not fatal -- the app sees the state change through its
+/// handler -- so it is dropped here rather than turned into a message the
+/// pure fold would have to invent. The `Result` is still returned to the
+/// runtime so a future `Command.rtc_*` variant can report it.
+def Runtime.on_rtc_failure (failed : Option String) : IO Unit :=
+    match failed {
+        Option.none => IO.pure unit,
+        Option.some _reason => IO.pure unit,
+    }
+
+def Runtime.rtc_set_remote {S : Type} {Msg : Type} (key : String) (sdp : RtcSdp)
+    : IO (Option String) := do {
+    let state <- Runtime.load_state;
+    let peers <- Runtime.peers_of_state state;
+    match Runtime.find_peer key peers {
+        Option.none => IO.pure Option.none,
+        Option.some peer => do {
+            let outcome <- Rtc.set_remote peer sdp;
+            match outcome {
+                Result.ok _ => IO.pure Option.none,
+                Result.err why => IO.pure (Option.some why),
+            }
+        },
+    }
+}
+
+def Runtime.rtc_add_ice {S : Type} {Msg : Type} (key : String) (ice : RtcIce)
+    : IO (Option String) := do {
+    let state <- Runtime.load_state;
+    let peers <- Runtime.peers_of_state state;
+    match Runtime.find_peer key peers {
+        Option.none => IO.pure Option.none,
+        Option.some peer => do {
+            let outcome <- Rtc.add_ice peer ice;
+            match outcome {
+                Result.ok _ => IO.pure Option.none,
+                Result.err why => IO.pure (Option.some why),
+            }
+        },
+    }
+}
+
+def Runtime.rtc_open_channel {S : Type} {Msg : Type} (key : String) (label : String)
+    (retrans : I64) : IO (Option String) := do {
+    let state <- Runtime.load_state;
+    let peers <- Runtime.peers_of_state state;
+    match Runtime.find_peer key peers {
+        Option.none => IO.pure Option.none,
+        Option.some peer => do {
+            let outcome <- Rtc.create_data_channel peer label true retrans;
+            match outcome {
+                Result.ok _ => IO.pure Option.none,
+                Result.err why => IO.pure (Option.some why),
+            }
+        },
+    }
+}
+
+def Runtime.rtc_send {S : Type} {Msg : Type} (key : String) (label : String) (data : RtcData)
+    : IO (Option String) := do {
+    let state <- Runtime.load_state;
+    let peers <- Runtime.peers_of_state state;
+    match Runtime.find_peer key peers {
+        Option.none => IO.pure Option.none,
+        Option.some peer => do {
+            let outcome <- Rtc.send peer label data;
+            match outcome {
+                Result.ok _ => IO.pure Option.none,
+                Result.err why => IO.pure (Option.some why),
+            }
+        },
+    }
+}
+
+/// The state record's peer table.
+///
+/// A FIELD ACCESS, not a `{ peers, .. }` pattern: `RuntimeState.st` has twelve
+/// fields and a record pattern here silently mis-projected (the same class of
+/// bug AGENTS warns about for positional matches on a widened struct).
+def Runtime.state_peers {S : Type} {Msg : Type} (st : RuntimeState S Msg)
+    : List (RtcPeerEntry Msg) :=
+    st.peers
+
+def Runtime.peers_of_state {S : Type} {Msg : Type} (state : Ref (RuntimeState S Msg))
+    : IO (List (RtcPeerEntry Msg)) := do {
+    let st : RuntimeState S Msg <- Ref.get state;
+    match st {
+        { peers, .. } => IO.pure peers,
+    }
+}
 
 /// A watched socket woke up: drain its queue and enqueue one message per
 /// event through the subscription's handler.
@@ -151,6 +336,62 @@ def Runtime.dispatch_socket {S : Type} {Msg : Type} (id : I64) (sockets : List (
         }
     }
 }
+
+/// A wake-up that no render handler owns: a peer's or a socket's.
+///
+/// Peers are asked first only because a program with both is unusual; the
+/// two id spaces are the same hash, so both are probed and a genuinely
+/// unknown id falls through to `dispatch_socket`, which does nothing for an
+/// id it does not know.
+def Runtime.dispatch_source {S : Type} {Msg : Type} (id : I64)
+    (sockets : List (WsSocket Msg)) (peers : List (RtcPeerEntry Msg)) : IO Unit :=
+    match Runtime.peer_for_id id peers {
+        Option.some pair => Runtime.dispatch_peer pair,
+        Option.none => Runtime.dispatch_socket id sockets,
+    }
+
+/// A watched peer woke up: drain its queue and enqueue one message per
+/// event through the subscription's handler.
+pub def Runtime.dispatch_peer {S : Type} {Msg : Type}
+    (pair : Pair RtcPeer (RtcEvent -> Msg)) : IO Unit :=
+    match pair {
+        Pair.pair peer handler => do {
+            let events <- Rtc.drain peer;
+            let state <- Runtime.load_state;
+            let _ <- Ref.update state (Runtime.enqueue_rtc_events handler events);
+            IO.pure unit
+        }
+    }
+
+/// The peer whose wake-up id is `id`, if any. Peers and sockets share one
+/// id space (`Runtime.socket_id` over the subscription key, which is
+/// `rtc:<key>` for a peer), so `Runtime.dispatch` asks both and an
+/// unmatched id falls through to nothing.
+#[terminating]
+def Runtime.peer_for_id {Msg : Type} (id : I64) (peers : List (RtcPeerEntry Msg))
+    : Option (Pair RtcPeer (RtcEvent -> Msg)) :=
+    match peers {
+        List.empty => Option.none,
+        List.cons e rest =>
+            match e {
+                { id := mine, peer, handler, .. } =>
+                    if I64.beq mine id
+                    then Option.some (Pair.pair peer handler)
+                    else Runtime.peer_for_id id rest
+            }
+    }
+
+def Runtime.enqueue_rtc_events {S : Type} {Msg : Type} (handler : RtcEvent -> Msg)
+    (events : List RtcEvent) (state : RuntimeState S Msg) : RuntimeState S Msg :=
+    Runtime.fold_enqueue (Runtime.map_rtc_events handler events) state
+
+#[terminating]
+def Runtime.map_rtc_events {Msg : Type} (handler : RtcEvent -> Msg)
+    (events : List RtcEvent) : List Msg :=
+    match events {
+        List.empty => List.empty,
+        List.cons e rest => List.cons (handler e) (Runtime.map_rtc_events handler rest)
+    }
 
 #[terminating]
 def Runtime.socket_for_id {Msg : Type} (id : I64)
@@ -188,8 +429,9 @@ def Runtime.fold_enqueue {S : Type} {Msg : Type} (msgs : List Msg) (state : Runt
 def Runtime.set_sockets {S : Type} {Msg : Type} (sockets : List (WsSocket Msg))
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, .. } =>
-            RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets,
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, peers, .. } =>
+            RuntimeState.st root last model queue stopped handlers subs timers focus paint
+                sockets peers,
     }
 
 /// The live sockets of a state value (pure).
@@ -235,11 +477,11 @@ def Runtime.find_socket {Msg : Type} (url : String) (sockets : List (WsSocket Ms
 def Runtime.drop_socket {S : Type} {Msg : Type} (key : String)
     (state : RuntimeState S Msg) : IO (RuntimeState S Msg) := do {
     match state {
-        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets, peers } =>
             match Runtime.take_socket key sockets {
                 Pair.pair gone rest => do {
                     let _ <- Runtime.close_gone gone;
-                    IO.pure (RuntimeState.st root last model queue stopped handlers subs timers focus paint rest)
+                    IO.pure (RuntimeState.st root last model queue stopped handlers subs timers focus paint rest peers)
                 }
             }
     }
@@ -292,6 +534,19 @@ pub def Runtime.remove_sub {Msg : Type} (sub : Subscription Msg) : IO Unit :=
                     let _ <- Ref.update state (Runtime.set_sockets rest);
                     Runtime.close_gone gone
                 }
+            }
+        },
+        Subscription.rtc key _servers _handler => do {
+            let rkey := String.concat "rtc:" key;
+            let state <- Runtime.load_state;
+            let st : RuntimeState _ _ <- Ref.get state;
+            match st {
+                { peers, .. } => match Runtime.take_peer rkey peers {
+                    Pair.pair gone rest => do {
+                        let _ <- Ref.update state (Runtime.set_peers rest);
+                        Runtime.close_peer_gone gone
+                    }
+                },
             }
         },
     }
@@ -373,6 +628,7 @@ def Runtime.sub_handler {Msg : Type} (sub : Subscription Msg)
                     (fn (e : WebEvent) => HandlerResult.msg (handler e)))
                 List.empty,
         Subscription.websocket _url _protocols _handler => List.empty,
+        Subscription.rtc _key _servers _handler => List.empty,
     }
 
 #[terminating]
@@ -392,6 +648,14 @@ pub type WsSocket (Msg : Type) {
     ws_socket (key : String) (url : String) (ws : WebSocket) (handler : WsEvent -> Msg)
 }
 
+/// One peer connection a `Subscription.rtc` owns: its subscription key (the
+/// `rtc:<key>` form), the live peer and the pure handler each `RtcEvent`
+/// becomes a message through. The wake-up id is `Runtime.socket_id key`,
+/// which `Runtime.dispatch` resolves through `Runtime.peer_for_id`.
+pub type RtcPeerEntry (Msg : Type) {
+    rtc_peer_entry (key : String) (id : I64) (peer : RtcPeer) (handler : RtcEvent -> Msg)
+}
+
 pub type RuntimeState (S : Type) (Msg : Type) {
     st (root : Node) (last : Html.Node) (model : S)
         (queue : List Msg) (stopped : Bool)
@@ -407,6 +671,10 @@ pub type RuntimeState (S : Type) (Msg : Type) {
         (paint : List (Unit -> IO (Option Msg)))
         /// The live WebSockets owned by subscriptions.
         (sockets : List (WsSocket Msg))
+        /// The live peer connections owned by `Subscription.rtc`. Last on
+        /// purpose: every `RuntimeState.st` call site is positional, so a new
+        /// field must not shift the ones already there.
+        (peers : List (RtcPeerEntry Msg))
 }
 
 /// Mount a `Program` under the root the loader selected, and hand the state
@@ -430,7 +698,7 @@ pub def Runtime.mount {S : Type} {Msg : Type} {E : Type}
             let table := List.append handlers (Runtime.collect_sub_handlers subs);
             let state : Ref (RuntimeState S Msg) <-
                 Ref.new (RuntimeState.st root tree model List.empty false table subs
-                    List.empty List.empty List.empty List.empty);
+                    List.empty List.empty List.empty List.empty List.empty);
             let _ <- Keep.save state;
             // Subscriptions install AFTER the state exists: a WebSocket
             // subscription registers its socket through the state slot.
@@ -449,18 +717,18 @@ pub def Runtime.dispatch {S : Type} {Msg : Type} (handler : I64) : IO Unit := do
     let state <- Runtime.load_state;
     let snapshot : RuntimeState S Msg <- Ref.get state;
     match snapshot {
-        { stopped, handlers, timers, sockets, .. } =>
+        { stopped, handlers, timers, sockets, peers, .. } =>
             if stopped
             then IO.pure unit
             else if Timer.is_id (I64.to_u32 handler)
             then Runtime.dispatch_timer state handler timers
             else
                 match Runtime.lookup_handler (I64.to_u32 handler) handlers {
-                    // A socket wake-up is an id no handler table holds, so
-                    // sockets are tried only on a table miss: a handler id
-                    // (a hash over the whole u32 range) is never stolen by
-                    // the socket space.
-                    Option.none => Runtime.dispatch_socket handler sockets,
+                    // A socket or peer wake-up is an id no handler table
+                    // holds, so those are tried only on a table miss: a
+                    // handler id (a hash over the whole u32 range) is never
+                    // stolen by the socket/peer space.
+                    Option.none => Runtime.dispatch_source handler sockets peers,
                     Option.some handler_fn => do {
                         let ev <- WebEvent.current;
                         let outcome := handler_fn ev;
@@ -536,40 +804,41 @@ def Runtime.lookup_handler {Msg : Type} (id : U32)
 /// landed in one frame.
 def Runtime.enqueue {S : Type} {Msg : Type} (msg : Msg) (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets, peers } =>
             RuntimeState.st root last model (List.append queue (List.cons msg List.empty))
-                stopped handlers subs timers focus paint sockets,
+                stopped handlers subs timers focus paint sockets peers,
     }
 
 def Runtime.set_timers {S : Type} {Msg : Type} (timers : List (Pair I64 Msg))
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        { root, last, model, queue, stopped, handlers, subs, focus, paint, sockets, .. } =>
-            RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets,
+        { root, last, model, queue, stopped, handlers, subs, focus, paint, sockets, peers, .. } =>
+            RuntimeState.st root last model queue stopped handlers subs timers focus paint sockets peers,
     }
 
 def Runtime.add_timer {S : Type} {Msg : Type} (id : I64) (msg : Msg)
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets, peers } =>
             RuntimeState.st root last model queue stopped handlers subs
-                (List.append timers (List.cons (Pair.pair id msg) List.empty)) focus paint sockets,
+                (List.append timers (List.cons (Pair.pair id msg) List.empty)) focus paint
+                sockets peers,
     }
 
 def Runtime.add_focus {S : Type} {Msg : Type} (selector : String)
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets, peers } =>
             RuntimeState.st root last model queue stopped handlers subs timers
-                (List.append focus (List.cons selector List.empty)) paint sockets,
+                (List.append focus (List.cons selector List.empty)) paint sockets peers,
     }
 
 def Runtime.add_paint {S : Type} {Msg : Type} (effect : Unit -> IO (Option Msg))
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
-        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets } =>
+        { root, last, model, queue, stopped, handlers, subs, timers, focus, paint, sockets, peers } =>
             RuntimeState.st root last model queue stopped handlers subs timers focus
-                (List.append paint (List.cons effect List.empty)) sockets,
+                (List.append paint (List.cons effect List.empty)) sockets peers,
     }
 
 /// Run a batch's `after_render` effects in order, after the patch, and
@@ -627,9 +896,13 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
     // not overwritten.
     let before <- Ref.get state;
     let live_sockets := Runtime.state_sockets before;
+    // The staged state keeps the LIVE peers: `run_batch` only drains the
+    // message queue, and dropping the peer table here is what made a
+    // subscription's peer disappear after its first render.
+    let live_peers := Runtime.state_peers before;
     let drained : RuntimeState S Msg :=
         RuntimeState.st root last model List.empty false handlers subs timers List.empty
-            List.empty live_sockets;
+            List.empty live_sockets live_peers;
     let _ <- Ref.set state drained;
     let folded <- Runtime.run_batch prog host model queue;
     match folded {
@@ -651,7 +924,8 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
                     // handler just lowered, not the previous frame's table.
                     let staged : RuntimeState S Msg :=
                         RuntimeState.st root last model List.empty false table next_subs
-                            batch_timers batch_focus batch_paint (Runtime.state_sockets after_batch);
+                            batch_timers batch_focus batch_paint
+                            (Runtime.state_sockets after_batch) (Runtime.state_peers after_batch);
                     let _ <- Ref.set state staged;
                     let patches := Patch.diff last tree;
                     let _ <- Patch.apply root patches;
@@ -669,7 +943,7 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
                     let next : RuntimeState S Msg :=
                         RuntimeState.st root tree next_model pending quit table next_subs
                             (Runtime.timers_of after_paint) List.empty List.empty
-                            (Runtime.state_sockets after_paint);
+                            (Runtime.state_sockets after_paint) (Runtime.state_peers after_paint);
                     let _ <- Ref.set state next;
                     return unit
                 },
@@ -756,6 +1030,7 @@ def Runtime.step_msg {S : Type} {Msg : Type} {E : Type}
 def Runtime.step_cmd {S : Type} {Msg : Type} {E : Type}
     (prog : Program S Msg E) (host : Host IO E Msg) (model : S) (rest : List Msg)
     (cmd : Command E Msg) : IO (Pair (Pair S Bool) (List Msg)) :=
+    let cmd : Command E Msg := cmd in
     match cmd {
         Command.none => Runtime.step_batch prog host model rest,
         Command.quit => IO.pure (Pair.pair (Pair.pair model true) List.empty),
@@ -792,6 +1067,27 @@ def Runtime.step_cmd {S : Type} {Msg : Type} {E : Type}
             Runtime.step_batch prog host model rest
         },
         Command.batch cmds => Runtime.step_cmds prog host model rest cmds,
+        // A lost wake-up must never leave an event queued and unread.
+        Command.rtc_set_remote key sdp => do {
+            let failed <- Runtime.rtc_set_remote key sdp;
+            let _ <- Runtime.on_rtc_failure failed;
+            Runtime.step_batch prog host model rest
+        },
+        Command.rtc_add_ice key ice => do {
+            let failed <- Runtime.rtc_add_ice key ice;
+            let _ <- Runtime.on_rtc_failure failed;
+            Runtime.step_batch prog host model rest
+        },
+        Command.rtc_open_channel key label retrans => do {
+            let failed <- Runtime.rtc_open_channel key label retrans;
+            let _ <- Runtime.on_rtc_failure failed;
+            Runtime.step_batch prog host model rest
+        },
+        Command.rtc_send key label data => do {
+            let failed <- Runtime.rtc_send key label data;
+            let _ <- Runtime.on_rtc_failure failed;
+            Runtime.step_batch prog host model rest
+        },
         Command.ws_send url data => do {
             let _ <- Runtime.send_on_socket url data;
             Runtime.step_batch prog host model rest
@@ -841,6 +1137,7 @@ def Runtime.collect_cmds {E : Type} {Msg : Type} (host : Host IO E Msg)
     match cmds {
         List.empty => IO.pure (Pair.pair (Pair.pair perf disp) quit),
         List.cons cmd more =>
+            let cmd : Command E Msg := cmd in
             match cmd {
                 Command.none => Runtime.collect_cmds host more perf disp quit,
                 Command.quit => IO.pure (Pair.pair (Pair.pair perf disp) true),
@@ -870,9 +1167,40 @@ def Runtime.collect_cmds {E : Type} {Msg : Type} (host : Host IO E Msg)
                 },
                 Command.batch inner =>
                     Runtime.collect_cmds host (List.append inner more) perf disp quit,
+                Command.rtc_set_remote key sdp => do {
+                    let failed <- Runtime.rtc_set_remote key sdp;
+                    let _ <- Runtime.on_rtc_failure failed;
+                    Runtime.collect_cmds host more perf disp quit
+                },
+                Command.rtc_add_ice key ice => do {
+                    let failed <- Runtime.rtc_add_ice key ice;
+                    let _ <- Runtime.on_rtc_failure failed;
+                    Runtime.collect_cmds host more perf disp quit
+                },
+                Command.rtc_open_channel key label retrans => do {
+                    let failed <- Runtime.rtc_open_channel key label retrans;
+                    let _ <- Runtime.on_rtc_failure failed;
+                    Runtime.collect_cmds host more perf disp quit
+                },
+                Command.rtc_send key label data => do {
+                    let failed <- Runtime.rtc_send key label data;
+                    let _ <- Runtime.on_rtc_failure failed;
+                    Runtime.collect_cmds host more perf disp quit
+                },
                 Command.ws_send url data => do {
                     let _ <- Runtime.send_on_socket url data;
                     Runtime.collect_cmds host more perf disp quit
                 },
             },
+    }
+
+/// How many peer connections this program owns.
+pub def Runtime.peer_count {S : Type} {Msg : Type} (st : RuntimeState S Msg) : I64 :=
+    Runtime.count_peers (st.peers)
+
+#[terminating]
+def Runtime.count_peers {Msg : Type} (es : List (RtcPeerEntry Msg)) : I64 :=
+    match es {
+        List.empty => 0i64,
+        List.cons _ rest => I64.add 1i64 (Runtime.count_peers rest),
     }

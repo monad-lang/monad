@@ -11,6 +11,7 @@
 use lib::events {Subscription}
 use lib::typed {Oak.Node}
 use web_event::websocket {WsData}
+use web_event::rtc {RtcSdp, RtcIce, RtcData}
 
 // ═══ Types ═══
 //
@@ -43,7 +44,30 @@ pub type Command (E : Type) (Msg : Type) {
     /// for `url`. The pure fold has no socket and treats it as inert; the
     /// browser runtime sends it (and drops it when no subscription owns
     /// that url).
-    ws_send (url : String) (data : WsData)
+    ws_send (url : String) (data : WsData),
+    /// Hand the browser a description the OTHER peer sent, on the peer a
+    /// `Subscription.rtc` opened under `key`. This is the answering half of
+    /// signalling: the offer arrives as `RtcEvent.local_description` and
+    /// goes out over some transport, and the reply comes back through here.
+    ///
+    /// The field is `desc`, not `sdp`: `RtcSdp`'s own constructor is named
+    /// `sdp`, and a field of that name shadows it in every match over this
+    /// type (the checker then reports a confusing "ambiguous constructor
+    /// `none`" at the match head).
+    rtc_set_remote (key : String) (desc : RtcSdp),
+    /// Add one ICE candidate learned from the other peer.
+    rtc_add_ice (key : String) (ice : RtcIce),
+    /// Open a data channel called `label` on the peer `key` owns. The
+    /// channel is usable once `RtcEvent.channel_state` reports it ready.
+    /// It is ordered; `max_retransmits` is -1 for reliable, `>= 0` for a
+    /// partially reliable channel.
+    rtc_open_channel (key : String) (label : String) (max_retransmits : I64),
+    /// Send `data` on the channel called `label` on the peer `key` owns.
+    /// (Adding a local camera or screen stream is NOT a command: a
+    /// `MediaStream` is a web_wasm handle and this layer must not depend on
+    /// web_wasm. Call `Rtc.add_stream` from an `after_render`/`perform`
+    /// effect, before the offer.)
+    rtc_send (key : String) (label : String) (data : RtcData)
 }
 
 pub type Host (N : Type -> Type) (E : Type) (Msg : Type) {
@@ -167,6 +191,10 @@ def step_cmd [Monad N] {S : Type} {Msg : Type} {E : Type}
         Command.focus _selector => step_batch a h model rest,
         Command.after_render _effect => step_batch a h model rest,
         Command.batch cmds => step_cmds a h model rest cmds,
+        Command.rtc_set_remote _key _desc => step_batch a h model rest,
+        Command.rtc_add_ice _key _ice => step_batch a h model rest,
+        Command.rtc_open_channel _key _label _retrans => step_batch a h model rest,
+        Command.rtc_send _key _label _data => step_batch a h model rest,
         Command.ws_send _url _data => step_batch a h model rest
     }
 
@@ -232,6 +260,11 @@ def collect_cmds [Monad N] {E : Type} {Msg : Type} (h : Host N E Msg)
                 Command.focus _selector => collect_cmds h more perf disp quit,
                 Command.after_render _effect => collect_cmds h more perf disp quit,
                 Command.batch inner => collect_cmds h (List.append inner more) perf disp quit,
+                Command.rtc_set_remote _key _desc => collect_cmds h more perf disp quit,
+                Command.rtc_add_ice _key _ice => collect_cmds h more perf disp quit,
+                Command.rtc_open_channel _key _label _retrans =>
+                    collect_cmds h more perf disp quit,
+                Command.rtc_send _key _label _data => collect_cmds h more perf disp quit,
                 Command.ws_send _url _data => collect_cmds h more perf disp quit,
             },
     }
