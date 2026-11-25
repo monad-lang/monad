@@ -234,6 +234,15 @@ echo "== web: WebSocket (Subscription.websocket and the imperative socket) =="
     -o "$tmp/oak_socket.wasm" --no-cache
 node wasm/web/smoke/websocket_smoke.mjs "$tmp/oak_socket.wasm"
 
+echo "== web: WebRTC (Subscription.rtc, the imperative peer, getUserMedia) =="
+# Two halves in one harness: the oak subscription that owns a peer (events
+# through `update`, sends through `Command.rtc_send`) and the imperative
+# `web_wasm` peer connection plus the two-phase `getUserMedia`. A fake
+# `RTCPeerConnection`/`navigator.mediaDevices` stands in for the browser.
+"$MONAD" build --target wasm32-unknown-unknown fixtures/wasm/web_rtc.mo \
+    -o "$tmp/oak_rtc.wasm" --no-cache
+node wasm/web/smoke/rtc_smoke.mjs "$tmp/oak_rtc.wasm"
+
 echo "== web: Command.batch / Command.after / Command.focus =="
 # One click batches an immediate dispatch, a 10 ms timer and a focus; the
 # timer fires through oak_dispatch_event with no animation-frame loop.

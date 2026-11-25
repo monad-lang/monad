@@ -207,6 +207,56 @@ For an app with its own loop (a game engine), the imperative API is
 `web_wasm::websocket`: `WebSocket.connect`, `drain` (everything queued,
 for a per-frame poll), `next`, `send`, `close`, `watch`/`unwatch`.
 
+### WebRTC
+
+A peer connection also belongs to a subscription. WebRTC has **no signalling
+channel of its own**, so the split is: the runtime owns the peer and reports
+what the browser produced, and the app forwards it over whatever transport it
+already has (usually the WebSocket above).
+
+```monad,ignore
+def subs (_m : Model) : List (Subscription Msg) :=
+    [Subscription.rtc "chat" [] (fn (e : RtcEvent) => Msg.rtc e)]
+
+def update (m : Model) (msg : Msg) : Pair Model (Command E Msg) :=
+    match msg {
+        Msg.rtc (RtcEvent.channel_state label RtcState.ready) =>
+            Pair.pair m (Command.rtc_send "chat" label (RtcData.text "hello"))
+        Msg.rtc (RtcEvent.local_description d) =>
+            Pair.pair m (Command.ws_send "wss://example.test/signal" (WsData.text (encode_sdp d)))
+        ...
+    }
+```
+
+The key (`"chat"`) names the peer in `Command.rtc_send`/`rtc_open_channel`/
+`rtc_set_remote`/`rtc_add_ice`; the `servers` list is what the browser offers
+ICE (`[]` still connects two peers on one host). Each `RtcEvent` becomes one
+message:
+
+| Event | Meaning |
+|---|---|
+| `local_description sdp` | the description this peer produced — send it to the other side |
+| `local_candidate ice` | one gathered candidate — send it (a `candidate` of `""` is end-of-candidates) |
+| `connection state` | `connectionState` changed (`RtcState.connection_name` spells it) |
+| `data_channel channel` | the remote peer opened a channel |
+| `channel_state label state` | a channel opened (`RtcState.ready`)/closed/failed |
+| `message label data` | a whole frame on that channel |
+
+Nothing is awaited: `set_local`/`set_remote` answer at the call, and the
+description the browser then builds arrives as `local_description`. For an app
+with its own loop the imperative API is `web_wasm::rtc` (`Rtc.connect`,
+`drain`, `send`, `create_data_channel`, `set_remote`, `add_ice`, `close`).
+
+Camera and screen capture are two-phase, like `Fetch`/`Crypto`, because
+`getUserMedia` is promise-based: `MediaStream.request_av` starts the
+permission prompt, `poll` answers 0 pending / 1 done / 2 failed, `result`
+yields the stream, and `MediaStream.attach stream video_node` plays it (the
+one object-property write in the boundary — typed on a stream, so it cannot
+set an arbitrary JS property). `error` gives the DOMException name for a
+refused prompt (`NotAllowedError`, `NotFoundError`). Adding a local stream to
+a peer is `Rtc.add_stream`, called **before** the offer — a `MediaStream` is a
+`web_wasm` handle, so it is not a `Command` and the pure layer never sees one.
+
 ## Browser surface (`web_wasm`)
 
 | Module | What it gives you |
@@ -224,6 +274,9 @@ for a per-frame poll), `next`, `send`, `close`, `watch`/`unwatch`.
 | `websocket` | `WebSocket.connect`/`drain`/`next`/`send`/`close`/`watch` — the imperative socket behind `Subscription.websocket` |
 | `audio` | Web Audio: `Audio.context`/`state`/`resume`/`set_master`, `tone`/`beep`/`noise` (synthesized), `play_pcm` (`Buf F32`), and two-phase `decode_begin`/`decode_poll` -> `Sound` |
 | `media_element` | `<audio>`/`<video>` transport by selector: `play`/`pause`/`seek`/`set_volume`/`set_muted`/`set_loop`, plus a whole `state` snapshot |
+
+| `rtc` | `Rtc.connect`/`drain`/`next`/`set_local`/`set_remote`/`add_ice`/`create_data_channel`/`send`/`close` — the imperative peer behind `Subscription.rtc` |
+| `media_stream` | `get_user_media_begin`/`poll`/`result`/`error`/`attach`/`stop` (camera, microphone, screen capture) |
 
 `Fetch.begin_with` and `Fetch.response_headers` carry headers as
 length-prefixed blobs; that is what an authenticated API (bearer tokens,
