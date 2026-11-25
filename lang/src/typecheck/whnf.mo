@@ -13,6 +13,7 @@ use lib::scope {
 use lib::typecheck::faces {face_decide}
 use lib::typecheck::subst {beta_reduce, term_shift, term_subst}
 use lib::typecheck::traverse {term_map_children}
+use lib::typecheck::nat_literal {nat_of_i64_unary_app}
 
 // ─── Weak-head normal form ───────────────────────────────────────────
 //
@@ -321,8 +322,16 @@ def whnf_go (fuel : I64) (scope : Scope) (locals : LocalScope) (t0 : Term) : Ter
     if I64.lt fuel 1 then
         t
     else
-        match t {
-            Term.app f a =>
+        // A `Nat` literal at a type position is written `Nat.of_i64 <lit>`
+        // (`infer.mo`'s retag); its body tests a native `I64.lt`, so delta
+        // alone never unfolds it and `Nat.sub`/`Nat.add` on literal indices
+        // could not reduce. Rewrite it to the unary chain here, which is
+        // also the shape `nat_literal_term` builds for larger literals.
+        match nat_of_i64_unary_app t {
+            Option.some unary => whnf_go (fuel - 1) scope locals unary,
+            Option.none =>
+            match t {
+                Term.app f a =>
                 // Reducing `f` recursively is what handles a spine of
                 // any length: `f g x` reduces `f g` first, so a
                 // multi-parameter def unfolds and betas one argument at
@@ -365,7 +374,7 @@ def whnf_go (fuel : I64) (scope : Scope) (locals : LocalScope) (t0 : Term) : Ter
                             }
                         },
                 },
-            Term.var idx dbg =>
+                Term.var idx dbg =>
                 if I64.beq idx sentinel then
                     match whnf_delta scope locals dbg {
                         Option.some body => whnf_go (fuel - 1) scope locals body,
@@ -382,7 +391,7 @@ def whnf_go (fuel : I64) (scope : Scope) (locals : LocalScope) (t0 : Term) : Ter
                     // A bound de Bruijn variable. Its binder is outside
                     // this term, so there is nothing to unfold.
                     t,
-            Term.lit l =>
+                Term.lit l =>
                 // Iota. A `match`/`if` reduces only when its scrutinee
                 // has already reduced to a KNOWN constructor
                 // application; anything else is rigid here exactly
@@ -409,16 +418,16 @@ def whnf_go (fuel : I64) (scope : Scope) (locals : LocalScope) (t0 : Term) : Ter
                     // struct forms are rigid. Already in WHNF.
                     _ => t,
                 },
-            // The interval's De Morgan lattice (Stage 1 step 5): a
-            // cubical head is reducible, not rigid -- see the section
-            // below this def.
-            Term.cubical c => whnf_cubical (fuel - 1) scope locals c,
-            // Iota on `Elim` (`core-term-simplification.md` R5): reduce
-            // the scrutinee, then fire whichever minor its constructor
-            // selects -- see the `whnf_elim_iota` section below. The
-            // reduced scrutinee is kept in the stuck case, same
-            // discipline as `Literal.match_`/`if_` above.
-            Term.elim e =>
+                // The interval's De Morgan lattice (Stage 1 step 5): a
+                // cubical head is reducible, not rigid -- see the section
+                // below this def.
+                Term.cubical c => whnf_cubical (fuel - 1) scope locals c,
+                // Iota on `Elim` (`core-term-simplification.md` R5): reduce
+                // the scrutinee, then fire whichever minor its constructor
+                // selects -- see the `whnf_elim_iota` section below. The
+                // reduced scrutinee is kept in the stuck case, same
+                // discipline as `Literal.match_`/`if_` above.
+                Term.elim e =>
                 let scrut_r : Term := whnf_go (fuel - 1) scope locals e.scrutinee in
                 match whnf_elim_iota e scrut_r scope {
                     Option.some body => whnf_go (fuel - 1) scope locals body,
@@ -430,15 +439,16 @@ def whnf_go (fuel : I64) (scope : Scope) (locals : LocalScope) (t0 : Term) : Ter
                     Option.none =>
                         Term.elim { e with scrutinee := scrut_r },
                 },
-            // Rigid heads: `pi`, `forall`, `type_`, `sort`, `ntv`, `con`,
-            // `hole`, and the two macro-only forms. Already in WHNF.
-            //
-            // `sort` is listed rather than matched: it is a leaf like
-            // `type_`, so it belongs to this fallback. Nothing here
-            // normalizes a LEVEL -- `level_le`/`level_normalize` handle
-            // levels, and they are never reached through `whnf` (W1 is
-            // built so that stays true; see `unify_sort`).
-            _ => t,
+                // Rigid heads: `pi`, `forall`, `type_`, `sort`, `ntv`, `con`,
+                // `hole`, and the two macro-only forms. Already in WHNF.
+                //
+                // `sort` is listed rather than matched: it is a leaf like
+                // `type_`, so it belongs to this fallback. Nothing here
+                // normalizes a LEVEL -- `level_le`/`level_normalize` handle
+                // levels, and they are never reached through `whnf` (W1 is
+                // built so that stays true; see `unify_sort`).
+                _ => t,
+            },
         }
 
 // ─── De Morgan lattice normalization (Stage 1 step 5) ────────────────

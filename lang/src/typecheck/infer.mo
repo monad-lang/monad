@@ -44,9 +44,10 @@ use lang::scope {
 use lib::typecheck::name_subst {name_subst_term}
 use lib::typecheck::ctor_refine {
     IndexMatch, IndexSolution, IntroCtor, MatchEnv, apply_subst, ctor_index_patterns, has_refinement, index_locals,
-    index_positions, intro_clash, intro_ctor, intro_index_bindings, intro_indices, names_constructor, nat_literal_bound,
-    nat_literal_term, refine_expected, refine_field_types, solve_ctor, with_indices,
+    index_positions, intro_clash, intro_ctor, intro_index_bindings, intro_indices, names_constructor,
+    refine_expected, refine_field_types, solve_ctor, with_indices,
 }
+use lib::typecheck::nat_literal {nat_literal_bound, nat_literal_term}
 use lib::typecheck::subst {beta_reduce, term_abstract_var, term_permute, term_subst, term_shift, term_shift_above}
 use lib::typecheck::levels {solve_levels, subst_levels_term}
 use lib::typecheck::traverse {term_children, term_map_children, term_map_children_at_depth}
@@ -6379,7 +6380,19 @@ def def_call_check_args (args : List Term) (params : List Term) (subst : List (P
                     let prefer : Bool :=
                         match term_peel arg {
                             Term.app _ _ => Bool.not (mentions_hole want),
-                            _ => false,
+                            // A bare numeric literal at a concrete numeric or
+                            // `Nat` parameter must be retagged BY that
+                            // parameter: intrinsically it keeps its own `I64`,
+                            // so `Nat.add 2 2` was rejected before reduction
+                            // could run (`f 3` with `f (n : Nat)` too). Every
+                            // other bare argument keeps the intrinsic pass --
+                            // and a failed expectation still falls back to it,
+                            // so this can only widen what is accepted.
+                            _ =>
+                                match numeric_retag_target want {
+                                    Option.some _ => true,
+                                    Option.none => false,
+                                },
                         } in
                     match check_arg_for_call prefer arg want scope local_types locals {
                         ok a_tt0 =>

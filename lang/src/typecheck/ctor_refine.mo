@@ -17,7 +17,7 @@
 ///
 /// Pure: no `infer` import, so `infer` can use it without a cycle.
 use lang::types {
-    DebugName, Identifier, InductConstructor, Inductive, Literal, NamePath, Param, Scope,
+    DebugName, Identifier, InductConstructor, Inductive, NamePath, Param, Scope,
     Similar, Term, id_eq, sentinel, term_peel,
 }
 use lang::scope {
@@ -27,6 +27,7 @@ use lang::scope {
 use std::list {List.any, List.filter}
 use lib::typecheck::name_subst {name_subst_term}
 use lib::typecheck::subst {term_shift_above, term_subst}
+use lib::typecheck::nat_literal {nat_literal_bound, nat_literal_deep, nat_literal_term, nat_literal_unary, small_nat_literal}
 
 /// What a constructor's declared indices tell us about one arm.
 pub struct IndexSolution {
@@ -484,62 +485,10 @@ def list_nth (xs : List A) (i : I64) : Option A :=
     }
 
 // --- Nat literals ---------------------------------------------------------------
-
-/// The largest `Nat` literal unfolded to a constructor chain; larger ones stay
-/// as written and match nothing (`unknown`).
-pub def nat_literal_bound : I64 := 64
-
-/// A small `Nat` literal as its canonical unary constructor chain. `Vec 3`
-/// must compare with `Vec (succ (succ (succ zero)))`; `Nat.of_i64 3` cannot
-/// reduce in the checker (its body tests a native `I64.lt`).
-#[partial]
-pub def nat_literal_term (n : I64) : Term :=
-    if I64.beq n 0 then
-        Term.var sentinel (DebugName.named (Identifier.id "Nat.zero"))
-    else
-        Term.app (Term.var sentinel (DebugName.named (Identifier.id "Nat.succ")))
-            (nat_literal_term (I64.sub n 1))
-
-/// `t` as a constructor chain when it is a small non-negative integer literal
-/// or `Nat.of_i64` of one; otherwise `t` unchanged.
-def nat_literal_unary (t : Term) : Term :=
-    match small_nat_literal t {
-        Option.some n => nat_literal_term n,
-        Option.none => t,
-    }
-
-/// `nat_literal_unary` through a constructor chain: `succ 0` is `succ zero`.
-#[terminating]
-def nat_literal_deep (t : Term) : Term :=
-    match small_nat_literal t {
-        Option.some n => nat_literal_term n,
-        Option.none =>
-            match term_peel t {
-                Term.app f a => Term.app f (nat_literal_deep a),
-                _ => t,
-            },
-    }
-
-#[terminating]
-def small_nat_literal (t : Term) : Option I64 :=
-    match term_peel t {
-        Term.lit l =>
-            match l {
-                Literal.num n _ => if I64.lt n 0 || I64.lt nat_literal_bound n then Option.none else Option.some n,
-                _ => Option.none,
-            },
-        _ =>
-            match flatten_call_spine t {
-                CallSpine.mk head args =>
-                    match args {
-                        List.cons only rest =>
-                            if List.is_empty rest && is_named_var (Identifier.id "Nat.of_i64") head
-                            then small_nat_literal only
-                            else Option.none,
-                        List.empty => Option.none,
-                    },
-            },
-    }
+//
+// `nat_literal_bound`/`_term`/`_unary`/`_deep` and `small_nat_literal` live in
+// `lib::typecheck::nat_literal`: `whnf.mo` needs the same chain without
+// importing this module.
 
 // --- Introduction (Stage 3c) ------------------------------------------------------
 

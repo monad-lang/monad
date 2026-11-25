@@ -14,8 +14,9 @@ use lib::module {try_parse_decls}
 use lib::scope {build_scope_from_decls, find_constructor_in_inductive, scope_find_inductive}
 use lib::typecheck::ctor_refine {
     IndexMatch, IndexSolution, MatchEnv, empty_solution, index_positions, intro_clash, intro_ctor,
-    intro_indices, nat_literal_term, refine_expected, refine_field_types, solve_ctor,
+    intro_indices, refine_expected, refine_field_types, solve_ctor,
 }
+use lib::typecheck::nat_literal {nat_literal_term}
 
 def ctor_refine_test_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "ctor_refine_tests") List.empty)
 
