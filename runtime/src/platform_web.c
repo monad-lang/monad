@@ -1064,6 +1064,176 @@ char* web_clipboard_error(int64_t op) {
     return web_take_str(web_scratch, n);
 }
 
+/* ── WebRTC and getUserMedia (motes/web_wasm/src/rtc.mo, media_stream.mo) ── */
+__attribute__((import_module("monad"), import_name("rtc_open")))
+extern int64_t monad_js_rtc_open(int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("rtc_peek")))
+extern int64_t monad_js_rtc_peek(int64_t id, int64_t which);
+
+__attribute__((import_module("monad"), import_name("rtc_read")))
+extern int64_t monad_js_rtc_read(int64_t id, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("rtc_info")))
+extern int64_t monad_js_rtc_info(int64_t id, int64_t which);
+
+__attribute__((import_module("monad"), import_name("rtc_set_local")))
+extern int64_t monad_js_rtc_set_local(int64_t id, int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("rtc_set_remote")))
+extern int64_t monad_js_rtc_set_remote(int64_t id, int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("rtc_add_ice")))
+extern int64_t monad_js_rtc_add_ice(int64_t id, int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("rtc_open_channel")))
+extern int64_t monad_js_rtc_open_channel(int64_t id, int64_t ptr, int64_t len, int64_t num);
+
+__attribute__((import_module("monad"), import_name("rtc_send")))
+extern int64_t monad_js_rtc_send(int64_t id, int64_t lptr, int64_t llen,
+                                 int64_t ptr, int64_t len, int64_t is_binary);
+
+__attribute__((import_module("monad"), import_name("rtc_add_stream")))
+extern int64_t monad_js_rtc_add_stream(int64_t id, int64_t stream);
+
+__attribute__((import_module("monad"), import_name("rtc_close")))
+extern int64_t monad_js_rtc_close(int64_t id);
+
+__attribute__((import_module("monad"), import_name("rtc_watch")))
+extern int64_t monad_js_rtc_watch(int64_t id, int64_t handler);
+
+__attribute__((import_module("monad"), import_name("rtc_unwatch")))
+extern int64_t monad_js_rtc_unwatch(int64_t id);
+
+__attribute__((import_module("monad"), import_name("rtc_free")))
+extern int64_t monad_js_rtc_free(int64_t id);
+
+__attribute__((import_module("monad"), import_name("media_get_begin")))
+extern int64_t monad_js_media_get_begin(int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("media_poll")))
+extern int64_t monad_js_media_poll(int64_t op);
+
+__attribute__((import_module("monad"), import_name("media_stream")))
+extern int64_t monad_js_media_stream(int64_t op);
+
+__attribute__((import_module("monad"), import_name("media_error")))
+extern int64_t monad_js_media_error(int64_t op, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("media_free")))
+extern int64_t monad_js_media_free(int64_t stream);
+
+__attribute__((import_module("monad"), import_name("dom_set_src_object")))
+extern int64_t monad_js_dom_set_src_object(int64_t node, int64_t stream);
+
+
+/* ── WebRTC and media wrappers ─────────────────────────────────────────
+ *
+ * `getUserMedia` is the only promise-based operation here, so it is
+ * two-phase like fetch/clipboard/crypto: `web_media_get_begin` starts the
+ * request and `web_media_poll` reports 0 pending / 1 done / 2 failed.
+ *
+ * `web_rtc_read` is the POP of a peer's queue: it copies the head entry's
+ * payload into a caller-owned ByteBuf and removes the entry, answering the
+ * entry's kind. The Monad side reads the head's kind and columns through
+ * `web_rtc_peek`/`web_rtc_info` FIRST, then calls this exactly once.
+ */
+
+int64_t web_rtc_open(const char* servers) {
+    return monad_js_rtc_open(web_str_ptr(servers), web_str_len(servers));
+}
+
+/* which 0 -> head kind (0 empty), 1 -> live connection state, 2 -> head
+   payload length. */
+int64_t web_rtc_peek(int64_t id, int64_t which) {
+    return monad_js_rtc_peek(id, which);
+}
+
+int64_t web_rtc_read(int64_t id, int64_t buf) {
+    BufObj* obj = (BufObj*)RT_PTR(buf);
+    int64_t cap = obj ? obj->len : 0;
+    return monad_js_rtc_read(id, obj ? (int64_t)(intptr_t)obj->payload : 0, cap);
+}
+
+int64_t web_rtc_info(int64_t id, int64_t which) {
+    return monad_js_rtc_info(id, which);
+}
+
+int64_t web_rtc_set_local(int64_t id, const char* blob) {
+    return monad_js_rtc_set_local(id, web_str_ptr(blob), web_str_len(blob));
+}
+
+int64_t web_rtc_set_remote(int64_t id, const char* blob) {
+    return monad_js_rtc_set_remote(id, web_str_ptr(blob), web_str_len(blob));
+}
+
+int64_t web_rtc_add_ice(int64_t id, const char* blob) {
+    return monad_js_rtc_add_ice(id, web_str_ptr(blob), web_str_len(blob));
+}
+
+int64_t web_rtc_open_channel(int64_t id, const char* label, int64_t num) {
+    return monad_js_rtc_open_channel(id, web_str_ptr(label), web_str_len(label), num);
+}
+
+/* The message bytes travel as a caller-owned ByteBuf -- the typed boundary,
+   so no address crosses Monad code. */
+int64_t web_rtc_send(int64_t id, const char* label, int64_t buf, int64_t is_binary) {
+    BufObj* obj = (BufObj*)RT_PTR(buf);
+    int64_t len = obj ? obj->len : 0;
+    const char* data = obj ? (const char*)obj->payload : "";
+    return monad_js_rtc_send(id, web_str_ptr(label), web_str_len(label),
+                             (int64_t)(intptr_t)data, len, is_binary);
+}
+
+int64_t web_rtc_add_stream(int64_t id, int64_t stream) {
+    return monad_js_rtc_add_stream(id, stream);
+}
+
+int64_t web_rtc_close(int64_t id) {
+    return monad_js_rtc_close(id);
+}
+
+int64_t web_rtc_watch(int64_t id, int64_t handler) {
+    return monad_js_rtc_watch(id, handler);
+}
+
+int64_t web_rtc_unwatch(int64_t id) {
+    return monad_js_rtc_unwatch(id);
+}
+
+int64_t web_rtc_free(int64_t id) {
+    return monad_js_rtc_free(id);
+}
+
+int64_t web_media_get_begin(const char* constraints) {
+    return monad_js_media_get_begin(web_str_ptr(constraints), web_str_len(constraints));
+}
+
+int64_t web_media_poll(int64_t op) {
+    return monad_js_media_poll(op);
+}
+
+int64_t web_media_stream(int64_t op) {
+    return monad_js_media_stream(op);
+}
+
+char* web_media_error(int64_t op) {
+    int64_t n = monad_js_media_error(op, (int64_t)(intptr_t)web_scratch,
+                                     WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+int64_t web_media_free(int64_t stream) {
+    return monad_js_media_free(stream);
+}
+
+/* `video.srcObject = stream`. The ONE object-property write in this boundary,
+   and typed on purpose: it takes a node and a stream, never a property name,
+   so it cannot set an arbitrary JS property. */
+int64_t web_dom_set_src_object(int64_t node, int64_t stream) {
+    return monad_js_dom_set_src_object(node, stream);
+}
+
 /* ── current-event getters (motes/web_wasm/src/event.mo) ───────────────── */
 
 int64_t web_event_i64(int64_t which) {

@@ -90,6 +90,168 @@ let currentEvent = null;
 
 // Wake a watched socket's app once per task: the queue may gain several
 // entries in one callback burst, and one dispatch drains them all.
+// ── WebRTC host state ────────────────────────────────────────────────
+//
+// Peers, streams and pending getUserMedia operations live here and wasm only
+// ever holds their index. The kind numbers are `lib::rtc`'s; the state codes
+// are `web_event::rtc`'s `state_of_code`.
+// `peers` is append-only: the index IS the handle, exactly as for sockets.
+const peers = [];
+const mediaStreams = [];
+const mediaOps = [];
+
+const RTC_KIND_SDP = 1;
+const RTC_KIND_ICE = 2;
+const RTC_KIND_CONNECTION = 3;
+const RTC_KIND_CHANNEL = 4;
+const RTC_KIND_CHANNEL_STATE = 5;
+const RTC_KIND_MESSAGE = 6;
+
+// The data channel's state mapping, which RtcState's codes follow: 0
+// connecting, 1 open/ready, 2 closing, 3 closed, 4 failed.
+function rtcStateCode(name) {
+  switch (name) {
+    case 'new':
+    case 'connecting':
+      return 0;
+    case 'connected':
+    case 'open':
+      return 1;
+    case 'closing':
+      return 2;
+    case 'closed':
+    case 'disconnected':
+      return 3;
+    case 'failed':
+      return 4;
+    default:
+      return 5;
+  }
+}
+
+// `<len>:<text>` -- the same length-prefix discipline the Monad side reads in
+// `web_event::rtc`. Used for a message's channel label.
+function rtcPrefix(text) {
+  const s = String(text);
+  return `${encoder.encode(s).length}:${s}`;
+}
+
+// The candidate blob: `<clen>:<candidate><mlen>:<mid><ilen>:<mline><ulen>:<ufrag>`.
+function encodeIce(candidate, mid, mline, ufrag) {
+  return rtcPrefix(candidate) + rtcPrefix(mid) + rtcPrefix(String(mline)) + rtcPrefix(ufrag);
+}
+
+// The description blob: `<klen>:<type><sdp>`.
+function encodeSdp(type, sdp) {
+  return rtcPrefix(type) + String(sdp);
+}
+
+function decodeSdp(text) {
+  const parsed = rtcTakePart(text);
+  if (!parsed) return null;
+  return { type: parsed.part, sdp: parsed.rest };
+}
+
+function decodeIce(text) {
+  const a = rtcTakePart(text);
+  if (!a) return null;
+  const b = rtcTakePart(a.rest);
+  if (!b) return null;
+  const c = rtcTakePart(b.rest);
+  if (!c) return null;
+  const d = rtcTakePart(c.rest);
+  if (!d) return null;
+  const mline = c.part === '' ? -1 : Number(c.part);
+  return {
+    candidate: a.part, mid: b.part,
+    mline: Number.isFinite(mline) ? mline : -1, ufrag: d.part,
+  };
+}
+
+function rtcTakePart(text) {
+  const colon = text.indexOf(':');
+  if (colon <= 0) return null;
+  const n = Number(text.slice(0, colon));
+  if (!Number.isFinite(n) || n < 0) return null;
+  const start = colon + 1;
+  if (start + n > text.length) return null;
+  return { part: text.slice(start, start + n), rest: text.slice(start + n) };
+}
+
+// `<urllen>:<url><ulen>:<username><clen>:<credential>` repeated.
+function parseIceServers(blob) {
+  const servers = [];
+  let rest = blob;
+  while (rest.length > 0) {
+    const url = rtcTakePart(rest);
+    if (!url) break;
+    const user = rtcTakePart(url.rest);
+    if (!user) break;
+    const cred = rtcTakePart(user.rest);
+    if (!cred) break;
+    rest = cred.rest;
+    const s = { urls: url.part };
+    if (user.part) s.username = user.part;
+    if (cred.part) s.credential = cred.part;
+    servers.push(s);
+  }
+  return { iceServers: servers };
+}
+
+// One dispatch per queue, on a fresh task -- never from the browser's own
+// callback, which may be running inside a promise.
+function rtc_wake(rec) {
+  if (rec.scheduled) return;
+  rec.scheduled = true;
+  const hid = rec.handler;
+  setTimeout(() => {
+    // Cleared BEFORE dispatching, not after: the dispatch drains the queue,
+    // and anything the browser queues while it runs must be able to schedule
+    // the NEXT wake-up instead of being suppressed by a stale flag. (The
+    // socket path gets away without this because its own `push` clears the
+    // flag, which is the same ordering.)
+    rec.scheduled = false;
+    dispatchWith({ type: 'rtc', timeStamp: Date.now() }, hid);
+  }, 0);
+}
+
+// A data channel's events, all queued rather than dispatched: `onmessage`
+// carries the label AND the body in one payload.
+function rtc_attach_channel(rec, ch, push) {
+  ch.binaryType = 'arraybuffer';
+  // The label is the entry's PAYLOAD, so it must be in `bytes`: `rtc_read`
+  // is the only pop and it copies `bytes` (a `text` field would never
+  // cross, and `rtc_peek`'s length column would report 0).
+  ch.onopen = () => {
+    push({ kind: RTC_KIND_CHANNEL_STATE, bytes: encoder.encode(ch.label), state: 1 });
+  };
+  ch.onclosing = () => {
+    push({ kind: RTC_KIND_CHANNEL_STATE, bytes: encoder.encode(ch.label), state: 2 });
+  };
+  ch.onclose = () => {
+    push({ kind: RTC_KIND_CHANNEL_STATE, bytes: encoder.encode(ch.label), state: 3 });
+  };
+  ch.onerror = () => {
+    push({ kind: RTC_KIND_CHANNEL_STATE, bytes: encoder.encode(ch.label), state: 4 });
+  };
+  ch.onmessage = (ev) => {
+    let bytes;
+    let binary = false;
+    if (typeof ev.data === 'string') bytes = encoder.encode(ev.data);
+    else {
+      bytes = new Uint8Array(ev.data);
+      binary = true;
+    }
+    // `<label length>:<label><body>` -- the label is a length-prefixed HEADER
+    // so the body stays arbitrary bytes.
+    const header = encoder.encode(rtcPrefix(ch.label));
+    const payload = new Uint8Array(header.length + bytes.length);
+    payload.set(header, 0);
+    payload.set(bytes, header.length);
+    push({ kind: RTC_KIND_MESSAGE, bytes: payload, binary: binary ? 1n : 0n });
+  };
+}
+
 function socket_wake(rec) {
   if (rec.scheduled) return;
   rec.scheduled = true;
@@ -1367,6 +1529,391 @@ export const host = {
         } catch (e) {
           /* already gone */
         }
+      }
+    }
+    return 1n;
+  },
+
+  // ── WebRTC ──────────────────────────────────────────────────────────
+  //
+  // Nothing here re-enters wasm from a CALLBACK. Every browser event
+  // (`icecandidate`, `track`, `datachannel`, `connectionstatechange`,
+  // `onmessage`) only APPENDS to that peer's queue; when a handler is
+  // registered, `rtc_wake` schedules one dispatch on a fresh task. That is
+  // the same contract the WebSocket block above keeps, and it is what makes
+  // a Monad frame safe to hold across the call.
+  //
+  // The queue's shape is read through selectors, and the numbers live in
+  // `motes/web_wasm/src/rtc.mo`. Change them there first.
+  //
+  // A `message` entry's payload packs its channel label and its body as
+  // `<label length>:<label><body>` (`web_event::rtc`'s `decode_message`), so
+  // an arbitrary-bytes body never has to be escaped or truncated.
+
+  rtc_open(sptr, slen) {
+    const cfg = parseIceServers(str(sptr, slen));
+    const rec = {
+      pc: null, queue: [], handler: 0n, state: 0, scheduled: false,
+      channels: new Map(), streams: [], freed: false,
+    };
+    peers.push(rec);
+    const id = BigInt(peers.length - 1);
+    if (typeof globalThis.RTCPeerConnection !== 'function') {
+      // No WebRTC in this browser (or host): stay usable and answer every
+      // call with a failure instead of throwing into wasm.
+      return id;
+    }
+    let pc;
+    try {
+      pc = new RTCPeerConnection(cfg);
+    } catch (e) {
+      return id;
+    }
+    rec.pc = pc;
+    const push = (entry) => {
+      if (rec.freed) return;
+      rec.queue.push(entry);
+      if (rec.handler !== 0n) rtc_wake(rec);
+    };
+    // The browser knows the description only after this task, so it lands in
+    // the queue rather than being returned.
+    pc.onicecandidate = (ev) => {
+      if (!ev.candidate) {
+        push({ kind: RTC_KIND_ICE, bytes: encoder.encode(encodeIce('', '', -1, '')) });
+        return;
+      }
+      const c = ev.candidate;
+      const mline = typeof c.sdpMLineIndex === 'number' ? c.sdpMLineIndex : -1;
+      push({
+        kind: RTC_KIND_ICE,
+        bytes: encoder.encode(encodeIce(c.candidate || '', c.sdpMid || '', mline,
+                                        c.usernameFragment || '')),
+      });
+    };
+    pc.ondatachannel = (ev) => {
+      const ch = ev.channel;
+      rec.channels.set(ch.label, ch);
+      push({ kind: RTC_KIND_CHANNEL, bytes: encoder.encode(ch.label),
+             ordered: ch.ordered ? 1n : 0n,
+             retransmits: ch.maxRetransmits == null ? -1n : BigInt(ch.maxRetransmits) });
+      rtc_attach_channel(rec, ch, push);
+    };
+    pc.onconnectionstatechange = () => {
+      rec.state = rtcStateCode(pc.connectionState);
+      push({ kind: RTC_KIND_CONNECTION, state: rec.state });
+    };
+    // An incoming stream: the app learns about it through `track`, and plays
+    // it with `MediaStream.attach`.
+    pc.ontrack = () => {
+      // Tracks arrive on the connection's own streams; `rtc_streams` exposes
+      // them, and the handler dispatch below tells the app to re-read.
+      push({ kind: RTC_KIND_CONNECTION, state: rec.state });
+    };
+    return id;
+  },
+
+  // which 0 -> head kind (0 empty), 1 -> live connection state, 2 -> head
+  // payload length in bytes.
+  rtc_peek(id, which) {
+    const rec = peers[Number(id)];
+    if (!rec) return 0n;
+    if (which === 1n) return BigInt(rec.state || 0);
+    const head = rec.queue[0];
+    if (!head) return 0n;
+    if (which === 0n) return BigInt(head.kind);
+    return BigInt(head.bytes ? head.bytes.length : 0);
+  },
+
+  // Copies the head payload out and POPS the entry; returns its kind. This
+  // is the only pop, so the caller reads `rtc_peek`/`rtc_info` first.
+  rtc_read(id, ptr, max) {
+    const rec = peers[Number(id)];
+    if (!rec) return 0n;
+    const head = rec.queue.shift();
+    if (!head) return 0n;
+    if (head.bytes) writeBytes(ptr, head.bytes, max);
+    return BigInt(head.kind);
+  },
+
+  // which 0 -> state code, 1 -> ordered (0/1), 2 -> max_retransmits,
+  // 3 -> binary flag. Non-message/text columns read from the head entry.
+  rtc_info(id, which) {
+    const rec = peers[Number(id)];
+    if (!rec) return 0n;
+    const head = rec.queue[0];
+    if (!head) return 0n;
+    if (which === 0n) return BigInt(head.state || 0);
+    if (which === 1n) return BigInt(head.ordered || 0n);
+    if (which === 2n) return BigInt(head.retransmits == null ? -1n : head.retransmits);
+    return BigInt(head.binary ? 1n : 0n);
+  },
+
+  rtc_set_local(id, ptr, len) {
+    const rec = peers[Number(id)];
+    if (!rec || !rec.pc || rec.freed) return 0n;
+    const desc = decodeSdp(str(ptr, len));
+    if (!desc) return 0n;
+    try {
+      // The promise is deliberately NOT awaited: its result arrives through
+      // `onicecandidate`/`onconnectionstatechange`, and a promise callback
+      // must not re-enter wasm.
+      rec.pc.setLocalDescription({ type: desc.type, sdp: desc.sdp });
+    } catch (e) {
+      return 0n;
+    }
+    return 1n;
+  },
+
+  rtc_set_remote(id, ptr, len) {
+    const rec = peers[Number(id)];
+    if (!rec || !rec.pc || rec.freed) return 0n;
+    const desc = decodeSdp(str(ptr, len));
+    if (!desc) return 0n;
+    try {
+      rec.pc.setRemoteDescription({ type: desc.type, sdp: desc.sdp });
+    } catch (e) {
+      return 0n;
+    }
+    return 1n;
+  },
+
+  rtc_add_ice(id, ptr, len) {
+    const rec = peers[Number(id)];
+    if (!rec || !rec.pc || rec.freed) return 0n;
+    const c = decodeIce(str(ptr, len));
+    if (!c) return 0n;
+    try {
+      if (!c.candidate) rec.pc.addIceCandidate(null);
+      else rec.pc.addIceCandidate({
+        candidate: c.candidate, sdpMid: c.mid || null, sdpMLineIndex: Number(c.mline),
+      });
+    } catch (e) {
+      return 0n;
+    }
+    return 1n;
+  },
+
+  // `num` is `ordered` in bit 0 plus `max_retransmits + 1` above it, so a
+  // reliable channel (-1) arrives as 0.
+  rtc_open_channel(id, ptr, len, num) {
+    const rec = peers[Number(id)];
+    if (!rec || !rec.pc || rec.freed) return 0n;
+    const label = str(ptr, len);
+    const ordered = (num & 1n) === 1n;
+    const retrans = (num >> 1n) - 1n;
+    const opts = { ordered };
+    if (retrans >= 0n) opts.maxRetransmits = Number(retrans);
+    let ch;
+    try {
+      ch = rec.pc.createDataChannel(label, opts);
+    } catch (e) {
+      return 0n;
+    }
+    rec.channels.set(label, ch);
+    const push = (entry) => {
+      if (rec.freed) return;
+      rec.queue.push(entry);
+      if (rec.handler !== 0n) rtc_wake(rec);
+    };
+    // `createDataChannel` does not fire `ondatachannel` for its OWN channel,
+    // so the app learns of it here rather than from the browser.
+    push({ kind: RTC_KIND_CHANNEL, bytes: encoder.encode(label),
+           ordered: ch.ordered ? 1n : 0n, retransmits: retrans });
+    rtc_attach_channel(rec, ch, push);
+    return 1n;
+  },
+
+  rtc_send(id, lptr, llen, ptr, len, is_binary) {
+    const rec = peers[Number(id)];
+    if (!rec || rec.freed) return 0n;
+    const ch = rec.channels.get(str(lptr, llen));
+    if (!ch || ch.readyState !== 'open') return 0n;
+    const bytes = new Uint8Array(memory.buffer, u32(ptr), Number(len)).slice();
+    try {
+      if (is_binary !== 0n) ch.send(bytes.buffer);
+      else ch.send(decoder.decode(bytes));
+    } catch (e) {
+      return 0n;
+    }
+    return 1n;
+  },
+
+  rtc_add_stream(id, stream) {
+    const rec = peers[Number(id)];
+    const s = mediaStreams[Number(stream)];
+    if (!rec || !rec.pc || !s || rec.freed) return 0n;
+    const tracks = s.getTracks();
+    if (tracks.length === 0) return 0n;
+    try {
+      for (const t of tracks) rec.pc.addTrack(t, s);
+    } catch (e) {
+      return 0n;
+    }
+    rec.streams.push(s);
+    return 1n;
+  },
+
+  rtc_close(id) {
+    const rec = peers[Number(id)];
+    if (!rec) return 0n;
+    if (rec.pc) {
+      const pc = rec.pc;
+      rec.pc = null;
+      pc.onicecandidate = null;
+      pc.ondatachannel = null;
+      pc.onconnectionstatechange = null;
+      pc.ontrack = null;
+      try {
+        pc.close();
+      } catch (e) {
+        /* already gone */
+      }
+    }
+    rec.state = 3;
+    return 1n;
+  },
+
+  rtc_watch(id, handler) {
+    const rec = peers[Number(id)];
+    if (!rec) return 0n;
+    rec.handler = handler;
+    if (rec.queue.length > 0) rtc_wake(rec);
+    return 1n;
+  },
+
+  rtc_unwatch(id) {
+    const rec = peers[Number(id)];
+    if (rec) rec.handler = 0n;
+    return 1n;
+  },
+
+  // Detach the callbacks FIRST, as `ws_free` does: closing fires state
+  // changes, and any in-flight event would otherwise push into a queue
+  // nobody reads.
+  rtc_free(id) {
+    const rec = peers[Number(id)];
+    if (!rec) return 0n;
+    rec.freed = true;
+    rec.handler = 0n;
+    rec.queue = [];
+    const pc = rec.pc;
+    rec.pc = null;
+    for (const ch of rec.channels.values()) {
+      ch.onmessage = null;
+      ch.onopen = null;
+      ch.onclose = null;
+    }
+    rec.channels.clear();
+    rec.streams = [];
+    if (pc) {
+      pc.onicecandidate = null;
+      pc.ondatachannel = null;
+      pc.onconnectionstatechange = null;
+      pc.ontrack = null;
+      try {
+        pc.close();
+      } catch (e) {
+        /* already gone */
+      }
+    }
+    return 1n;
+  },
+
+  // ── getUserMedia (two-phase, like fetch/clipboard/crypto) ───────────
+  media_get_begin(cptr, clen) {
+    const constraintsText = str(cptr, clen);
+    const rec = { state: 0, stream: 0n, error: '', freed: false };
+    mediaOps.push(rec);
+    const id = BigInt(mediaOps.length - 1);
+    const md = typeof navigator !== 'undefined' ? navigator.mediaDevices : null;
+    let constraints = {};
+    try {
+      if (constraintsText) constraints = JSON.parse(constraintsText);
+    } catch (e) {
+      constraints = {};
+    }
+    if (!md || typeof md.getUserMedia !== 'function') {
+      rec.state = 2;
+      rec.error = 'NotSupportedError';
+      return id;
+    }
+    let p;
+    try {
+      p = md.getUserMedia(constraints);
+    } catch (e) {
+      rec.state = 2;
+      rec.error = (e && e.name) || 'Error';
+      return id;
+    }
+    if (!p || typeof p.then !== 'function') {
+      rec.state = 2;
+      rec.error = 'NotSupportedError';
+      return id;
+    }
+    // Both callbacks only fill the record. Nothing here calls into wasm: the
+    // op is polled from the app's own frame loop.
+    p.then((s) => {
+      if (rec.freed) return;
+      mediaStreams.push(s);
+      rec.stream = BigInt(mediaStreams.length - 1);
+      rec.state = 1;
+    }).catch((e) => {
+      if (rec.freed) return;
+      rec.error = (e && e.name) || 'Error';
+      rec.state = 2;
+    });
+    return id;
+  },
+
+  media_poll(op) {
+    const rec = mediaOps[Number(op)];
+    return BigInt(rec ? rec.state : 2);
+  },
+
+  media_stream(op) {
+    const rec = mediaOps[Number(op)];
+    return rec && rec.state === 1 ? rec.stream : 0n;
+  },
+
+  media_error(op, ptr, max) {
+    const rec = mediaOps[Number(op)];
+    return writeBytes(ptr, encoder.encode(rec ? rec.error || '' : ''), max);
+  },
+
+  // Stop the tracks: the camera light goes out here, and the slot is
+  // released so a later request gets a fresh one.
+  media_free(stream) {
+    const i = Number(stream);
+    const s = mediaStreams[i];
+    if (!s) return 0n;
+    mediaStreams[i] = null;
+    try {
+      for (const t of s.getTracks()) t.stop();
+    } catch (e) {
+      /* already ended */
+    }
+    return 1n;
+  },
+
+  // `video.srcObject = stream`, the boundary's one object-property write.
+  // Typed on purpose: a node and a stream, never a property name.
+  dom_set_src_object(node, stream) {
+    const n = nodeById(node);
+    const s = mediaStreams[Number(stream)];
+    if (!n || !s) return 0n;
+    try {
+      n.srcObject = s;
+    } catch (e) {
+      return 0n;
+    }
+    // Autoplay is what makes a remote stream actually show; the browser
+    // still gates it on the user gesture that granted the stream.
+    if (n.autoplay === false) n.autoplay = true;
+    if (typeof n.play === 'function') {
+      try {
+        n.play();
+      } catch (e) {
+        /* a blocked autoplay is not an error: the user can press play */
       }
     }
     return 1n;
