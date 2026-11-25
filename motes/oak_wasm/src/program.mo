@@ -946,7 +946,7 @@ def Runtime.decode_url {S : Type} {Msg : Type} (c : AudioCtx) (url : String)
     match bytes {
         Option.none => IO.pure Option.none,
         Option.some buf => do {
-            let decoded <- Audio.decode c (Shared.get buf) 256i64;
+            let decoded <- Audio.decode c buf 256i64;
             let _ <- ByteBuf.free buf;
             match decoded {
                 Result.err _name => IO.pure Option.none,
