@@ -104,8 +104,9 @@ pub use lib::rtc {
     Rtc.next, Rtc.drain, Rtc.watch, Rtc.unwatch,
 }
 pub use lib::media_stream {
-    MediaStream.get_user_media_begin, MediaStream.request_av, MediaStream.request_video,
+    MediaStream.get_user_media_begin, MediaStream.get_display_media_begin,
+    MediaStream.request_av, MediaStream.request_video,
     MediaStream.request_audio, MediaStream.request_display,
     MediaStream.poll, MediaStream.result, MediaStream.error, MediaStream.await,
-    MediaStream.attach, MediaStream.stop,
+    MediaStream.attach, MediaStream.stop, MediaStream.release,
 }

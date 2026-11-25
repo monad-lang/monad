@@ -26,7 +26,7 @@
 use lib::types {MediaStream, MediaStreamOp, Node}
 use lib::ffi {
     media_get_begin_raw, media_poll_raw, media_stream_raw, media_error_raw,
-    media_free_raw, dom_set_src_object_raw,
+    media_free_raw, media_free_op_raw, dom_set_src_object_raw,
 }
 
 // ─── Poll answers ────────────────────────────────────────────────────
@@ -46,7 +46,7 @@ pub def MediaStream.poll_failed : I64 := 2i64
 ///
 /// The permission prompt starts here; the answer arrives through `poll`.
 pub def MediaStream.get_user_media_begin (constraints : String) : IO MediaStreamOp :=
-    IO.mk (media_get_begin_raw constraints)
+    IO.mk (media_get_begin_raw constraints 0i64)
 
 /// A camera-and-microphone request with sensible defaults.
 pub def MediaStream.request_av : IO MediaStreamOp :=
@@ -60,10 +60,21 @@ pub def MediaStream.request_video : IO MediaStreamOp :=
 pub def MediaStream.request_audio : IO MediaStreamOp :=
     MediaStream.get_user_media_begin "{\"audio\": true, \"video\": false}"
 
-/// Screen capture (`getDisplayMedia`). The browser shows its own picker, and
-/// a refusal comes back through `poll`/`error` like a camera denial.
+/// Screen capture through `getDisplayMedia`, with `options` as the browser's
+/// `DisplayMediaStreamOptions` JSON text.
+///
+/// The `display` flag on the native is what picks the API: `displaySurface`
+/// is a `getDisplayMedia` constraint and NOT a `getUserMedia` one, so routing
+/// this through `get_user_media_begin` would ask for a camera instead and
+/// open one when the app asked for a screen.
+pub def MediaStream.get_display_media_begin (options : String) : IO MediaStreamOp :=
+    IO.mk (media_get_begin_raw options 1i64)
+
+/// Screen capture of a whole monitor, with sensible defaults. The browser
+/// shows its own picker, and a refusal comes back through `poll`/`error` like
+/// a camera denial.
 pub def MediaStream.request_display : IO MediaStreamOp :=
-    MediaStream.get_user_media_begin "{\"video\": {\"displaySurface\": \"monitor\"}}"
+    MediaStream.get_display_media_begin "{\"video\": {\"displaySurface\": \"monitor\"}}"
 
 /// 0 pending, 1 done, 2 failed -- the fetch convention.
 pub def MediaStream.poll (op : MediaStreamOp) : IO I64 := IO.mk (media_poll_raw op)
@@ -116,10 +127,21 @@ pub def MediaStream.attach (stream : MediaStream) (video : Node) : IO (Result St
     else IO.pure (Result.ok unit)
 }
 
-/// Stop every track and release the stream's host slot. The camera light
-/// goes out here, so a UI that stops showing a stream should call it rather
-/// than just dropping the handle.
+/// Stop every track and release the stream's host slot, along with the op
+/// that produced it. The camera light goes out here, so a UI that stops
+/// showing a stream should call it rather than just dropping the handle.
 pub def MediaStream.stop (stream : MediaStream) : IO Unit := do {
     let _ <- IO.mk (media_free_raw stream);
+    IO.pure unit
+}
+
+/// Release a finished operation's host slot, for a request that FAILED and so
+/// produced no stream to `stop`. Without it a page that retries a refused
+/// prompt would keep one record per attempt for its whole lifetime.
+///
+/// A successful op is reclaimed by `MediaStream.stop`, so calling this on one
+/// is harmless but unnecessary.
+pub def MediaStream.release (op : MediaStreamOp) : IO Unit := do {
+    let _ <- IO.mk (media_free_op_raw op);
     IO.pure unit
 }

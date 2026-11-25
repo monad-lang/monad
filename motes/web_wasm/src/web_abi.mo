@@ -217,7 +217,7 @@ def WebImport.rtc_free : WebImport :=
     { module := "monad", name := "rtc_free", params := ["i64"], result := "i64" }
 
 def WebImport.media_get_begin : WebImport :=
-    { module := "monad", name := "media_get_begin", params := ["i64", "i64"], result := "i64" }
+    { module := "monad", name := "media_get_begin", params := ["i64", "i64", "i64"], result := "i64" }
 
 def WebImport.media_poll : WebImport :=
     { module := "monad", name := "media_poll", params := ["i64"], result := "i64" }
@@ -230,6 +230,9 @@ def WebImport.media_error : WebImport :=
 
 def WebImport.media_free : WebImport :=
     { module := "monad", name := "media_free", params := ["i64"], result := "i64" }
+
+def WebImport.media_free_op : WebImport :=
+    { module := "monad", name := "media_free_op", params := ["i64"], result := "i64" }
 
 def WebImport.dom_set_src_object : WebImport :=
     { module := "monad", name := "dom_set_src_object", params := ["i64", "i64"], result := "i64" }
@@ -606,7 +609,7 @@ pub def WebAbi.default : WebAbi :=
             WebImport.rtc_close, WebImport.rtc_watch, WebImport.rtc_unwatch,
             WebImport.rtc_free,
             WebImport.media_get_begin, WebImport.media_poll, WebImport.media_stream,
-            WebImport.media_error, WebImport.media_free,
+            WebImport.media_error, WebImport.media_free, WebImport.media_free_op,
             WebImport.dom_set_src_object,
             WebImport.now_ms, WebImport.storage_get_raw,
             WebImport.storage_set, WebImport.console_log, WebImport.try_result,

@@ -582,10 +582,15 @@ def rtc_unwatch_raw (p : RtcPeer) : RawIO I64
 #[extern "c" {link_name := "web_rtc_free"}]
 def rtc_free_raw (p : RtcPeer) : RawIO I64
 
-/// Start a `getUserMedia` request for `constraints` (the browser's
-/// `MediaStreamConstraints` as JSON text).
+/// Start a media request for `constraints` (the browser's
+/// `MediaStreamConstraints`/`DisplayMediaStreamOptions` as JSON text).
+///
+/// `display` picks the API: 0 is `getUserMedia` (camera/microphone), 1 is
+/// `getDisplayMedia` (screen). One native behind a flag rather than two:
+/// the request, the polling and the result are identical, and only the
+/// call differs -- a duplicated native would mean two of everything.
 #[extern "c" {link_name := "web_media_get_begin"}]
-def media_get_begin_raw (constraints : String) : RawIO MediaStreamOp
+def media_get_begin_raw (constraints : String) (display : I64) : RawIO MediaStreamOp
 
 /// 0 pending, 1 done, 2 failed.
 #[extern "c" {link_name := "web_media_poll"}]
@@ -603,3 +608,9 @@ def media_error_raw (op : MediaStreamOp) : RawIO String
 /// Release a stream's host slot (the tracks themselves are the browser's).
 #[extern "c" {link_name := "web_media_free"}]
 def media_free_raw (stream : MediaStream) : RawIO I64
+
+/// Release a finished operation's host slot. `MediaStream.stop` reclaims the
+/// op that produced a stream; a FAILED request produces no stream, so its op
+/// is released here instead.
+#[extern "c" {link_name := "web_media_free_op"}]
+def media_free_op_raw (op : MediaStreamOp) : RawIO I64
