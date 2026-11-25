@@ -13,7 +13,10 @@ single_ctor_type	129
 # single-ctor `type` -- the same shape `RuntimeState (S) (Msg)` has.
 # parsec's `Parser (S) (A)` is the 98th: a parameterized `struct` cannot be
 # constructed on the Rust host, so the carrier is a single-ctor `type`.
-single_ctor_type_convertible	98
+# `oak_wasm`'s `RtcPeerEntry (Msg)` is the 99th for the same kind of reason:
+# it carries the peer, its subscription key and its `RtcEvent -> Msg` handler,
+# and a parameterized `struct` does not parse.
+single_ctor_type_convertible	99
 single_ctor_type_unnamed_fields	14
 single_ctor_type_no_fields	19
 multi_ctor_type	262
