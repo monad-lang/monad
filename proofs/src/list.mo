@@ -1,7 +1,7 @@
 // Basic `List` theorems, by structural induction through an explicit
 // eliminator with a named family (see nat.mo's header for why).
 
-use proofs::equiv {Path}
+use init::equiv {Path}
 use proofs::paths {refl, ap}
 
 /// Structural induction over `List A`, into an arbitrary type family.

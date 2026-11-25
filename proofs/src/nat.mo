@@ -14,7 +14,7 @@
 // its argument twice would otherwise be rejected as affine. The bodies are
 // still fully type-checked; the marker only licenses sharing.
 
-use proofs::equiv {Path}
+use init::equiv {Path}
 use proofs::paths {refl, ap}
 
 /// Structural induction over `Nat`, into an arbitrary type family.

@@ -19,7 +19,7 @@
 // checker leaves unreduced (`Id.bind … (id a) …` never converts), so the
 // proofs go through an EXPLICIT eliminator with a named family -- the same
 // recipe `proofs/src/nat.mo` documents.
-use proofs::equiv {Path}
+use init::equiv {Path}
 use proofs::paths {refl, ap}
 use proofs::list {list_elim}
 

@@ -7,7 +7,7 @@
 // `system i0↦A i1↦B` reduces to `A` at `i0` and `B` at `i1`, which is what
 // makes the path's endpoints check.
 
-use proofs::equiv {Equiv, Path}
+use init::equiv {Equiv, Path}
 use proofs::contract {idEquiv}
 
 /// The `Glue` body, kept in a helper so `w` is a BOUND parameter. The

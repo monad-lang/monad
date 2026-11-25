@@ -24,7 +24,7 @@
 // text, not a hand-written `ScopeData`, because these defs reference each
 // other by name (`Equiv` mentions `isEquiv`, `isEquiv` mentions
 // `isContr`) and resolve only after the whole declaration list is
-// registered. That text is a SECOND copy of `proofs/src/equiv.mo`'s own
+// registered. That text is a SECOND copy of `init/src/equiv.mo`'s own
 // defs -- unavoidable here, because what is under test is the parse of
 // that text, and a `use` of the compiled defs would bypass it. If the defs
 // change, both copies change; `cubical_props.mo`'s own preamble says the
@@ -53,8 +53,9 @@ def each_line (lines : List String) : String :=
 /// The four cubical primitives these defs bottom out in (spelled as the
 /// prelude's `with Cubical` block declares them, minus the wrapper and
 /// prefixes -- the same source `cubical_props.mo` builds its scope from),
-/// `Sigma`, and the five Stage 6a defs written verbatim as
-/// `proofs/src/equiv.mo` declares them.
+/// `Sigma`, and the five Stage 6a defs at their `Type` instantiation -- the
+/// real ones in `init/src/equiv.mo` are universe-polymorphic, and this
+/// synthetic scope has no level variables to instantiate.
 def equiv_decls_source : String :=
     each_line [
         "#[cubical \"interval\"] def I : Type",
@@ -67,7 +68,7 @@ def equiv_decls_source : String :=
         "def fiber (A : Type) (B : Type) (f : A -> B) (b : B) : Type := Sigma A (fn a => Path B (f a) b)",
         "def isEquiv (A : Type) (B : Type) (f : A -> B) : Type := (b : B) -> isContr (fiber A B f b)",
         "def Equiv (A : Type) (B : Type) : Type := Sigma (A -> B) (fn f => isEquiv A B f)",
-        // The harness's own negative control, NOT part of `equiv.mo`: a
+        // The harness's own negative control, NOT part of `init/src/equiv.mo`: a
         // body that cannot check under any checker, since it names nothing.
         "def rejected_control : Type := no_such_name_anywhere",
     ]

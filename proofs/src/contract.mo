@@ -1,8 +1,10 @@
 // Contractibility of the identity's fibers, and `idEquiv` (univalence.md S2).
 //
 // This module exists because it needs BOTH halves: `Path`/`refl`/`path_pair`
-// (`paths.mo`) and `fiber`/`isContr`/`Equiv` (`equiv.mo`) -- and `equiv.mo`
-// cannot import `paths.mo`, because `paths.mo` imports `equiv.mo` for `Path`.
+// (`paths.mo`) and `fiber`/`isContr`/`Equiv` (`init/src/equiv.mo`) -- and
+// `equiv.mo` cannot import `paths.mo`, because `paths.mo` imports `equiv.mo`
+// for `Path`. The HoTT type formers live in `init` so `init` alone can state
+// an equivalence; only the proofs about them live here.
 //
 // Two checker rules had to land for this to check at all (measured 2026-11-04/05):
 //
@@ -14,7 +16,7 @@
 //   - A `#[proof]` def's body may use any binder freely: its result is erased,
 //     so the center's `Sigma.dpair b (refl b)` duplicates `b : A` for free.
 //     No `Copy` instance can license that for a type variable `A`.
-use proofs::equiv {Equiv, Path, fiber, isContr}
+use init::equiv {Equiv, Path, fiber, isContr}
 use proofs::paths {refl, path_pair}
 
 /// One contraction step: `pair_path` with the dependent family written out.

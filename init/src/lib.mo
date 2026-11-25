@@ -25,6 +25,11 @@ pub use lib::clone {*}
 // an import. A file that never uses one holds no shared read either way.
 pub use lib::shared {*}
 
+// `init/src/equiv.mo` is deliberately NOT re-exported. Its `Path` would be
+// ambient in every file, and `std::path`'s `Path` is what most of them mean;
+// an import ("`use init::equiv {Path}`") keeps the two apart, and only the
+// cubical proofs need the HoTT one.
+
 // No `infix (+)` override here: `init/src/prelude.mo`'s own
 // `infix (+) := HAdd.add` is what `+` resolves to, through the
 // `[Add A] HAdd A A A` bridge and each type's `Add` instance. This line

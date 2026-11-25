@@ -44,7 +44,7 @@
 // whole reason the interval gets an instance and, say, `Nat`'s neighbours do
 // not get a blanket one.
 
-use proofs::equiv {Path}
+use init::equiv {Path}
 
 /// The reflexivity path: the constant path at `a`.
 pub def refl {A : Type} (a : A) : Path A a a :=

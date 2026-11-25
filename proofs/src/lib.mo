@@ -9,11 +9,11 @@
 // the expensive half.
 //
 // The cubical primitives' declarations moved to the prelude
-// (`with Cubical { ... }` in init/src/prelude.mo); nothing under proofs/
-// declares them any more. The mathematical proof modules (`paths`,
-// `nat`, `list`, `vec` follow) get re-exported here as they land.
+// (`with Cubical { ... }` in init/src/prelude.mo), and the HoTT type formers
+// (`Path`/`isContr`/`fiber`/`isEquiv`/`Equiv`) to `init/src/equiv.mo`; nothing
+// under proofs/ declares either any more. The mathematical proof modules
+// (`paths`, `nat`, `list`, `vec` follow) get re-exported here as they land.
 
-pub use lib::equiv {*}
 pub use lib::paths {*}
 pub use lib::dependent {*}
 pub use lib::contract {*}

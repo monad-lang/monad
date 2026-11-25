@@ -11,7 +11,7 @@
 // (`Bool.or b false = b` fails with an unreduced family step); it is recorded
 // rather than asserted.
 
-use proofs::equiv {Path}
+use init::equiv {Path}
 use proofs::paths {refl}
 
 /// Double negation is the identity.

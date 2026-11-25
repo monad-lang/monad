@@ -13,7 +13,7 @@
 // (`vlength (vappend v w) = add (vlength v) (vlength w)`) need a `Vec`
 // eliminator and are not here yet.
 
-use proofs::equiv {Path}
+use init::equiv {Path}
 use proofs::paths {refl}
 
 /// A non-dependent `Vec.length`, by an ordinary match over both constructors.
