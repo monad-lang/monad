@@ -70,6 +70,16 @@ const glContextIds = new WeakMap(); // GL context -> id, so a re-get keeps its i
 const glObjects = [null]; // id -> { ctx, kind, obj }
 let glLog = '';
 const images = [null]; // id -> { state, img }
+// Web Audio (`motes/web_wasm/src/audio.mo`). `audioCtx` is the page's single
+// `AudioContext` plus its master gain node; a context id of 0 means "not
+// open". Decoded sounds, live voices and in-flight decodes each get their own
+// table, so a handle can never be mistaken for another kind.
+let audioCtx = null;
+let audioMaster = null;
+let audioCtxId = 0n;
+const audioSounds = [null]; // id -> AudioBuffer
+const audioNodes = [null]; // id -> AudioNode | AudioScheduledSourceNode
+const audioDecodes = []; // id -> { state, buffer, error }
 let timerSeq = 0n;
 // Handler ids are masked to 31 bits (`Handler.id`), so the top bit is a
 // disjoint space for timer callbacks.
@@ -597,6 +607,35 @@ function beginFetch(url, method, bodyText, headers) {
   return id;
 }
 
+
+// ── Sound helpers ───────────────────────────────────────────────────
+
+// The `Wave` codes `motes/web_wasm/src/audio.mo` assigns. `Wave` is the
+// Monad-side enum; this table is its only mirror, so a new waveform is one
+// arm on each side (`square`/`sawtooth`/`triangle` are the Web Audio names).
+const OSC_TYPES = ['sine', 'square', 'sawtooth', 'triangle'];
+
+// A noise burst is a materialised buffer, not a stream: cap it so a stuck
+// parameter cannot ask the browser for minutes of audio.
+const NOISE_MAX_SECONDS = 2;
+
+// Resolve a media-element selector against the document. Only `<audio>` and
+// `<video>` answer: a selector that happens to match a `<div>` is a wrong
+// name, and play/pause on it would throw.
+function mediaEl(selector) {
+  const d = doc();
+  if (!d || typeof d.querySelector !== 'function') return null;
+  let el;
+  try {
+    el = d.querySelector(selector);
+  } catch (e) {
+    return null; // an invalid selector is a miss, not a broken frame
+  }
+  if (!el) return null;
+  const tag = (el.tagName || '').toLowerCase();
+  if (tag !== 'audio' && tag !== 'video') return null;
+  return el;
+}
 
 // ── WebGL helpers ────────────────────────────────────────────────────
 
@@ -2169,6 +2208,396 @@ export const host = {
       case 2: return rec.img ? BigInt(rec.img.naturalHeight || rec.img.height || 0) : 0n;
       default: return 0n;
     }
+  },
+
+  // The BINARY half of a response body. `fetch_read` returns a Monad
+  // String, which is NUL-terminated, so a media or image body would stop at
+  // its first zero byte; these two cover the whole body. `fetch_len` is the
+  // bytes REMAINING (the read cursor walks), so a partial read is honest.
+  fetch_len(id) {
+    const r = fetches[Number(id)];
+    if (!r || !r.bytes) return 0n;
+    return BigInt(Math.max(0, r.bytes.length - r.offset));
+  },
+
+  fetch_read_bytes(id, ptr, max) {
+    const r = fetches[Number(id)];
+    if (!r || !r.bytes) return 0n;
+    const n = writeBytes(ptr, r.bytes.subarray(r.offset), max);
+    r.offset += Number(n);
+    if (r.offset >= r.bytes.length) {
+      r.bytes = new Uint8Array(0);
+      r.offset = 0;
+    }
+    return n;
+  },
+
+  // ── Sound and audio ────────────────────────────────────────────────
+  //
+  // Web Audio synthesizes; `<audio>`/`<video>` plays files. They are
+  // separate here because they fail separately: a context that never resumed
+  // is silent but healthy, while a media element that 404'd reports through
+  // its own state. Every id is an index into a table, never a pointer.
+  //
+  // A `Buf F32` of PCM arrives as (payload, element count); the C wrapper
+  // already checked the kind, so the view below covers exactly the buffer.
+
+  audio_open() {
+    if (audioCtx) return audioCtxId;
+    const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
+    if (typeof AC !== 'function') return 0n;
+    try {
+      audioCtx = new AC();
+    } catch (e) {
+      audioCtx = null;
+      return 0n;
+    }
+    // The master gain is the one node every voice passes through, so it is
+    // where a page-wide mute lives. Unity by default: a program that wants
+    // quiet says so.
+    try {
+      audioMaster = audioCtx.createGain();
+      audioMaster.gain.value = 1;
+      audioMaster.connect(audioCtx.destination);
+    } catch (e) {
+      audioMaster = null;
+    }
+    audioCtxId = 1n;
+    return audioCtxId;
+  },
+
+  audio_state(ctx) {
+    if (!audioCtx || !ctx) return 2n;
+    switch (audioCtx.state) {
+      case 'suspended': return 0n;
+      case 'running': return 1n;
+      case 'closed': return 2n;
+      case 'interrupted': return 3n;
+      default: return 0n;
+    }
+  },
+
+  // `resume()` is a promise, but it settles into a state `audio_state`
+  // already reports, so the answer here is the state RIGHT NOW. A caller
+  // that needs certainty polls the state rather than trusting this word.
+  audio_resume(ctx) {
+    if (!audioCtx || !ctx) return 0n;
+    try {
+      const p = audioCtx.resume();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    } catch (e) {
+      return 0n;
+    }
+    return audioCtx.state === 'running' ? 1n : 0n;
+  },
+
+  audio_now_us(ctx) {
+    if (!audioCtx || !ctx) return 0n;
+    return BigInt(Math.round(audioCtx.currentTime * 1e6));
+  },
+
+  audio_sample_rate(ctx) {
+    if (!audioCtx || !ctx) return 0n;
+    return BigInt(Math.round(audioCtx.sampleRate || 0));
+  },
+
+  audio_set_master(ctx, gain) {
+    if (!audioCtx || !audioMaster || !ctx) return 0n;
+    audioMaster.gain.value = Number(gain);
+    return 0n;
+  },
+
+  // One oscillator voice with a linear attack/release envelope. It is
+  // scheduled start-to-stop in one go: a short SFX must not depend on a
+  // later wasm call to end it, because the app may never make one.
+  audio_tone(ctx, wave, freq, gain, duration_ms, attack_ms, release_ms) {
+    if (!audioCtx || !ctx) return 0n;
+    const d = Number(duration_ms) / 1000;
+    if (!(d > 0)) return 0n;
+    const a = Number(attack_ms) / 1000;
+    const r = Number(release_ms) / 1000;
+    try {
+      const osc = audioCtx.createOscillator();
+      osc.type = OSC_TYPES[Number(wave)] || 'sine';
+      osc.frequency.value = Number(freq);
+      const env = audioCtx.createGain();
+      const t0 = audioCtx.currentTime;
+      const peak = Number(gain);
+      // A zero attack would be a click; `setValueAtTime` first keeps the
+      // ramp's start well-defined even when the browser's clock has moved.
+      env.gain.setValueAtTime(0, t0);
+      env.gain.linearRampToValueAtTime(peak, t0 + a);
+      env.gain.setValueAtTime(peak, t0 + Math.max(a, d - r));
+      env.gain.linearRampToValueAtTime(0, t0 + d);
+      osc.connect(env);
+      env.connect(audioMaster || audioCtx.destination);
+      osc.start(t0);
+      osc.stop(t0 + d);
+      audioNodes.push(osc);
+      return BigInt(audioNodes.length - 1);
+    } catch (e) {
+      return 0n;
+    }
+  },
+
+  audio_stop(node) {
+    const n = audioNodes[Number(node)];
+    if (!n) return 0n;
+    try {
+      n.stop(0);
+    } catch (e) {
+      /* already stopped: the voice stopped itself at its scheduled end */
+    }
+    return 0n;
+  },
+
+  // A white-noise burst through an optional lowpass. Two seconds is the
+  // ceiling: a noise node is a long buffer the browser materialises, and an
+  // app that asks for a minute of it has a stuck parameter, not a sound.
+  audio_noise(ctx, gain, duration_ms, lowpass_hz) {
+    if (!audioCtx || !ctx) return 0n;
+    let d = Number(duration_ms) / 1000;
+    if (!(d > 0)) return 0n;
+    if (d > NOISE_MAX_SECONDS) d = NOISE_MAX_SECONDS;
+    try {
+      const frames = Math.max(1, Math.floor(audioCtx.sampleRate * d));
+      const buf = audioCtx.createBuffer(1, frames, audioCtx.sampleRate);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < frames; i++) ch[i] = Math.random() * 2 - 1;
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      const env = audioCtx.createGain();
+      const t0 = audioCtx.currentTime;
+      const peak = Number(gain);
+      env.gain.setValueAtTime(peak, t0);
+      // A short release so the burst does not end on a sample boundary
+      // discontinuity (a click at these amplitudes is audible).
+      const rel = Math.min(0.02, d / 4);
+      env.gain.setValueAtTime(peak, t0 + d - rel);
+      env.gain.linearRampToValueAtTime(0, t0 + d);
+      let tail = env;
+      if (Number(lowpass_hz) > 0) {
+        const f = audioCtx.createBiquadFilter();
+        f.type = 'lowpass';
+        f.frequency.value = Number(lowpass_hz);
+        env.connect(f);
+        tail = f;
+      }
+      src.connect(env);
+      tail.connect(audioMaster || audioCtx.destination);
+      src.start(t0);
+      src.stop(t0 + d);
+      audioNodes.push(src);
+      return BigInt(audioNodes.length - 1);
+    } catch (e) {
+      return 0n;
+    }
+  },
+
+  // Mono PCM from wasm. The frames are COPIED into an AudioBuffer before the
+  // view is used: a buffer the wasm heap owns can move when memory grows, and
+  // the source node outlives this call.
+  audio_play_pcm(ctx, ptr, count, sample_rate, gain) {
+    if (!audioCtx || !ctx) return 0n;
+    const n = Number(count);
+    if (!(n > 0)) return 0n;
+    try {
+      const view = new Float32Array(memory.buffer, u32(ptr), n).slice();
+      const buf = audioCtx.createBuffer(1, n, Number(sample_rate));
+      buf.copyToChannel(view, 0);
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      const env = audioCtx.createGain();
+      env.gain.value = Number(gain);
+      src.connect(env);
+      env.connect(audioMaster || audioCtx.destination);
+      src.start();
+      audioNodes.push(src);
+      return BigInt(audioNodes.length - 1);
+    } catch (e) {
+      return 0n;
+    }
+  },
+
+  // `decodeAudioData` detaches its input ArrayBuffer, so the bytes are
+  // copied off the wasm heap first -- and copied BEFORE the promise, which
+  // is also why this is two-phase: the callback must not re-enter wasm.
+  audio_decode_begin(ctx, ptr, len) {
+    const rec = { state: 0, buffer: null, error: '' };
+    audioDecodes.push(rec);
+    const id = BigInt(audioDecodes.length - 1);
+    if (!audioCtx || !ctx) {
+      rec.state = 2;
+      rec.error = 'InvalidStateError';
+      return id;
+    }
+    const bytes = new Uint8Array(memory.buffer, u32(ptr), Number(len)).slice();
+    const p = audioCtx.decodeAudioData(bytes.buffer);
+    if (!p || typeof p.then !== 'function') {
+      rec.state = 2;
+      rec.error = 'NotSupportedError';
+      return id;
+    }
+    p.then((buf) => { rec.buffer = buf; rec.state = 1; })
+      .catch((err) => { rec.error = (err && err.name) || 'Error'; rec.state = 2; });
+    return id;
+  },
+
+  audio_decode_poll(op) {
+    const rec = audioDecodes[Number(op)];
+    return rec ? BigInt(rec.state) : 2n;
+  },
+
+  audio_decode_sound(op) {
+    const rec = audioDecodes[Number(op)];
+    if (!rec || rec.state !== 1 || !rec.buffer) return 0n;
+    audioSounds.push(rec.buffer);
+    return BigInt(audioSounds.length - 1);
+  },
+
+  audio_decode_error(op, ptr, max) {
+    const rec = audioDecodes[Number(op)];
+    if (!rec) return 0n;
+    return writeBytes(ptr, encoder.encode(rec.error || ''), max);
+  },
+
+  // `offset`/`duration` are 0 for "all of it", which is why the C side
+  // clamps them to non-negative rather than treating 0 as a real duration.
+  audio_play_sound(ctx, sound, gain, offset_ms, duration_ms) {
+    if (!audioCtx || !ctx) return 0n;
+    const buf = audioSounds[Number(sound)];
+    if (!buf) return 0n;
+    try {
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      const env = audioCtx.createGain();
+      env.gain.value = Number(gain);
+      src.connect(env);
+      env.connect(audioMaster || audioCtx.destination);
+      const off = Number(offset_ms) / 1000;
+      const dur = Number(duration_ms) / 1000;
+      if (off > 0 && dur > 0) src.start(0, off, dur);
+      else if (off > 0) src.start(0, off);
+      else if (dur > 0) src.start(0, 0, dur);
+      else src.start();
+      audioNodes.push(src);
+      return BigInt(audioNodes.length - 1);
+    } catch (e) {
+      return 0n;
+    }
+  },
+
+  audio_sound_duration_ms(sound) {
+    const buf = audioSounds[Number(sound)];
+    if (!buf) return 0n;
+    return BigInt(Math.round((buf.duration || 0) * 1000));
+  },
+
+  // ── `<audio>` / `<video>` element control ──────────────────────────
+  //
+  // The element is mounted by the view, so every call resolves a selector.
+  // A miss returns 0 rather than throwing: a selector typo is a bug the
+  // caller must be able to SEE (`MediaElement.play` reports it), but it is
+  // not a reason to break a frame.
+
+  media_play(ptr, len) {
+    const el = mediaEl(str(ptr, len));
+    if (!el) return 0n;
+    try {
+      const p = el.play();
+      if (p && typeof p.catch === 'function') {
+        // The autoplay policy rejects with NotAllowedError; record it so a
+        // later `media_info` read can report the block instead of the page
+        // looking merely paused.
+        p.catch((err) => {
+          el.__oakPlayBlocked = (err && err.name) || 'Error';
+        });
+        return 1n;
+      }
+      return 1n;
+    } catch (e) {
+      return 3n;
+    }
+  },
+
+  media_pause(ptr, len) {
+    const el = mediaEl(str(ptr, len));
+    if (!el) return 0n;
+    el.pause();
+    el.__oakPlayBlocked = '';
+    return 1n;
+  },
+
+  media_seek(ptr, len, ms) {
+    const el = mediaEl(str(ptr, len));
+    if (!el) return 0n;
+    const want = Number(ms) / 1000;
+    // Clamp to the known duration: seeking past the end leaves the element
+    // in `ended` with an unmovable `currentTime`, which reads as a bug.
+    const dur = el.duration;
+    el.currentTime = Number.isFinite(dur) && dur > 0 ? Math.min(want, dur) : want;
+    return 1n;
+  },
+
+  media_set_volume(ptr, len, volume) {
+    const el = mediaEl(str(ptr, len));
+    if (!el) return 0n;
+    el.volume = Number(volume);
+    return 1n;
+  },
+
+  media_set_muted(ptr, len, muted) {
+    const el = mediaEl(str(ptr, len));
+    if (!el) return 0n;
+    el.muted = Number(muted) !== 0;
+    return 1n;
+  },
+
+  media_set_loop(ptr, len, looping) {
+    const el = mediaEl(str(ptr, len));
+    if (!el) return 0n;
+    el.loop = Number(looping) !== 0;
+    return 1n;
+  },
+
+  media_info(ptr, len, which) {
+    const el = mediaEl(str(ptr, len));
+    if (!el) return 3n; // "no such element", distinct from paused
+    switch (Number(which)) {
+      case 0: return el.paused ? 1n : 0n;
+      case 1: return el.ended ? 1n : 0n;
+      case 2: return BigInt(el.readyState || 0);
+      case 3: return el.seeking ? 1n : 0n;
+      case 4: return el.muted ? 1n : 0n;
+      case 5: return el.loop ? 1n : 0n;
+      case 6: return BigInt(Math.round((el.playbackRate || 1) * 1000));
+      // `blocked` and `present` are ABOUT the element rather than read off
+      // it. A missing element answered 3 above, which no field here can be
+      // confused with.
+      case 7: return el.__oakPlayBlocked ? 1n : 0n; // autoplay-blocked
+      case 8: return 1n; // present
+      default: return 0n;
+    }
+  },
+
+  // 0 `currentTime`, 1 `duration`; whole milliseconds, and -1 for a
+  // duration the metadata has not supplied yet (`NaN` before load), so a
+  // caller can tell "unknown" from "zero length".
+  media_time_ms(ptr, len, which) {
+    const el = mediaEl(str(ptr, len));
+    if (!el) return -1n;
+    if (Number(which) === 1) {
+      const d = el.duration;
+      return Number.isFinite(d) ? BigInt(Math.round(d * 1000)) : -1n;
+    }
+    const t = el.currentTime;
+    return Number.isFinite(t) ? BigInt(Math.round(t * 1000)) : 0n;
+  },
+
+  media_volume(ptr, len) {
+    const el = mediaEl(str(ptr, len));
+    if (!el) return 1;
+    return el.volume;
   },
 
   write_stdout(ptr, len) {

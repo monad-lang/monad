@@ -12,10 +12,11 @@
 /// HTTP header values cannot contain NUL, so nothing is escaped. Response
 /// headers use the same encoding.
 
+use std::bytebuf {ByteBuf, ByteBuf.alloc, ByteBuf.free}
 use lib::types {RequestId}
 use lib::ffi {
     fetch_begin_raw, fetch_begin_headers_raw, fetch_poll_raw, fetch_status_raw,
-    fetch_read_raw, fetch_headers_raw,
+    fetch_read_raw, fetch_headers_raw, fetch_len_raw, fetch_read_bytes_raw,
 }
 
 pub def Fetch.begin (url : String) (method : I64) (body : String) : IO RequestId :=
@@ -38,6 +39,34 @@ pub def Fetch.response_headers (r : RequestId) : IO (List (Pair String String)) 
 }
 
 pub def Fetch.read (r : RequestId) (max : I64) : IO String := IO.mk (fetch_read_raw r max)
+
+/// The response body as BYTES, whole.
+///
+/// `Fetch.read` answers a Monad `String`, which is NUL-terminated: a media
+/// file, an image or any other binary body would stop at its first zero
+/// byte. This is the channel for those -- it sizes a `ByteBuf` from the
+/// unread length, fills it, and hands the buffer over. `none` while the
+/// request is still pending or produced no body.
+///
+/// The buffer is the caller's: free it with `ByteBuf.free` when done
+/// (`Audio.decode` reads it and does not keep it).
+pub def Fetch.get_bytes (r : Shared RequestId) : IO (Option ByteBuf) := do {
+    let state <- Fetch.poll (Shared.get r);
+    if Bool.not (I64.beq state 1i64) then IO.pure Option.none
+    else do {
+        let n <- IO.mk (fetch_len_raw (Shared.get r));
+        if Bool.not (I64.gt n 0i64) then IO.pure Option.none
+        else do {
+            let buf <- ByteBuf.alloc n;
+            let sb := Shared.of buf;
+            let _ <- IO.mk (fetch_read_bytes_raw (Shared.get r) (Shared.get sb));
+            IO.pure (Option.some (Shared.get sb))
+        }
+    }
+}
+
+/// The bytes still unread (the read cursor walks as `read` drains).
+pub def Fetch.remaining (r : RequestId) : IO I64 := IO.mk (fetch_len_raw r)
 
 // ─── Header blob codec (pure) ─────────────────────────────────────────
 

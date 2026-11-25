@@ -1551,6 +1551,269 @@ int64_t web_gl_tex_image_pixels(int64_t ctx, int64_t target, int64_t w, int64_t 
     return monad_js_gl_tex_image_pixels(ctx, target, w, h, (int64_t)(intptr_t)obj->payload);
 }
 
+/* ── sound and audio (motes/web_wasm/src/{audio,media_element}.mo) ─────
+   The browser has two audio APIs and they marshal differently:
+
+   * Web Audio is all handles. A context, a decoded `AudioBuffer` and a
+     graph node are ids into `web_runtime.js`'s tables; the only payload
+     that crosses is a `Buf F32` of PCM frames, which arrives as the
+     buffer's own (payload, len) after the SAME kind/length check the GL
+     uploads use -- so no byte count or address is ever Monad-supplied.
+   * `<audio>`/`<video>` control is all strings: a selector in, a word
+     out. The element itself is mounted by the view, so nothing here
+     allocates a node.
+
+   A selector is UTF-8 from Monad source and crosses as (ptr, len), like
+   `web_dom_query`. A decode error string is copied out through
+   `web_scratch`, like `web_crypto_error`. */
+
+__attribute__((import_module("monad"), import_name("fetch_len")))
+extern int64_t monad_js_fetch_len(int64_t request);
+
+__attribute__((import_module("monad"), import_name("fetch_read_bytes")))
+extern int64_t monad_js_fetch_read_bytes(int64_t request, int64_t ptr, int64_t max);
+
+/* The BINARY body channel, beside the audio wrappers because decoding a
+   file is its only user: a `ByteBuf` is filled in place, so the byte range
+   is the buffer's own recorded length. */
+int64_t web_fetch_len(int64_t request) {
+    return monad_js_fetch_len(request);
+}
+
+int64_t web_fetch_read_bytes(int64_t request, int64_t buf) {
+    BufObj* obj = (BufObj*)RT_PTR(buf);
+    if (!obj || obj->header.tag != MONAD_BUF_TAG) return 0;
+    int64_t n = monad_js_fetch_read_bytes(request, (int64_t)(intptr_t)obj->payload, obj->len);
+    return n;
+}
+
+__attribute__((import_module("monad"), import_name("audio_open")))
+extern int64_t monad_js_audio_open(void);
+
+__attribute__((import_module("monad"), import_name("audio_state")))
+extern int64_t monad_js_audio_state(int64_t ctx);
+
+__attribute__((import_module("monad"), import_name("audio_resume")))
+extern int64_t monad_js_audio_resume(int64_t ctx);
+
+__attribute__((import_module("monad"), import_name("audio_now_us")))
+extern int64_t monad_js_audio_now_us(int64_t ctx);
+
+__attribute__((import_module("monad"), import_name("audio_sample_rate")))
+extern int64_t monad_js_audio_sample_rate(int64_t ctx);
+
+__attribute__((import_module("monad"), import_name("audio_set_master")))
+extern int64_t monad_js_audio_set_master(int64_t ctx, double gain);
+
+__attribute__((import_module("monad"), import_name("audio_tone")))
+extern int64_t monad_js_audio_tone(int64_t ctx, int64_t wave, double freq, double gain,
+                                    int64_t duration_ms, int64_t attack_ms, int64_t release_ms);
+
+__attribute__((import_module("monad"), import_name("audio_stop")))
+extern int64_t monad_js_audio_stop(int64_t node);
+
+__attribute__((import_module("monad"), import_name("audio_noise")))
+extern int64_t monad_js_audio_noise(int64_t ctx, double gain, int64_t duration_ms,
+                                     double lowpass_hz);
+
+__attribute__((import_module("monad"), import_name("audio_play_pcm")))
+extern int64_t monad_js_audio_play_pcm(int64_t ctx, int64_t ptr, int64_t count,
+                                        int64_t sample_rate, double gain);
+
+__attribute__((import_module("monad"), import_name("audio_decode_begin")))
+extern int64_t monad_js_audio_decode_begin(int64_t ctx, int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("audio_decode_poll")))
+extern int64_t monad_js_audio_decode_poll(int64_t op);
+
+__attribute__((import_module("monad"), import_name("audio_decode_sound")))
+extern int64_t monad_js_audio_decode_sound(int64_t op);
+
+__attribute__((import_module("monad"), import_name("audio_decode_error")))
+extern int64_t monad_js_audio_decode_error(int64_t op, int64_t ptr, int64_t max);
+
+__attribute__((import_module("monad"), import_name("audio_play_sound")))
+extern int64_t monad_js_audio_play_sound(int64_t ctx, int64_t sound, double gain,
+                                          int64_t offset_ms, int64_t duration_ms);
+
+__attribute__((import_module("monad"), import_name("audio_sound_duration_ms")))
+extern int64_t monad_js_audio_sound_duration_ms(int64_t sound);
+
+__attribute__((import_module("monad"), import_name("media_play")))
+extern int64_t monad_js_media_play(int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("media_pause")))
+extern int64_t monad_js_media_pause(int64_t ptr, int64_t len);
+
+__attribute__((import_module("monad"), import_name("media_seek")))
+extern int64_t monad_js_media_seek(int64_t ptr, int64_t len, int64_t ms);
+
+__attribute__((import_module("monad"), import_name("media_set_volume")))
+extern int64_t monad_js_media_set_volume(int64_t ptr, int64_t len, double volume);
+
+__attribute__((import_module("monad"), import_name("media_set_muted")))
+extern int64_t monad_js_media_set_muted(int64_t ptr, int64_t len, int64_t muted);
+
+__attribute__((import_module("monad"), import_name("media_set_loop")))
+extern int64_t monad_js_media_set_loop(int64_t ptr, int64_t len, int64_t looping);
+
+__attribute__((import_module("monad"), import_name("media_info")))
+extern int64_t monad_js_media_info(int64_t ptr, int64_t len, int64_t which);
+
+__attribute__((import_module("monad"), import_name("media_time_ms")))
+extern int64_t monad_js_media_time_ms(int64_t ptr, int64_t len, int64_t which);
+
+__attribute__((import_module("monad"), import_name("media_volume")))
+extern double monad_js_media_volume(int64_t ptr, int64_t len);
+
+/* The PCM channel: a `Buf F32` is handed over ONLY as its payload pointer
+   plus its recorded element count, and only after the kind check, so the
+   byte range the host views is the one the buffer itself recorded. This is
+   the same gate as `web_gl_buffer_data`; a wrong kind is 0, never a
+   reinterpretation of some other buffer's bytes. */
+static int64_t web_audio_pcm_ptr(int64_t word, int64_t* count_out) {
+    BufObj* obj = (BufObj*)RT_PTR(word);
+    if (!obj || obj->header.tag != MONAD_BUF_TAG) return 0;
+    if (obj->elem_kind != MONAD_ELEM_F32 || obj->len <= 0) return 0;
+    *count_out = obj->len;
+    return (int64_t)(intptr_t)obj->payload;
+}
+
+int64_t web_audio_open(void) {
+    return monad_js_audio_open();
+}
+
+int64_t web_audio_state(int64_t ctx) {
+    return monad_js_audio_state(ctx);
+}
+
+int64_t web_audio_resume(int64_t ctx) {
+    return monad_js_audio_resume(ctx);
+}
+
+int64_t web_audio_now_us(int64_t ctx) {
+    return monad_js_audio_now_us(ctx);
+}
+
+int64_t web_audio_sample_rate(int64_t ctx) {
+    return monad_js_audio_sample_rate(ctx);
+}
+
+int64_t web_audio_set_master(int64_t ctx, double gain) {
+    /* A gain outside 0..1 would be a silent amplifier or a phase flip; the
+       host clamps too, but the value is meaningless above unity here. */
+    if (gain < 0.0) gain = 0.0;
+    if (gain > 1.0) gain = 1.0;
+    return monad_js_audio_set_master(ctx, gain);
+}
+
+int64_t web_audio_tone(int64_t ctx, int64_t wave, double freq, double gain,
+                       int64_t duration_ms, int64_t attack_ms, int64_t release_ms) {
+    if (duration_ms <= 0) return 0;
+    if (attack_ms < 0) attack_ms = 0;
+    if (release_ms < 0) release_ms = 0;
+    /* The envelope cannot outlast the voice; clamping here keeps the host's
+       ramps monotonic instead of relying on Web Audio's tolerance. */
+    if (attack_ms + release_ms > duration_ms) {
+        attack_ms = duration_ms / 2;
+        release_ms = duration_ms - attack_ms;
+    }
+    return monad_js_audio_tone(ctx, wave, freq, gain, duration_ms, attack_ms, release_ms);
+}
+
+int64_t web_audio_stop(int64_t node) {
+    return monad_js_audio_stop(node);
+}
+
+int64_t web_audio_noise(int64_t ctx, double gain, int64_t duration_ms, double lowpass_hz) {
+    if (duration_ms <= 0) return 0;
+    if (lowpass_hz < 0.0) lowpass_hz = 0.0;
+    return monad_js_audio_noise(ctx, gain, duration_ms, lowpass_hz);
+}
+
+int64_t web_audio_play_pcm(int64_t ctx, int64_t frames, int64_t sample_rate, double gain) {
+    int64_t count = 0;
+    int64_t ptr = web_audio_pcm_ptr(frames, &count);
+    /* A sample rate the host cannot resample from (or an absurd one) is a
+       refusal, not a guess: the buffer plays at its declared rate. */
+    if (sample_rate < 1 || sample_rate > 768000) return 0;
+    return monad_js_audio_play_pcm(ctx, ptr, count, sample_rate, gain);
+}
+
+int64_t web_audio_decode_begin(int64_t ctx, int64_t bytes) {
+    BufObj* obj = (BufObj*)RT_PTR(bytes);
+    if (!obj || obj->header.tag != MONAD_BUF_TAG || obj->len <= 0) return 0;
+    /* Copy-before-promise is the HOST's job (`decodeAudioData` detaches its
+       input), but the buffer must still be bytes: a decode of an F32 payload
+       would be a different file. */
+    if (obj->elem_kind != MONAD_ELEM_U8) return 0;
+    return monad_js_audio_decode_begin(ctx, (int64_t)(intptr_t)obj->payload, obj->len);
+}
+
+int64_t web_audio_decode_poll(int64_t op) {
+    return monad_js_audio_decode_poll(op);
+}
+
+int64_t web_audio_decode_sound(int64_t op) {
+    return monad_js_audio_decode_sound(op);
+}
+
+char* web_audio_decode_error(int64_t op) {
+    int64_t n = monad_js_audio_decode_error(op, (int64_t)(intptr_t)web_scratch,
+                                            WEB_SCRATCH_BYTES - 1);
+    return web_take_str(web_scratch, n);
+}
+
+int64_t web_audio_play_sound(int64_t ctx, int64_t sound, double gain,
+                             int64_t offset_ms, int64_t duration_ms) {
+    if (offset_ms < 0) offset_ms = 0;
+    if (duration_ms < 0) duration_ms = 0;
+    return monad_js_audio_play_sound(ctx, sound, gain, offset_ms, duration_ms);
+}
+
+int64_t web_audio_sound_duration_ms(int64_t sound) {
+    return monad_js_audio_sound_duration_ms(sound);
+}
+
+int64_t web_media_play(const char* selector) {
+    return monad_js_media_play(web_str_ptr(selector), web_str_len(selector));
+}
+
+int64_t web_media_pause(const char* selector) {
+    return monad_js_media_pause(web_str_ptr(selector), web_str_len(selector));
+}
+
+int64_t web_media_seek(const char* selector, int64_t ms) {
+    if (ms < 0) ms = 0;
+    return monad_js_media_seek(web_str_ptr(selector), web_str_len(selector), ms);
+}
+
+int64_t web_media_set_volume(const char* selector, double volume) {
+    if (volume < 0.0) volume = 0.0;
+    if (volume > 1.0) volume = 1.0;
+    return monad_js_media_set_volume(web_str_ptr(selector), web_str_len(selector), volume);
+}
+
+int64_t web_media_set_muted(const char* selector, int64_t muted) {
+    return monad_js_media_set_muted(web_str_ptr(selector), web_str_len(selector), muted);
+}
+
+int64_t web_media_set_loop(const char* selector, int64_t looping) {
+    return monad_js_media_set_loop(web_str_ptr(selector), web_str_len(selector), looping);
+}
+
+int64_t web_media_info(const char* selector, int64_t which) {
+    return monad_js_media_info(web_str_ptr(selector), web_str_len(selector), which);
+}
+
+int64_t web_media_time_ms(const char* selector, int64_t which) {
+    return monad_js_media_time_ms(web_str_ptr(selector), web_str_len(selector), which);
+}
+
+double web_media_volume(const char* selector) {
+    return monad_js_media_volume(web_str_ptr(selector), web_str_len(selector));
+}
+
 /* ── entry point ────────────────────────────────────────────────────── */
 
 __attribute__((export_name("monad_main")))

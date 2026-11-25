@@ -101,6 +101,17 @@ def fetch_status_raw (r : RequestId) : RawIO I64
 #[extern "c" {link_name := "web_fetch_read"}]
 def fetch_read_raw (r : RequestId) (max : I64) : RawIO String
 
+/// The bytes still unread in a response body. `fetch_read` copies a chunk
+/// into a Monad `String`, which is NUL-terminated -- so a BINARY body (an
+/// audio file, an image) truncated at its first zero byte. This pair is the
+/// byte channel: `fetch_len` sizes a caller-owned `ByteBuf`, and
+/// `fetch_read_bytes` fills it. Same shape as `ws_peek`/`ws_read`.
+#[extern "c" {link_name := "web_fetch_len"}]
+def fetch_len_raw (r : RequestId) : RawIO I64
+
+#[extern "c" {link_name := "web_fetch_read_bytes"}]
+def fetch_read_bytes_raw (r : RequestId) (buf : ByteBuf) : RawIO I64
+
 #[extern "c" {link_name := "web_clipboard_available"}]
 def clipboard_available_raw : RawIO I64
 
@@ -480,3 +491,149 @@ def ws_buffered_raw (w : WebSocket) : RawIO I64
 
 #[extern "c" {link_name := "web_ws_free"}]
 def ws_free_raw (w : WebSocket) : RawIO I64
+
+// ── Sound and audio (`motes/web_wasm/src/{audio,media_element}.mo`) ────
+//
+// Two browser APIs behind one vocabulary. The Web Audio half synthesizes
+// (`AudioContext` + oscillator/noise/buffer nodes); the media half drives
+// an `<audio>`/`<video>` ELEMENT a view already mounted, addressed by
+// selector the way `Dom.focus` is.
+//
+// A gain is a plain `F64`, a start/stop offset is in seconds, and
+// everything else is a word, so the C wrapper stays a pass-through.
+
+/// Open (or reuse) the page's `AudioContext`. The context starts
+/// suspended until a user gesture; see `Audio.resume`.
+#[extern "c" {link_name := "web_audio_open"}]
+def audio_open_raw : RawIO I64
+
+/// `AudioContext.state` as a word: 0 suspended, 1 running, 2 closed,
+/// 3 interrupted. `Audio.state` maps it.
+#[extern "c" {link_name := "web_audio_state"}]
+def audio_state_raw (ctx : I64) : RawIO I64
+
+/// `AudioContext.resume()` -- the gesture-gated start. Returns 1 when the
+/// context is running after the call, 0 otherwise (the promise may not
+/// have settled, so a caller polls `Audio.state`).
+#[extern "c" {link_name := "web_audio_resume"}]
+def audio_resume_raw (ctx : I64) : RawIO I64
+
+/// `currentTime` in whole MICROseconds, so it crosses as an `I64` without
+/// losing the sub-millisecond resolution a scheduled envelope needs.
+#[extern "c" {link_name := "web_audio_now_us"}]
+def audio_now_us_raw (ctx : I64) : RawIO I64
+
+/// `sampleRate` in Hz (e.g. 48000). `Audio.play_pcm` needs it to declare
+/// a PCM buffer's own rate.
+#[extern "c" {link_name := "web_audio_sample_rate"}]
+def audio_sample_rate_raw (ctx : I64) : RawIO I64
+
+/// The context's master gain (0..1, or more for headroom). Applies to
+/// every voice, so it is the one place a mute belongs.
+#[extern "c" {link_name := "web_audio_set_master"}]
+def audio_set_master_raw (ctx : I64) (gain : F64) : RawIO Unit
+
+/// One oscillator voice: `wave` is a `Wave` code (see `audio.mo`), `freq`
+/// in Hz, `gain` its peak, `duration_ms` how long it sounds, and
+/// `attack_ms`/`release_ms` the linear envelope's two ramps. It starts now
+/// and stops itself, so the node is only needed to cut it short.
+#[extern "c" {link_name := "web_audio_tone"}]
+def audio_tone_raw (ctx : I64) (wave : I64) (freq : F64) (gain : F64)
+    (duration_ms : I64) (attack_ms : I64) (release_ms : I64) : RawIO I64
+
+/// Stop a voice early (`stop(0)` now). Safe on an already-finished one.
+#[extern "c" {link_name := "web_audio_stop"}]
+def audio_stop_raw (node : I64) : RawIO Unit
+
+/// A filtered white-noise burst: `gain` its peak, `duration_ms` how long,
+/// `lowpass_hz` the filter cutoff (0 = no filter). The shape a percussive
+/// hit or a whoosh needs, without a sample file.
+#[extern "c" {link_name := "web_audio_noise"}]
+def audio_noise_raw (ctx : I64) (gain : F64) (duration_ms : I64)
+    (lowpass_hz : F64) : RawIO I64
+
+/// Play `frames` mono samples from a caller-owned `Buf F32` (values in
+/// -1..1), resampled to the context's rate. Returns a node so a long voice
+/// can be stopped; a one-shot drops it. The C wrapper validates the
+/// buffer's kind and length before the host sees its payload.
+#[extern "c" {link_name := "web_audio_play_pcm"}]
+def audio_play_pcm_raw (ctx : I64) (frames : Buf F32) (sample_rate : I64)
+    (gain : F64) : RawIO I64
+
+/// Start decoding an audio FILE (mp3/ogg/wav/...) from bytes: fetch it,
+/// then hand the body here. Two-phase like SHA-256 -- poll
+/// `audio_decode_poll`, then read the `Sound`.
+#[extern "c" {link_name := "web_audio_decode_begin"}]
+def audio_decode_begin_raw (ctx : I64) (bytes : ByteBuf) : RawIO I64
+
+/// 0 pending, 1 done, 2 failed (the fetch/clipboard convention).
+#[extern "c" {link_name := "web_audio_decode_poll"}]
+def audio_decode_poll_raw (op : I64) : RawIO I64
+
+/// The `Sound` a finished decode produced (the null handle otherwise).
+#[extern "c" {link_name := "web_audio_decode_sound"}]
+def audio_decode_sound_raw (op : I64) : RawIO I64
+
+/// The `DOMException.name` a failed decode produced (empty otherwise).
+#[extern "c" {link_name := "web_audio_decode_error"}]
+def audio_decode_error_raw (op : I64) : RawIO String
+
+/// Play a decoded `Sound` whole, or from `offset_ms` for `duration_ms`
+/// (0 for both means "all of it"). `gain` is the voice's peak.
+#[extern "c" {link_name := "web_audio_play_sound"}]
+def audio_play_sound_raw (ctx : I64) (sound : I64) (gain : F64)
+    (offset_ms : I64) (duration_ms : I64) : RawIO I64
+
+/// A `Sound`'s length in whole milliseconds (0 for an unknown handle).
+#[extern "c" {link_name := "web_audio_sound_duration_ms"}]
+def audio_sound_duration_ms_raw (sound : I64) : RawIO I64
+
+// ── `<audio>` / `<video>` element control ──────────────────────────────
+//
+// The ELEMENT is mounted by the view (`Html.audio`/`Html.video`), so a
+// program reaches it by selector exactly as `Dom.focus` does. Every call
+// answers 1 when it found and applied to the element, 0 when no element
+// matched (a selector typo is silent in the DOM, so the flag is the only
+// signal a caller gets).
+//
+// `autoplay` attributes are deliberately NOT the mechanism: a policy that
+// blocks it fails silently, whereas `MediaElement.play` reports the block
+// (state 3).
+
+/// `element.play()`. Returns 0 no such element, 1 playing, 3 blocked by
+/// the autoplay policy (the promise rejected with `NotAllowedError`).
+#[extern "c" {link_name := "web_media_play"}]
+def media_play_raw (selector : String) : RawIO I64
+
+#[extern "c" {link_name := "web_media_pause"}]
+def media_pause_raw (selector : String) : RawIO I64
+
+/// `currentTime = ms / 1000`, clamped to the media's duration by the host.
+#[extern "c" {link_name := "web_media_seek"}]
+def media_seek_raw (selector : String) (ms : I64) : RawIO I64
+
+/// `volume` in 0..1 (the host clamps; `F64` because a fade is fractional).
+#[extern "c" {link_name := "web_media_set_volume"}]
+def media_set_volume_raw (selector : String) (volume : F64) : RawIO I64
+
+#[extern "c" {link_name := "web_media_set_muted"}]
+def media_set_muted_raw (selector : String) (muted : I64) : RawIO I64
+
+#[extern "c" {link_name := "web_media_set_loop"}]
+def media_set_loop_raw (selector : String) (looping : I64) : RawIO I64
+
+/// Element state as one word, selected by `which` (see `media_element.mo`):
+/// 0 paused, 1 ended, 2 readyState, 3 seeking, 4 muted, 5 looping,
+/// 6 playbackRate×1000. Reads 0 for a missing element.
+#[extern "c" {link_name := "web_media_info"}]
+def media_info_raw (selector : String) (which : I64) : RawIO I64
+
+/// `currentTime`/`duration` in whole milliseconds (`which`: 0 current,
+/// 1 duration). `duration` is `NaN` before metadata, which reads as -1 so
+/// a caller can tell it from a zero-length clip.
+#[extern "c" {link_name := "web_media_time_ms"}]
+def media_time_ms_raw (selector : String) (which : I64) : RawIO I64
+
+/// The media's `volume`, 0..1 (1 for a missing element).
+#[extern "c" {link_name := "web_media_volume"}]
+def media_volume_raw (selector : String) : RawIO F64

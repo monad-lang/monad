@@ -120,6 +120,15 @@ def WebImport.fetch_status : WebImport :=
 def WebImport.fetch_read : WebImport :=
     { module := "monad", name := "fetch_read", params := ["i64", "i64", "i64"], result := "i64" }
 
+/// The BINARY body channel: a Monad `String` is NUL-terminated, so
+/// `fetch_read` truncates a media/image body at its first zero byte. These
+/// size a caller-owned buffer and fill it instead.
+def WebImport.fetch_len : WebImport :=
+    { module := "monad", name := "fetch_len", params := ["i64"], result := "i64" }
+
+def WebImport.fetch_read_bytes : WebImport :=
+    { module := "monad", name := "fetch_read_bytes", params := ["i64", "i64", "i64"], result := "i64" }
+
 def WebImport.clipboard_available : WebImport :=
     { module := "monad", name := "clipboard_available", params := List.empty, result := "i64" }
 
@@ -514,6 +523,94 @@ def WebImport.image_load_begin : WebImport :=
 def WebImport.image_info : WebImport :=
     { module := "monad", name := "image_info", params := ["i64", "i64"], result := "i64" }
 
+/// Web Audio (`motes/web_wasm/src/audio.mo`). Contexts, sounds and nodes
+/// are ids into the host's tables; PCM frames cross as a `Buf F32`
+/// (`(ptr, count)` after the C wrapper checked the kind), a decoded file
+/// arrives as bytes in a `ByteBuf`, and decoding is two-phase like the
+/// digest. A time is microseconds as an `i64`, so no `f64` precision is
+/// spent on a schedule.
+def WebImport.audio_open : WebImport :=
+    { module := "monad", name := "audio_open", params := List.empty, result := "i64" }
+
+def WebImport.audio_state : WebImport :=
+    { module := "monad", name := "audio_state", params := ["i64"], result := "i64" }
+
+def WebImport.audio_resume : WebImport :=
+    { module := "monad", name := "audio_resume", params := ["i64"], result := "i64" }
+
+def WebImport.audio_now_us : WebImport :=
+    { module := "monad", name := "audio_now_us", params := ["i64"], result := "i64" }
+
+def WebImport.audio_sample_rate : WebImport :=
+    { module := "monad", name := "audio_sample_rate", params := ["i64"], result := "i64" }
+
+def WebImport.audio_set_master : WebImport :=
+    { module := "monad", name := "audio_set_master", params := ["i64", "f64"], result := "void" }
+
+def WebImport.audio_tone : WebImport :=
+    { module := "monad", name := "audio_tone",
+        params := ["i64", "i64", "f64", "f64", "i64", "i64", "i64"], result := "i64" }
+
+def WebImport.audio_stop : WebImport :=
+    { module := "monad", name := "audio_stop", params := ["i64"], result := "void" }
+
+def WebImport.audio_noise : WebImport :=
+    { module := "monad", name := "audio_noise",
+        params := ["i64", "f64", "i64", "f64"], result := "i64" }
+
+def WebImport.audio_play_pcm : WebImport :=
+    { module := "monad", name := "audio_play_pcm",
+        params := ["i64", "i64", "i64", "i64", "f64"], result := "i64" }
+
+def WebImport.audio_decode_begin : WebImport :=
+    { module := "monad", name := "audio_decode_begin", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.audio_decode_poll : WebImport :=
+    { module := "monad", name := "audio_decode_poll", params := ["i64"], result := "i64" }
+
+def WebImport.audio_decode_sound : WebImport :=
+    { module := "monad", name := "audio_decode_sound", params := ["i64"], result := "i64" }
+
+def WebImport.audio_decode_error : WebImport :=
+    { module := "monad", name := "audio_decode_error", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.audio_play_sound : WebImport :=
+    { module := "monad", name := "audio_play_sound",
+        params := ["i64", "i64", "f64", "i64", "i64"], result := "i64" }
+
+def WebImport.audio_sound_duration_ms : WebImport :=
+    { module := "monad", name := "audio_sound_duration_ms", params := ["i64"], result := "i64" }
+
+/// `<audio>`/`<video>` element control (`motes/web_wasm/src/media_element.mo`).
+/// Every call takes the element's SELECTOR (the node is mounted by the
+/// view), and the setters answer 1 when an element matched, 0 when not.
+def WebImport.media_play : WebImport :=
+    { module := "monad", name := "media_play", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.media_pause : WebImport :=
+    { module := "monad", name := "media_pause", params := ["i64", "i64"], result := "i64" }
+
+def WebImport.media_seek : WebImport :=
+    { module := "monad", name := "media_seek", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.media_set_volume : WebImport :=
+    { module := "monad", name := "media_set_volume", params := ["i64", "i64", "f64"], result := "i64" }
+
+def WebImport.media_set_muted : WebImport :=
+    { module := "monad", name := "media_set_muted", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.media_set_loop : WebImport :=
+    { module := "monad", name := "media_set_loop", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.media_info : WebImport :=
+    { module := "monad", name := "media_info", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.media_time_ms : WebImport :=
+    { module := "monad", name := "media_time_ms", params := ["i64", "i64", "i64"], result := "i64" }
+
+def WebImport.media_volume : WebImport :=
+    { module := "monad", name := "media_volume", params := ["i64", "i64"], result := "f64" }
+
 def WebExport.oak_mount : WebExport := { name := "oak_mount" }
 def WebExport.oak_dispatch_event : WebExport := { name := "oak_dispatch_event" }
 def WebExport.oak_tick : WebExport := { name := "oak_tick" }
@@ -533,7 +630,7 @@ pub def WebAbi.default : WebAbi :=
             WebImport.dom_node_type, WebImport.dom_in_svg, WebImport.dom_tag_name, WebImport.dom_value,
             WebImport.dom_query,
             WebImport.fetch_begin, WebImport.fetch_poll, WebImport.fetch_status,
-            WebImport.fetch_read,
+            WebImport.fetch_read, WebImport.fetch_len, WebImport.fetch_read_bytes,
             WebImport.clipboard_available, WebImport.clipboard_read_begin,
             WebImport.clipboard_write_begin, WebImport.clipboard_poll,
             WebImport.clipboard_read, WebImport.clipboard_error,
@@ -578,7 +675,18 @@ pub def WebAbi.default : WebAbi :=
             WebImport.gl_uniform_matrix, WebImport.gl_tex_image_pixels,
             WebImport.gl_state_f, WebImport.gl_tex_image_depth,
             WebImport.gl_framebuffer_texture,
-            WebImport.image_load_begin, WebImport.image_info
+            WebImport.image_load_begin, WebImport.image_info,
+            WebImport.audio_open, WebImport.audio_state, WebImport.audio_resume,
+            WebImport.audio_now_us, WebImport.audio_sample_rate,
+            WebImport.audio_set_master, WebImport.audio_tone, WebImport.audio_stop,
+            WebImport.audio_noise, WebImport.audio_play_pcm,
+            WebImport.audio_decode_begin, WebImport.audio_decode_poll,
+            WebImport.audio_decode_sound, WebImport.audio_decode_error,
+            WebImport.audio_play_sound, WebImport.audio_sound_duration_ms,
+            WebImport.media_play, WebImport.media_pause, WebImport.media_seek,
+            WebImport.media_set_volume, WebImport.media_set_muted,
+            WebImport.media_set_loop, WebImport.media_info,
+            WebImport.media_time_ms, WebImport.media_volume
         ],
             exports := [
                 WebExport.oak_mount, WebExport.oak_dispatch_event, WebExport.oak_tick

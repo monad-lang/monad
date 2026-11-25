@@ -38,3 +38,8 @@ pub type WebSocket {
 pub instance Copy WebSocket {
     def copy (w : WebSocket) : Pair WebSocket WebSocket := Pair.pair w w
 }
+
+// The sound and audio handles live in `lib::audio` (`AudioCtx`, `Sound`,
+// `AudioNode`), beside the operations that produce them: unlike the types
+// above they carry a readable `id`, the shape `GlContext` has, because a
+// program must be able to tell the null handle (0) from a live one.

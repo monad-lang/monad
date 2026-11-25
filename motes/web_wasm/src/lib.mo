@@ -6,6 +6,9 @@
 
 pub use lib::types {Node, RequestId, ClipboardOp, CryptoOp, WebKey}
 pub use web_event::event {WebEvent, FileInfo}
+// The pure sound vocabulary, re-exported beside the event one so an app that
+// depends on `web_wasm` alone can name a `SoundFx`/`MediaCmd`/`Wave`.
+pub use web_event::sound {SoundFx, MediaCmd, Wave, SoundFx.is_silence, Wave.code}
 
 pub use lib::web_abi {
     WebAbi, WebAbi.default, WebExport, WebImport,
@@ -25,7 +28,7 @@ pub use lib::dom {
 
 pub use lib::fetch {
     Fetch.begin, Fetch.begin_with, Fetch.poll, Fetch.status,
-    Fetch.response_headers, Fetch.read, decode_headers,
+    Fetch.response_headers, Fetch.read, Fetch.get_bytes, Fetch.remaining, decode_headers,
 }
 pub use lib::clipboard {
     Clipboard.available, Clipboard.read_begin, Clipboard.write_begin,
@@ -41,6 +44,26 @@ pub use lib::storage {
     Storage.remove, Storage.clear,
 }
 pub use lib::media {Media.matches, Media.watch, Media.unwatch}
+
+// Sound: Web Audio synthesis and decoding (`audio`), and `<audio>`/`<video>`
+// transport control (`media_element`). The handles are declared in `audio`,
+// so an app that only plays files depends on `lib::media_element` and never
+// names an `AudioCtx`.
+pub use lib::audio {
+    AudioCtx, Sound, AudioNode, AudioState, Audio.context, Audio.supported,
+    Audio.state, Audio.is_running, Audio.resume, Audio.now, Audio.sample_rate,
+    Audio.set_master, Audio.tone, Audio.beep, Audio.noise, Audio.play_pcm,
+    Audio.stop, Audio.decode_sound, Audio.decode_poll, Audio.decode_error,
+    Audio.decode_begin, Audio.decode, Audio.play_sound, Audio.play_sound_slice,
+    Audio.sound_duration_ms,
+}
+pub use lib::media_element {
+    PlayOutcome, ReadyState, MediaState,
+    MediaElement.play, MediaElement.pause, MediaElement.seek,
+    MediaElement.set_volume, MediaElement.set_muted, MediaElement.set_loop,
+    MediaElement.present, MediaElement.play_blocked, MediaElement.state,
+    MediaElement.position_ms, MediaElement.duration_ms, MediaElement.volume,
+}
 pub use lib::crypto {
     Crypto.random_bytes, Crypto.sha256_begin, Crypto.poll, Crypto.result_hex,
     Crypto.error, Crypto.op_key, Crypto.await_op,
