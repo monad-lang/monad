@@ -2666,17 +2666,17 @@ def compile_cubical_ir (c : CodegenCtx) (cub_ : Cubical) : CompileResult :=
 // the very word it was given, which is what makes a single i64 result
 // enough for both halves of the pair.
 //
-// Two source shapes reach this plan: the pure `let x := Cell.get c in
-// body` (the accessors are pure linear mutations -- the native mutates
-// only the handle it consumes and returns, so there is nothing for `IO`
-// to track) and, for one transition, the IO do-bind the library used to
-// require. Both build the same `ViewBindPlan`.
+// The source shape is the pure `let x := Cell.get c in body`: the accessors
+// are pure linear mutations (the native mutates only the handle it consumes
+// and returns, so there is nothing for `IO` to track), and a `let` is the
+// parser's `app (lam x ?) body`. Before 2026-11-25 the accessors returned
+// `IO` and the shape was a do-bind; that matcher is gone with the API.
 //
 // This is shape-selected, never a semantic change. An escaping pair (the
-// `finish_with_42`/`write_again` shape in `init/src/view_tests.mo`), a
-// hand-written bind, or a continuation that is not the immediate match
-// falls straight through to the boxed path, which is unchanged and
-// remains the reference semantics (the Rust host interprets that path).
+// `finish_with_42`/`write_again` shape in `init/src/view_tests.mo`) or a
+// continuation that is not the immediate match falls straight through to the
+// boxed path, which is unchanged and remains the reference semantics (the
+// Rust host interprets that path).
 //
 // The accessor head is matched by its RESOLVED symbol
 // (`init.view::Cell.get`, ...), not a bare name, so a user def that
@@ -2720,34 +2720,6 @@ def view_op_of_name (name : String) : Option ViewBindOp :=
     else if String.beq name "init.view::Cell.free" then Option.some ViewBindOp.view_free
     else Option.none
 
-/// A do-bind head as codegen sees it. The parser's do-lowering spells
-/// `Monad.bind`, but elaboration rewrites the call through the `Monad
-/// IO` instance to that instance's promoted method
-/// (`...::Monad_IO_bind`), so both spellings are accepted. Only the
-/// IO/RawIO instances qualify: a Cell accessor's result is IO-typed,
-/// and fusing under any other Monad (List's multi-shot bind) would
-/// drop a box the continuation is entitled to.
-///
-/// The promoted-method spelling is matched by SUFFIX, not a resolved
-/// symbol: the class's declared module is part of the mangled name
-/// (`init.io::prelude::Monad_IO_bind`) and is not stable across a
-/// prelude move, while the class/carrier/method tail is. A user def
-/// whose name happens to end in `Monad_IO_bind` cannot fuse unless it is
-/// ALSO applied in bind position to a Cell accessor, which the caller
-/// (`view_bind_plan`) requires.
-#[partial]
-def is_view_bind_head (t : Term) : Bool :=
-    match spine_head_name t {
-        Option.some n =>
-            let name : String := n in
-            String.beq name "Monad.bind"
-                || String.beq name "IO.bind"
-                || String.beq name "RawIO.bind"
-                || String.ends_with name "Monad_IO_bind"
-                || String.ends_with name "Monad_RawIO_bind",
-        Option.none => false,
-    }
-
 #[partial]
 def view_accessor_of (t : Term) : Option ViewAccessorCall :=
     match flatten_app_spine t {
@@ -2784,31 +2756,6 @@ def view_let_plan (fun : Term) (arg : Term) : Option ViewBindPlan :=
                             Option.some plan,
                     },
                 Option.none => Option.none,
-            },
-        _ => Option.none,
-    }
-
-/// `app (app <bind> <initializer>) (lam x => body)` -- the same shape
-/// `lang/typecheck/usage.mo`'s `bind_continuation` keys on.
-#[partial]
-def view_bind_plan (callee : Term) (arg : Term) : Option ViewBindPlan :=
-    match term_peel arg {
-        Term.lam b _typ body =>
-            match term_peel callee {
-                Term.app f m =>
-                    if is_view_bind_head f then
-                        match view_accessor_of m {
-                            Option.some call =>
-                                match call {
-                                    { op, args } =>
-                                        let plan : ViewBindPlan :=
-                                            { op := op, args := args, binder := b, body := body } in
-                                        Option.some plan,
-                                },
-                            Option.none => Option.none,
-                        }
-                    else Option.none,
-                _ => Option.none,
             },
         _ => Option.none,
     }
@@ -3154,17 +3101,9 @@ def compile_view_bind_db (c : CodegenCtx) (plan : ViewBindPlan) : Option Compile
 
 #[partial]
 def try_compile_view_bind_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option CompileResult :=
-    // Two shapes reach the same plan: the IO do-bind (`app (app bind m)
-    // lam`, before the accessors became pure) and the pure let
-    // (`app lam <accessor call>`, after). Keeping both costs one clause and
-    // lets the API flip land without a flag day in the golden IR.
-    match view_bind_plan fun arg {
+    match view_let_plan fun arg {
+        Option.none => Option.none,
         Option.some plan => compile_view_bind_db c plan,
-        Option.none =>
-            match view_let_plan fun arg {
-                Option.some plan => compile_view_bind_db c plan,
-                Option.none => Option.none,
-            },
     }
 
 // ── IO do-bind fusion (heapless-loops H1) ───────────────────────────
@@ -3263,8 +3202,8 @@ def io_bind_head_kind (t : Term) : Option IoBindKind :=
         Option.none => Option.none,
     }
 
-/// `app (app <IO bind> <initializer>) (lam x => body)` -- the same shape
-/// `view_bind_plan` keys on, with the IO/RawIO bind head.
+/// `app (app <IO bind> <initializer>) (lam x => body)` -- a do-bind, with
+/// the IO/RawIO bind head.
 #[partial]
 def io_bind_plan (callee : Term) (arg : Term) : Option IoBindPlan :=
     match term_peel arg {
@@ -3415,11 +3354,11 @@ def try_compile_io_bind_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option C
 
 #[partial]
 def compile_db_app_ir (c : CodegenCtx) (fun : Term) (arg : Term) : CompileResult :=
-    // The view fusion first: its shape (`app (app bind accessor) lam`) is
-    // also matched by the IO fusion below, and only the view fusion knows
-    // how to read the payload without building the `Pair`. Then the
-    // general IO fusion, which claims every other IO do-bind. Both run
-    // before `try_compile_let_beta_db` could lift the continuation.
+    // The view fusion first: its shape (`app lam <view accessor call>`) is
+    // also a plain let-beta redex, and only the view fusion knows how to
+    // read the payload without building the `Pair`. Then the general IO
+    // fusion, which claims every IO do-bind. Both run before
+    // `try_compile_let_beta_db` could lift the continuation.
     match try_compile_view_bind_db c fun arg {
         Option.some result => result,
         Option.none =>
