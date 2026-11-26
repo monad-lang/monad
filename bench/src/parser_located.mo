@@ -114,7 +114,7 @@ def run_located_bench_on (path : String) (src : String) : IO Bool := do {
         (String.concat " (" (String.concat (I64.to_string bytes) " bytes)"))));
 
     // The offset list first: it is the diagnostic, and it is cheap.
-    let pre : List ParseDecl := pre_decls (parse_decls_only src);
+    let pre : List ParseDecl := pre_decls (parse_decls_only (Text.of_string src));
     let offsets : List I64 := loc_table_offsets src pre;
     let n_off : I64 := List.length offsets;
     let asc : Bool := is_ascending offsets;
@@ -130,13 +130,13 @@ def run_located_bench_on (path : String) (src : String) : IO Bool := do {
     Bench.report_since "  decls_parser         " t_plain;
     let t_loc : I64 <- Bench.now;
     let located : I64 := parsed_count (decls_parser_located (Text.of_string src));
-    Bench.report_since "  decls_parser_located (Text.of_string " t_loc;
+    Bench.report_since "  decls_parser_located " t_loc;
 
     // Both parsers must agree on the decl count. A located parse that
     // silently produced fewer decls would look faster here rather than
     // showing up as a wrong answer -- the same guard
     // `bench/parser_take_while.mo` uses for its byte scanners.
-    println (String.concat ")  decls: plain " (String.concat (I64.to_string plain)
+    println (String.concat "  decls: plain " (String.concat (I64.to_string plain)
         (String.concat " located " (I64.to_string located))));
     return (I64.gt plain 0 && I64.beq plain located)
 }

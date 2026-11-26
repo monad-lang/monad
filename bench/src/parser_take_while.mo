@@ -69,25 +69,25 @@ def consumed (r : ParseResult Text String) : I64 :=
     }
 
 #[terminating]
-def scan_spaces (i : I64) (n : I64) (input : String) (acc : I64) : I64 :=
+def scan_spaces (i : I64) (n : I64) (input : Text) (acc : I64) : I64 :=
     if I64.beq i n
     then acc
     else scan_spaces (i + 1) n input (acc + consumed (take_while is_space input))
 
 #[terminating]
-def scan_idents (i : I64) (n : I64) (input : String) (acc : I64) : I64 :=
+def scan_idents (i : I64) (n : I64) (input : Text) (acc : I64) : I64 :=
     if I64.beq i n
     then acc
     else scan_idents (i + 1) n input (acc + consumed (take_while is_ident_char input))
 
 #[terminating]
-def scan_spaces_byte (i : I64) (n : I64) (input : String) (acc : I64) : I64 :=
+def scan_spaces_byte (i : I64) (n : I64) (input : Text) (acc : I64) : I64 :=
     if I64.beq i n
     then acc
     else scan_spaces_byte (i + 1) n input (acc + consumed (take_while_byte is_space_byte input))
 
 #[terminating]
-def scan_idents_byte (i : I64) (n : I64) (input : String) (acc : I64) : I64 :=
+def scan_idents_byte (i : I64) (n : I64) (input : Text) (acc : I64) : I64 :=
     if I64.beq i n
     then acc
     else scan_idents_byte (i + 1) n input (acc + consumed (take_while_byte is_ident_char_byte input))
@@ -95,8 +95,8 @@ def scan_idents_byte (i : I64) (n : I64) (input : String) (acc : I64) : I64 :=
 /// `calls` * `run_len` characters scanned by each predicate, so the two
 /// shapes below are directly comparable per character.
 def run_bench (calls : I64) (run_len : I64) (label : String) : IO Bool := do {
-    let spaces : String := grow_to " " run_len;
-    let idents : String := grow_to "a" run_len;
+    let spaces : Text := Text.of_string (grow_to " " run_len);
+    let idents : Text := Text.of_string (grow_to "a" run_len);
     let sp_start : I64 <- Bench.now;
     let sp_total := scan_spaces 0 calls spaces 0;
     Bench.report_since (String.concat "take_while is_space      " label) sp_start;
