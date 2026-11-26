@@ -214,6 +214,27 @@ def ResultT.bind_step [Monad M] {E : Type} {A : Type} {B : Type} (f : A -> Resul
         Result.err e => Monad.pure (Result.err e)
     }
 
+/// `Alternative` for an error-carrying layer: run the left; on `Result.err`,
+/// run the right. This is `catch-and-retry`, the shape a backtracking parser
+/// built ON a `ResultT` needs -- and the reason `ResultT` is the error half of
+/// the stack `Parser` bridges to (`motes/parsec/src/parser.mo`).
+///
+/// `empty` has to invent an error value, so the instance requires
+/// `Inhabited E` (`init/prelude.mo`). A type without a canonical default
+/// simply cannot use `empty`; `or_else` alone would not need it.
+def resultt_alt_step [Monad M] (b : ResultT E M A) (r : Result E A) : M (Result E A) :=
+    match r {
+        Result.ok a => Monad.pure (Result.ok a),
+        Result.err _ => ResultT.run b
+    }
+
+pub instance [Monad M, Inhabited E] Alternative (ResultT E M) {
+    def empty : ResultT E M A :=
+        ResultT.mk (Monad.pure (Result.err (Inhabited.default)))
+    def or_else (a : ResultT E M A) (b : ResultT E M A) : ResultT E M A :=
+        ResultT.mk (Monad.bind (ResultT.run a) (resultt_alt_step b))
+}
+
 pub instance [Monad M] Monad (ResultT E M) {
     def pure (a : A) : ResultT E M A :=
         ResultT.mk (Monad.pure (Result.ok a))
@@ -271,6 +292,34 @@ def OptionT.bind_step [Monad M] {A : Type} {B : Type} (f : A -> OptionT M B) (o 
         Option.some a => OptionT.run (f a),
         Option.none => Monad.pure Option.none
     }
+
+/// `Alternative` for the option layer: `none` falls through to the right
+/// branch (`empty = pure none`).
+///
+/// **`StateT` and `IdentityT` deliberately have no `Alternative` instance.**
+/// Both would have to call `Alternative.or_else` on the UNDERLYING monad's
+/// values, and that shape compiles to a call whose dictionary resolves to the
+/// enclosing instance -- the driver dies with `driver exited -1` -- because a
+/// class-method call to the class being defined, at a different carrier,
+/// mis-resolves (the same family as
+/// `plans/implementations/2026-10-24-constrained-call-in-nested-lambda-gets-dict-index-0.md`).
+/// `ResultT` and `OptionT` are expressible because they inspect a `Result`/
+/// `Option` the underlying monad already produced (`Monad.bind` + match)
+/// rather than forwarding the class call. `empty` alone works on both shapes
+/// (`Alternative.empty` on a `StateT`/`IdentityT` is exercised nowhere yet).
+/// Revisit when the dictionary-resolution bug is fixed.
+def optiont_alt_step [Monad M] (b : OptionT M A) (r : Option A) : M (Option A) :=
+    match r {
+        Option.some a => Monad.pure (Option.some a),
+        Option.none => OptionT.run b
+    }
+
+pub instance [Monad M] Alternative (OptionT M) {
+    def empty : OptionT M A :=
+        OptionT.mk (Monad.pure Option.none)
+    def or_else (a : OptionT M A) (b : OptionT M A) : OptionT M A :=
+        OptionT.mk (Monad.bind (OptionT.run a) (optiont_alt_step b))
+}
 
 pub instance [Monad M] Monad (OptionT M) {
     def pure (a : A) : OptionT M A :=

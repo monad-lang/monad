@@ -97,6 +97,21 @@ pub class [Applicative M] Monad (M : Type -> Type) {
 
 pub infix (>>=) := Monad.bind
 
+/// Choice: a value that can FAIL (`empty`) and a way to try one and fall back
+/// to another (`or_else`). `Alternative` is what a parser's `<|>` is built
+/// from -- see `motes/parsec/src/parser.mo`, whose instance backtracks to the
+/// cursor the failed branch started at.
+///
+/// `or_else`, not `alt`: `parsec.combinators` already exports a plain `alt`
+/// function over parser functions, and this class names the operation in a way
+/// that cannot be confused with it at a call site.
+pub class Alternative (F : Type -> Type) {
+    def empty : F A
+    def or_else (a : F A) (b : F A) : F A
+}
+
+pub infix (<|>) := Alternative.or_else
+
 /// Dual of `Monad`: `extract` pulls the value out of a context; `duplicate`
 /// and `extend` push the context inwards. All three are required -- the usual
 /// `extend f = map f . duplicate` default would need a `Functor` superclass

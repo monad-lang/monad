@@ -308,3 +308,39 @@ def test_resultt_lift_uses_the_underlying_monad : Bool :=
         Result.ok v => v == 7,
         Result.err _ => false
     }
+
+// ─── Alternative instances ─────────────────────────────────────────────
+//
+// Instance resolution is a RUNTIME step in Monad, so `check` alone cannot see
+// a missing instance -- every one of these has to EXECUTE (this file's own
+// header). `Alternative` is what a parser's `<|>` is built from; the layers
+// below are the shapes a parser sits in.
+
+/// `ResultT`: the left branch fails with an error, so the right one runs.
+#[test]
+def test_resultt_alt_retries_on_err : Bool :=
+    let bad : ResultT I64 Id I64 := ResultT.throw 1 in
+    let good : ResultT I64 Id I64 := Monad.pure 5 in
+    match Id.run (ResultT.run (Alternative.or_else bad good)) {
+        Result.ok n => I64.beq n 5,
+        Result.err _ => false
+    }
+
+/// `empty` is an error carrying the type's `Inhabited.default`.
+#[test]
+def test_resultt_empty_is_an_err : Bool :=
+    let m : ResultT I64 Id I64 := Alternative.empty in
+    match Id.run (ResultT.run m) {
+        Result.ok _ => false,
+        Result.err e => I64.beq e 0
+    }
+
+/// `OptionT`: `none` falls through to the right branch.
+#[test]
+def test_optiont_alt_falls_through : Bool :=
+    let none_m : OptionT Id I64 := OptionT.mk (Id.id Option.none) in
+    let some_m : OptionT Id I64 := OptionT.mk (Id.id (Option.some 3)) in
+    match Id.run (OptionT.run (Alternative.or_else none_m some_m)) {
+        Option.some n => I64.beq n 3,
+        Option.none => false
+    }
