@@ -30,7 +30,7 @@
 // change, both copies change; `cubical_props.mo`'s own preamble says the
 // same about its copy of the prelude's `with Cubical` block.
 
-use lang::module {try_parse_decls}
+use lang::module {try_parse_decls_str}
 use lang::scope {build_scope_from_decls}
 use lang::typecheck::infer {empty_local_types, empty_locals, type_check}
 use lang::types {
@@ -76,7 +76,7 @@ def equiv_decls_source : String :=
 /// The declarations, or the empty list on a parse failure -- which makes
 /// every pin below fail rather than silently pass against nothing.
 def equiv_decls : List Decl :=
-    match try_parse_decls equiv_decls_source {
+    match try_parse_decls_str equiv_decls_source {
         Option.some decl_list => decl_list,
         Option.none => List.empty,
     }

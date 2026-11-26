@@ -46,11 +46,11 @@ use std::list {List.filter, List.intercalate, Show}
 use std::parse {Parse.f64}
 use init::string {}
 use init::number {}
-use parsec::core {
-    ParseError, ParseResult, is_empty, parse_error_remaining
-}
+use parsec::core {ParseError, ParseResult, is_empty, parse_error_remaining, Text}
+use parsec::input {Input}
 use parsec::char_preds {is_ident_char}
 use parsec::combinators {
+    text_char_width,
     alt, alt_fold, delimited_by, many0, map_parse, separated_by, tag, take_while,
     utf8_char_width,
 }
@@ -231,20 +231,20 @@ type Toml.Asm {
 def Toml.is_hspace (c : String) : Bool :=
     if String.beq " " c then true else String.beq "\t" c
 
-def toml_ws (input : String) : ParseResult String :=
+def toml_ws (input : Text) : ParseResult Text String :=
     take_while Toml.is_hspace input
 
-def toml_comma (input : String) : ParseResult String :=
+def toml_comma (input : Text) : ParseResult Text String :=
     delimited_by toml_ws (tag ",") toml_ws input
 
-def toml_eq (input : String) : ParseResult String :=
+def toml_eq (input : Text) : ParseResult Text String :=
     delimited_by toml_ws (tag "=") toml_ws input
 
 /// One byte of `s` as an `I64`, or -1 past the end. The byte-level parsers
 /// (numbers, date-times, escapes) all key off this rather than a
 /// `String.slice` per position: one byte per comparison, no allocation.
-def Toml.byte_at (s : String) (i : I64) : I64 :=
-    match String.get s i {
+def Toml.byte_at (s : Text) (i : I64) : I64 :=
+    match Input.input_byte_at i s {
         Option.some b => U8.to_i64 b,
         Option.none => -1
     }
@@ -262,12 +262,12 @@ def Toml.bytes_of (s : String) : List U8 :=
 /// the fold an empty piece that reads as end-of-input (the same trap
 /// `lang/json.mo`'s string parsers document).
 #[partial]
-def Toml.string_chars (s : String) : List String :=
-    if is_empty s
+def Toml.string_chars (s : Text) : List String :=
+    if Input.at_end s
     then List.empty
     else
-        let width : I64 := utf8_char_width s in
-        List.cons (String.slice s 0 width) (Toml.string_chars (String.drop width s))
+        let width : I64 := text_char_width s in
+        List.cons (Input.input_text width s) (Toml.string_chars (Input.input_advance width s))
 
 // ─── Parser: keys ───
 
@@ -277,7 +277,7 @@ def Toml.string_chars (s : String) : List String :=
 def Toml.is_key_char (c : String) : Bool :=
     if is_ident_char c then true else String.beq "-" c
 
-def toml_bare_key_result (r : ParseResult String) : ParseResult String :=
+def toml_bare_key_result (r : ParseResult Text String) : ParseResult Text String :=
     match r {
         success rem raw =>
             let out : String := raw in
@@ -286,30 +286,30 @@ def toml_bare_key_result (r : ParseResult String) : ParseResult String :=
     }
 
 /// Parse a single bare key (one path segment — no dots). Non-empty.
-def Toml.bare_key (input : String) : ParseResult String :=
+def Toml.bare_key (input : Text) : ParseResult Text String :=
     toml_bare_key_result (take_while Toml.is_key_char input)
 
 /// A single-line basic string's TEXT (between the quotes).
 #[partial]
-def Toml.basic_string_text (input : String) : ParseResult String :=
+def Toml.basic_string_text (input : Text) : ParseResult Text String :=
     toml_basic_text_open (tag "\"" input)
 
 #[partial]
-def toml_basic_text_open (r : ParseResult String) : ParseResult String :=
+def toml_basic_text_open (r : ParseResult Text String) : ParseResult Text String :=
     match r {
         success rem _ => toml_basic_text_body (Toml.basic_string_content rem),
         fail e => fail e
     }
 
 #[partial]
-def toml_basic_text_body (r : ParseResult (List String)) : ParseResult String :=
+def toml_basic_text_body (r : ParseResult Text (List String)) : ParseResult Text String :=
     match r {
         success rem chars => toml_basic_text_close (tag "\"" rem) chars,
         fail e => fail e
     }
 
 #[partial]
-def toml_basic_text_close (r : ParseResult String) (chars : List String) : ParseResult String :=
+def toml_basic_text_close (r : ParseResult Text String) (chars : List String) : ParseResult Text String :=
     match r {
         success rem _ => success rem (String.concat_list chars),
         fail e => fail e
@@ -318,25 +318,25 @@ def toml_basic_text_close (r : ParseResult String) (chars : List String) : Parse
 /// A single-line literal string's TEXT (between the quotes) — raw, no
 /// escapes.
 #[partial]
-def Toml.literal_string_text (input : String) : ParseResult String :=
+def Toml.literal_string_text (input : Text) : ParseResult Text String :=
     toml_literal_text_open (tag "'" input)
 
 #[partial]
-def toml_literal_text_open (r : ParseResult String) : ParseResult String :=
+def toml_literal_text_open (r : ParseResult Text String) : ParseResult Text String :=
     match r {
         success rem _ => toml_literal_text_body (Toml.literal_string_content rem),
         fail e => fail e
     }
 
 #[partial]
-def toml_literal_text_body (r : ParseResult (List String)) : ParseResult String :=
+def toml_literal_text_body (r : ParseResult Text (List String)) : ParseResult Text String :=
     match r {
         success rem chars => toml_literal_text_close (tag "'" rem) chars,
         fail e => fail e
     }
 
 #[partial]
-def toml_literal_text_close (r : ParseResult String) (chars : List String) : ParseResult String :=
+def toml_literal_text_close (r : ParseResult Text String) (chars : List String) : ParseResult Text String :=
     match r {
         success rem _ => success rem (String.concat_list chars),
         fail e => fail e
@@ -347,13 +347,13 @@ def toml_literal_text_close (r : ParseResult String) (chars : List String) : Par
 /// collide — which is what TOML says, and what the assembler's duplicate
 /// detection then reports.
 #[partial]
-def Toml.quoted_key (input : String) : ParseResult String :=
+def Toml.quoted_key (input : Text) : ParseResult Text String :=
     alt Toml.basic_string_text Toml.literal_string_text input
 
 /// One key segment: bare, or quoted. Quoted first — a bare key cannot
 /// start with a quote, so the order only matters for the error message.
 #[partial]
-def Toml.key_segment (input : String) : ParseResult String :=
+def Toml.key_segment (input : Text) : ParseResult Text String :=
     alt Toml.quoted_key Toml.bare_key input
 
 /// A dotted key path (`a.b."c d"`), segments separated by `.` with
@@ -361,11 +361,11 @@ def Toml.key_segment (input : String) : ParseResult String :=
 /// segment; an empty BARE segment (`a..b`, `a.`) is an error reported
 /// where it happens.
 #[partial]
-def Toml.dotted_path (input : String) : ParseResult (List String) :=
+def Toml.dotted_path (input : Text) : ParseResult Text (List String) :=
     toml_path_start (Toml.key_segment input)
 
 #[partial]
-def toml_path_start (r : ParseResult String) : ParseResult (List String) :=
+def toml_path_start (r : ParseResult Text String) : ParseResult Text (List String) :=
     match r {
         success rem seg => toml_path_more rem [seg],
         fail e => fail e
@@ -375,7 +375,7 @@ def toml_path_start (r : ParseResult String) : ParseResult (List String) :=
 /// segment MUST follow. No dot ends the path — trailing whitespace is
 /// left for the caller, whose `=`/`]`/`}` parsers each expect it.
 #[partial]
-def toml_path_more (input : String) (acc : List String) : ParseResult (List String) :=
+def toml_path_more (input : Text) (acc : List String) : ParseResult Text (List String) :=
     match toml_path_dot input {
         success rem _ => toml_path_next (Toml.key_segment rem) acc,
         fail _ => success input acc
@@ -383,11 +383,11 @@ def toml_path_more (input : String) (acc : List String) : ParseResult (List Stri
 
 /// The `.` between segments, with whitespace on both sides.
 #[partial]
-def toml_path_dot (input : String) : ParseResult String :=
+def toml_path_dot (input : Text) : ParseResult Text String :=
     delimited_by toml_ws (tag ".") toml_ws input
 
 #[partial]
-def toml_path_next (r : ParseResult String) (acc : List String) : ParseResult (List String) :=
+def toml_path_next (r : ParseResult Text String) (acc : List String) : ParseResult Text (List String) :=
     match r {
         success rem seg => toml_path_more rem (List.append acc [seg]),
         fail e => fail e
@@ -400,11 +400,11 @@ def toml_path_next (r : ParseResult String) (acc : List String) : ParseResult (L
 /// to real UTF-8. Surrogate halves and anything above U+10FFFF are
 /// ERRORS, not U+FFFD — TOML forbids them outright.
 #[partial]
-def Toml.parse_escape (input : String) : ParseResult String :=
+def Toml.parse_escape (input : Text) : ParseResult Text String :=
     toml_escape_open (tag "\\" input)
 
 #[partial]
-def toml_escape_open (r : ParseResult String) : ParseResult String :=
+def toml_escape_open (r : ParseResult Text String) : ParseResult Text String :=
     match r {
         success rem _ => Toml.escape_at rem,
         fail e => fail e
@@ -412,20 +412,20 @@ def toml_escape_open (r : ParseResult String) : ParseResult String :=
 
 /// After the backslash: dispatch on the escape's letter.
 #[partial]
-def Toml.escape_at (rem : String) : ParseResult String :=
-    if is_empty rem
+def Toml.escape_at (rem : Text) : ParseResult Text String :=
+    if Input.at_end rem
     then fail (ParseError.custom "unterminated escape sequence" rem)
     else
         let b : I64 := Toml.byte_at rem 0 in
-        if I64.beq b 34 then success (String.drop 1 rem) "\""
-        else if I64.beq b 92 then success (String.drop 1 rem) "\\"
-        else if I64.beq b 98 then success (String.drop 1 rem) "\b"
-        else if I64.beq b 116 then success (String.drop 1 rem) "\t"
-        else if I64.beq b 110 then success (String.drop 1 rem) "\n"
-        else if I64.beq b 102 then success (String.drop 1 rem) "\f"
-        else if I64.beq b 114 then success (String.drop 1 rem) "\r"
-        else if I64.beq b 117 then Toml.unicode_escape 4 (String.drop 1 rem)
-        else if I64.beq b 85 then Toml.unicode_escape 8 (String.drop 1 rem)
+        if I64.beq b 34 then success (Input.input_advance 1 rem) "\""
+        else if I64.beq b 92 then success (Input.input_advance 1 rem) "\\"
+        else if I64.beq b 98 then success (Input.input_advance 1 rem) "\b"
+        else if I64.beq b 116 then success (Input.input_advance 1 rem) "\t"
+        else if I64.beq b 110 then success (Input.input_advance 1 rem) "\n"
+        else if I64.beq b 102 then success (Input.input_advance 1 rem) "\f"
+        else if I64.beq b 114 then success (Input.input_advance 1 rem) "\r"
+        else if I64.beq b 117 then Toml.unicode_escape 4 (Input.input_advance 1 rem)
+        else if I64.beq b 85 then Toml.unicode_escape 8 (Input.input_advance 1 rem)
         else fail (ParseError.custom "invalid escape sequence" rem)
 
 /// One hex digit's value, or `none`.
@@ -456,30 +456,30 @@ def Toml.hex_nibble (b : I64) : Option I64 :=
 
 /// `n` hex digits of `s` folded into a code point, or `none`.
 #[partial]
-def Toml.codepoint_hex (s : String) (n : I64) (acc : I64) : Option I64 :=
+def Toml.codepoint_hex (s : Text) (n : I64) (acc : I64) : Option I64 :=
     if I64.beq n 0
     then Option.some acc
-    else if is_empty s
+    else if Input.at_end s
     then Option.none
     else
         match Toml.hex_nibble (Toml.byte_at s 0) {
-            Option.some d => Toml.codepoint_hex (String.drop 1 s) (n - 1) (I64.add (I64.mul acc 16) d),
+            Option.some d => Toml.codepoint_hex (Input.input_advance 1 s) (n - 1) (I64.add (I64.mul acc 16) d),
             Option.none => Option.none
         }
 
 #[partial]
-def Toml.unicode_escape (n : I64) (input : String) : ParseResult String :=
+def Toml.unicode_escape (n : I64) (input : Text) : ParseResult Text String :=
     toml_hex_value (Toml.codepoint_hex input n 0) input n
 
 #[partial]
-def toml_hex_value (r : Option I64) (input : String) (n : I64) : ParseResult String :=
+def toml_hex_value (r : Option I64) (input : Text) (n : I64) : ParseResult Text String :=
     match r {
         Option.none => fail (ParseError.custom "invalid \\u escape" input),
         Option.some raw =>
             let cp : I64 := raw in
             if Toml.codepoint_bad cp
             then fail (ParseError.custom "invalid unicode escape (surrogate or above U+10FFFF)" input)
-            else success (String.drop n input) (Toml.utf8_of_codepoint cp)
+            else success (Input.input_advance n input) (Toml.utf8_of_codepoint cp)
     }
 
 /// Surrogate halves and out-of-range code points.
@@ -520,42 +520,42 @@ def Toml.basic_string_byte_bad (b : I64) : Bool :=
 /// One character of a single-line basic string: an escape, or a plain
 /// character that is not `"`, `\`, a raw control byte or DEL.
 #[partial]
-def Toml.basic_string_char (input : String) : ParseResult String :=
-    if is_empty input
+def Toml.basic_string_char (input : Text) : ParseResult Text String :=
+    if Input.at_end input
     then fail (ParseError.custom "expected string character" input)
     else
-        let width : I64 := utf8_char_width input in
+        let width : I64 := text_char_width input in
         let b : I64 := Toml.byte_at input 0 in
         if I64.beq b 34 then fail (ParseError.custom "closing quote" input)
         else if I64.beq b 92 then fail (ParseError.custom "escape sequence" input)
         else if Toml.basic_string_byte_bad b
         then fail (ParseError.custom "control character in string must be escaped" input)
-        else success (String.drop width input) (String.slice input 0 width)
+        else success (Input.input_advance width input) (Input.input_text width input)
 
 /// The characters of a single-line basic string, up to its closing `"`.
 /// `many0` stops at the quote (the plain-character parser fails there),
 /// which is what makes the closing `tag "\""` in `basic_string_text` see it.
 #[partial]
-def Toml.basic_string_content (input : String) : ParseResult (List String) :=
+def Toml.basic_string_content (input : Text) : ParseResult Text (List String) :=
     many0 (alt Toml.parse_escape Toml.basic_string_char) input
 
 /// One character of a literal string: anything except `'` and a raw
 /// control byte (tab allowed). No escapes — that is the whole point of
 /// the literal spelling.
 #[partial]
-def Toml.literal_string_char (input : String) : ParseResult String :=
-    if is_empty input
+def Toml.literal_string_char (input : Text) : ParseResult Text String :=
+    if Input.at_end input
     then fail (ParseError.custom "expected literal string character" input)
     else
-        let width : I64 := utf8_char_width input in
+        let width : I64 := text_char_width input in
         let b : I64 := Toml.byte_at input 0 in
         if I64.beq b 39 then fail (ParseError.custom "closing quote" input)
         else if Toml.basic_string_byte_bad b
         then fail (ParseError.custom "control character not allowed in a literal string" input)
-        else success (String.drop width input) (String.slice input 0 width)
+        else success (Input.input_advance width input) (Input.input_text width input)
 
 #[partial]
-def Toml.literal_string_content (input : String) : ParseResult (List String) :=
+def Toml.literal_string_content (input : Text) : ParseResult Text (List String) :=
     many0 Toml.literal_string_char input
 
 // ─── Parser: multi-line strings ───
@@ -565,27 +565,27 @@ def Toml.literal_string_content (input : String) : ParseResult (List String) :=
 /// whitespace and newlines; CRLF is normalized to LF; a run of n >= 3
 /// quotes closes with n - 3 left as content.
 #[partial]
-def Toml.multiline_basic (input : String) : ParseResult Toml.Value :=
+def Toml.multiline_basic (input : Text) : ParseResult Text Toml.Value :=
     toml_mlb_open (tag "\"\"\"" input)
 
 #[partial]
-def toml_mlb_open (r : ParseResult String) : ParseResult Toml.Value :=
+def toml_mlb_open (r : ParseResult Text String) : ParseResult Text Toml.Value :=
     match r {
         success rem _ => Toml.mlb_value (Toml.mlb_loop (Toml.mlb_trim_leading rem) List.empty),
         fail e => fail e
     }
 
 #[partial]
-def Toml.mlb_value (r : ParseResult String) : ParseResult Toml.Value :=
+def Toml.mlb_value (r : ParseResult Text String) : ParseResult Text Toml.Value :=
     match r {
         success rem text => success rem (Toml.string_value text),
         fail e => fail e
     }
 
 /// Drop the first newline if the content starts with one (LF or CRLF).
-def Toml.mlb_trim_leading (s : String) : String :=
-    if String.starts_with "\r\n" s then String.drop 2 s
-    else if String.starts_with "\n" s then String.drop 1 s
+def Toml.mlb_trim_leading (s : Text) : Text :=
+    if Input.input_starts_with "\r\n" s then Input.input_advance 2 s
+    else if Input.input_starts_with "\n" s then Input.input_advance 1 s
     else s
 
 /// The multi-line basic body loop. Accumulates pieces in REVERSE and joins
@@ -593,8 +593,8 @@ def Toml.mlb_trim_leading (s : String) : String :=
 /// body of an arm — the same tail shape `many0` documents for the
 /// per-character cost of a large payload.
 #[partial]
-def Toml.mlb_loop (input : String) (acc : List String) : ParseResult String :=
-    if is_empty input
+def Toml.mlb_loop (input : Text) (acc : List String) : ParseResult Text String :=
+    if Input.at_end input
     then fail (ParseError.custom "unterminated multi-line string" input)
     else
         let b : I64 := Toml.byte_at input 0 in
@@ -607,18 +607,18 @@ def Toml.mlb_loop (input : String) (acc : List String) : ParseResult String :=
 /// How many `q` bytes start at `input` (0 or more), and what follows them.
 /// The closing rule needs the whole run at once.
 #[partial]
-def Toml.quote_run (q : String) (input : String) : Pair I64 String :=
+def Toml.quote_run (q : String) (input : Text) : Pair I64 Text :=
     Toml.quote_run_go q input 0
 
 #[partial]
-def Toml.quote_run_go (q : String) (s : String) (n : I64) : Pair I64 String :=
-    if String.starts_with q s then Toml.quote_run_go q (String.drop 1 s) (n + 1)
+def Toml.quote_run_go (q : String) (s : Text) (n : I64) : Pair I64 Text :=
+    if Input.input_starts_with q s then Toml.quote_run_go q (Input.input_advance 1 s) (n + 1)
     else Pair.pair n s
 
 /// A run of n >= 3 quotes closes the string, leaving n - 3 as content; a
 /// run of 1 or 2 is content and the loop continues.
 #[partial]
-def toml_mlb_quotes (run : Pair I64 String) (acc : List String) : ParseResult String :=
+def toml_mlb_quotes (run : Pair I64 Text) (acc : List String) : ParseResult Text String :=
     match run {
         Pair.pair raw rest =>
             let n : I64 := raw in
@@ -639,17 +639,18 @@ def Toml.quote_pieces (q : String) (n : I64) : List String :=
 /// the backslash is the last non-whitespace character on its line —
 /// `\ x` is an invalid escape, not a continuation.
 #[partial]
-def Toml.mlb_backslash (input : String) : ParseResult String :=
+def Toml.mlb_backslash (input : Text) : ParseResult Text String :=
     toml_mlb_bs_open (tag "\\" input) input
 
 #[partial]
-def toml_mlb_bs_open (r : ParseResult String) (input : String) : ParseResult String :=
+def toml_mlb_bs_open (r : ParseResult Text String) (input : Text) : ParseResult Text String :=
     match r {
         success rem _ =>
-            if is_empty rem
-            then fail (ParseError.custom "unterminated escape sequence" rem)
-            else if Toml.mlb_ws_byte (Toml.byte_at rem 0)
-            then toml_mlb_continuation rem
+            let r : Text := rem in
+            if Input.at_end r
+            then fail (ParseError.custom "unterminated escape sequence" r)
+            else if Toml.mlb_ws_byte (Toml.byte_at r 0)
+            then toml_mlb_continuation r
             else Toml.parse_escape input,
         fail e => fail e
     }
@@ -662,36 +663,29 @@ def Toml.mlb_ws_byte (b : I64) : Bool :=
     else I64.beq b 13
 
 #[partial]
-def toml_mlb_continuation (rem : String) : ParseResult String :=
+def toml_mlb_continuation (rem : Text) : ParseResult Text String :=
     toml_mlb_cont_go (Toml.scan_bytes Toml.mlb_ws_byte rem)
 
 #[partial]
-def toml_mlb_cont_go (scanned : Pair String String) : ParseResult String :=
+def toml_mlb_cont_go (scanned : Pair String Text) : ParseResult Text String :=
     match scanned {
         Pair.pair ws_text raw =>
-            let rest : String := raw in
+            let rest : Text := raw in
             if String.contains ws_text "\n"
             then success rest ""
-            else if is_empty rest
+            else if Input.at_end rest
             then fail (ParseError.custom "unterminated multi-line string" rest)
             else fail (ParseError.custom "a backslash must be the last non-whitespace character on its line" rest)
     }
 
 /// Scan bytes while `pred` holds; the matched text and the remainder.
 #[partial]
-def Toml.scan_bytes (pred : I64 -> Bool) (s : String) : Pair String String :=
-    Toml.scan_bytes_go pred s s 0
+def Toml.scan_bytes (pred : I64 -> Bool) (s : Text) : Pair String Text :=
+    let n : I64 := Input.input_scan (fn (b : U8) => pred (U8.to_i64 b)) s in
+    Pair.pair (Input.input_text n s) (Input.input_advance n s)
 
 #[partial]
-def Toml.scan_bytes_go (pred : I64 -> Bool) (original : String) (s : String) (n : I64) : Pair String String :=
-    if is_empty s
-    then Pair.pair (String.slice original 0 n) s
-    else if pred (Toml.byte_at s 0)
-    then Toml.scan_bytes_go pred original (String.drop 1 s) (n + 1)
-    else Pair.pair (String.slice original 0 n) s
-
-#[partial]
-def toml_mlb_esc (r : ParseResult String) (acc : List String) : ParseResult String :=
+def toml_mlb_esc (r : ParseResult Text String) (acc : List String) : ParseResult Text String :=
     match r {
         success rem piece => Toml.mlb_loop rem (List.cons piece acc),
         fail e => fail e
@@ -708,27 +702,27 @@ def Toml.mlb_byte_bad (b : I64) : Bool :=
     if I64.beq b 10 then false else Toml.basic_string_byte_bad b
 
 #[partial]
-def Toml.mlb_plain_char (input : String) : ParseResult String :=
-    if is_empty input
+def Toml.mlb_plain_char (input : Text) : ParseResult Text String :=
+    if Input.at_end input
     then fail (ParseError.custom "expected character" input)
     else
         let b : I64 := Toml.byte_at input 0 in
         if I64.beq b 13
-        then toml_mlb_cr (String.drop 1 input)
+        then toml_mlb_cr (Input.input_advance 1 input)
         else if Toml.mlb_byte_bad b
         then fail (ParseError.custom "control character in string must be escaped" input)
         else
-            let width : I64 := utf8_char_width input in
-            success (String.drop width input) (String.slice input 0 width)
+            let width : I64 := text_char_width input in
+            success (Input.input_advance width input) (Input.input_text width input)
 
 #[partial]
-def toml_mlb_cr (rest : String) : ParseResult String :=
-    if String.starts_with "\n" rest
-    then success (String.drop 1 rest) "\n"
+def toml_mlb_cr (rest : Text) : ParseResult Text String :=
+    if Input.input_starts_with "\n" rest
+    then success (Input.input_advance 1 rest) "\n"
     else fail (ParseError.custom "a carriage return must be followed by a line feed" rest)
 
 #[partial]
-def toml_mlb_plain (r : ParseResult String) (acc : List String) : ParseResult String :=
+def toml_mlb_plain (r : ParseResult Text String) (acc : List String) : ParseResult Text String :=
     match r {
         success rem ch => Toml.mlb_loop rem (List.cons ch acc),
         fail e => fail e
@@ -737,26 +731,26 @@ def toml_mlb_plain (r : ParseResult String) (acc : List String) : ParseResult St
 /// A `'''` multi-line literal string: no escapes, first newline trimmed,
 /// CR/CRLF normalized to LF, `''` inside is content per the quote-run rule.
 #[partial]
-def Toml.multiline_literal (input : String) : ParseResult Toml.Value :=
+def Toml.multiline_literal (input : Text) : ParseResult Text Toml.Value :=
     toml_mll_open (tag "'''" input)
 
 #[partial]
-def toml_mll_open (r : ParseResult String) : ParseResult Toml.Value :=
+def toml_mll_open (r : ParseResult Text String) : ParseResult Text Toml.Value :=
     match r {
         success rem _ => Toml.mll_value (Toml.mll_loop (Toml.mlb_trim_leading rem) List.empty),
         fail e => fail e
     }
 
 #[partial]
-def Toml.mll_value (r : ParseResult String) : ParseResult Toml.Value :=
+def Toml.mll_value (r : ParseResult Text String) : ParseResult Text Toml.Value :=
     match r {
         success rem text => success rem (Toml.string_value text),
         fail e => fail e
     }
 
 #[partial]
-def Toml.mll_loop (input : String) (acc : List String) : ParseResult String :=
-    if is_empty input
+def Toml.mll_loop (input : Text) (acc : List String) : ParseResult Text String :=
+    if Input.at_end input
     then fail (ParseError.custom "unterminated multi-line literal string" input)
     else
         let b : I64 := Toml.byte_at input 0 in
@@ -768,21 +762,21 @@ def Toml.mll_loop (input : String) (acc : List String) : ParseResult String :=
 /// basic one's plain character, minus the escape branch a literal string
 /// cannot have.
 #[partial]
-def Toml.mll_plain_char (input : String) : ParseResult String :=
-    if is_empty input
+def Toml.mll_plain_char (input : Text) : ParseResult Text String :=
+    if Input.at_end input
     then fail (ParseError.custom "expected character" input)
     else
         let b : I64 := Toml.byte_at input 0 in
         if I64.beq b 13
-        then toml_mlb_cr (String.drop 1 input)
+        then toml_mlb_cr (Input.input_advance 1 input)
         else if Toml.mlb_byte_bad b
         then fail (ParseError.custom "control character not allowed in a literal string" input)
         else
-            let width : I64 := utf8_char_width input in
-            success (String.drop width input) (String.slice input 0 width)
+            let width : I64 := text_char_width input in
+            success (Input.input_advance width input) (Input.input_text width input)
 
 #[partial]
-def toml_mll_quotes (run : Pair I64 String) (acc : List String) : ParseResult String :=
+def toml_mll_quotes (run : Pair I64 Text) (acc : List String) : ParseResult Text String :=
     match run {
         Pair.pair raw rest =>
             let n : I64 := raw in
@@ -792,7 +786,7 @@ def toml_mll_quotes (run : Pair I64 String) (acc : List String) : ParseResult St
     }
 
 #[partial]
-def toml_mll_plain (r : ParseResult String) (acc : List String) : ParseResult String :=
+def toml_mll_plain (r : ParseResult Text String) (acc : List String) : ParseResult Text String :=
     match r {
         success rem ch => Toml.mll_loop rem (List.cons ch acc),
         fail e => fail e
@@ -804,19 +798,19 @@ def Toml.string_value (s : String) : Toml.Value := string s
 
 /// A single-line basic string as a value.
 #[partial]
-def Toml.basic_string_open (input : String) : ParseResult Toml.Value :=
+def Toml.basic_string_open (input : Text) : ParseResult Text Toml.Value :=
     map_parse Toml.string_value Toml.basic_string_text input
 
 /// A single-line literal string as a value.
 #[partial]
-def Toml.literal_string_open (input : String) : ParseResult Toml.Value :=
+def Toml.literal_string_open (input : Text) : ParseResult Text Toml.Value :=
     map_parse Toml.string_value Toml.literal_string_text input
 
 /// Any string value: multi-line basic, multi-line literal, single-line
 /// basic, or single-line literal — longest delimiters first, so `"""` is
 /// not read as an empty single-line string followed by junk.
 #[partial]
-def Toml.parse_string (input : String) : ParseResult Toml.Value :=
+def Toml.parse_string (input : Text) : ParseResult Text Toml.Value :=
     alt_fold
         [Toml.multiline_basic,
             Toml.multiline_literal,
@@ -856,7 +850,8 @@ def Toml.is_binary_digit_byte (b : I64) : Bool :=
 /// validated by the caller.
 #[partial]
 def Toml.strip_underscores (s : String) : String :=
-    String.concat_list (List.filter (fn (c : String) => Bool.not (String.beq "_" c)) (Toml.string_chars s))
+    String.concat_list
+        (List.filter (fn (c : String) => Bool.not (String.beq "_" c)) (Toml.string_chars (Text.of_string s)))
 
 /// Digit text must not have a `_` at the start, end, or doubled: every
 /// `_` needs a digit on BOTH sides.
@@ -955,25 +950,25 @@ def Toml.digits_pos (digit_of : String -> Option I64) (base : I64) (cs : List St
 /// local scanner is the fix (see `test_parse_underscored_integer`, whose
 /// `1_0` row failed before this was written).
 #[partial]
-def Toml.parse_integer (input : String) : ParseResult I64 :=
+def Toml.parse_integer (input : Text) : ParseResult Text I64 :=
     toml_int_sign (Toml.byte_at input 0) input
 
 #[partial]
-def toml_int_sign (b : I64) (input : String) : ParseResult I64 :=
-    if I64.beq b 43 then toml_int_body (String.drop 1 input) false true
-    else if I64.beq b 45 then toml_int_body (String.drop 1 input) true true
+def toml_int_sign (b : I64) (input : Text) : ParseResult Text I64 :=
+    if I64.beq b 43 then toml_int_body (Input.input_advance 1 input) false true
+    else if I64.beq b 45 then toml_int_body (Input.input_advance 1 input) true true
     else toml_int_body input false false
 
 /// `neg` is the value's sign (decimal only); `signed` is whether the
 /// spelling carried a sign at all — which a radix literal may not.
 #[partial]
-def toml_int_body (input : String) (neg : Bool) (signed : Bool) : ParseResult I64 :=
-    if String.starts_with "0x" input
-    then toml_int_radix (String.drop 2 input) signed 16 Toml.is_hex_digit_byte Toml.hex_digit_value
-    else if String.starts_with "0o" input
-    then toml_int_radix (String.drop 2 input) signed 8 Toml.is_octal_digit_byte Toml.hex_digit_value
-    else if String.starts_with "0b" input
-    then toml_int_radix (String.drop 2 input) signed 2 Toml.is_binary_digit_byte Toml.hex_digit_value
+def toml_int_body (input : Text) (neg : Bool) (signed : Bool) : ParseResult Text I64 :=
+    if Input.input_starts_with "0x" input
+    then toml_int_radix (Input.input_advance 2 input) signed 16 Toml.is_hex_digit_byte Toml.hex_digit_value
+    else if Input.input_starts_with "0o" input
+    then toml_int_radix (Input.input_advance 2 input) signed 8 Toml.is_octal_digit_byte Toml.hex_digit_value
+    else if Input.input_starts_with "0b" input
+    then toml_int_radix (Input.input_advance 2 input) signed 2 Toml.is_binary_digit_byte Toml.hex_digit_value
     else toml_int_decimal input neg
 
 /// A radix-prefixed integer's digits. Leading zeros and `_` grouping are
@@ -981,7 +976,7 @@ def toml_int_body (input : String) (neg : Bool) (signed : Bool) : ParseResult I6
 /// the digits are folded as hex digits, which is a superset of every
 /// radix's digit set once the byte predicate has done its own check.
 #[partial]
-def toml_int_radix (digits : String) (signed : Bool) (base : I64) (pred : I64 -> Bool) (digit_of : String -> Option I64) : ParseResult I64 :=
+def toml_int_radix (digits : Text) (signed : Bool) (base : I64) (pred : I64 -> Bool) (digit_of : String -> Option I64) : ParseResult Text I64 :=
     if signed
     then fail (ParseError.custom "a sign is not allowed on a radix integer" digits)
     else
@@ -992,11 +987,11 @@ def toml_int_radix (digits : String) (signed : Bool) (base : I64) (pred : I64 ->
                 then fail (ParseError.custom "expected digits after the radix prefix" digits)
                 else if Bool.not (Toml.underscores_ok text)
                 then fail (ParseError.custom "underscores must be surrounded by digits" digits)
-                else toml_int_radix_value (Toml.digits_pos digit_of base (Toml.string_chars (Toml.strip_underscores text)) 0) rest
+                else toml_int_radix_value (Toml.digits_pos digit_of base (Toml.string_chars (Text.of_string (Toml.strip_underscores text))) 0) rest
         }
 
 #[partial]
-def toml_int_radix_value (r : Option I64) (rest : String) : ParseResult I64 :=
+def toml_int_radix_value (r : Option I64) (rest : Text) : ParseResult Text I64 :=
     match r {
         Option.none => fail (ParseError.custom "integer out of range" rest),
         Option.some n => success rest n
@@ -1006,7 +1001,7 @@ def toml_int_radix_value (r : Option I64) (rest : String) : ParseResult I64 :=
 /// or a nonzero digit followed by more — so a leading zero is only legal
 /// when it is the whole number.
 #[partial]
-def toml_int_decimal (input : String) (neg : Bool) : ParseResult I64 :=
+def toml_int_decimal (input : Text) (neg : Bool) : ParseResult Text I64 :=
     match Toml.scan_bytes Toml.is_digit_or_underscore_byte input {
         Pair.pair raw rest =>
             let text : String := raw in
@@ -1020,7 +1015,10 @@ def toml_int_decimal (input : String) (neg : Bool) : ParseResult I64 :=
                 let digits : String := Toml.strip_underscores text in
                 if neg && Toml.is_i64_min_magnitude digits
                 then success rest Toml.i64_min
-                else toml_int_dec_value (Toml.digits_pos Toml.digit_value 10 (Toml.string_chars digits) 0) neg rest
+                else
+                    toml_int_dec_value
+                        (Toml.digits_pos Toml.digit_value 10 (Toml.string_chars (Text.of_string digits)) 0)
+                        neg rest
     }
 
 /// A leading zero followed by anything at all (`01`, `00`, `0_1`) — the
@@ -1036,7 +1034,7 @@ def Toml.decimal_leading_zero (text : String) : Bool :=
 def Toml.i64_min : I64 := I64.sub (I64.neg Toml.i64_max) 1
 
 #[partial]
-def toml_int_dec_value (r : Option I64) (neg : Bool) (rest : String) : ParseResult I64 :=
+def toml_int_dec_value (r : Option I64) (neg : Bool) (rest : Text) : ParseResult Text I64 :=
     match r {
         Option.none => fail (ParseError.custom "integer out of range" rest),
         Option.some mag =>
@@ -1054,7 +1052,7 @@ def Toml.is_i64_min_magnitude (digits : String) : Bool :=
 def Toml.integer_value (n : I64) : Toml.Value := integer n
 
 #[partial]
-def Toml.parse_integer_value (input : String) : ParseResult Toml.Value :=
+def Toml.parse_integer_value (input : Text) : ParseResult Text Toml.Value :=
     map_parse Toml.integer_value Toml.parse_integer input
 
 // ─── Parser: floats ───
@@ -1065,30 +1063,30 @@ def Toml.parse_integer_value (input : String) : ParseResult Toml.Value :=
 /// integer, fraction and exponent digits; leading zeros follow the
 /// integer part's decimal rule.
 #[partial]
-def Toml.parse_float (input : String) : ParseResult F64 :=
+def Toml.parse_float (input : Text) : ParseResult Text F64 :=
     toml_float_kind (Toml.byte_at input 0) input
 
 #[partial]
-def toml_float_kind (b : I64) (input : String) : ParseResult F64 :=
+def toml_float_kind (b : I64) (input : Text) : ParseResult Text F64 :=
     if I64.beq b 43 || I64.beq b 45
-    then toml_float_signed (String.drop 1 input) (I64.beq b 45)
-    else if String.starts_with "inf" input
-    then success (String.drop 3 input) (1.0f64 / 0.0f64)
-    else if String.starts_with "nan" input
-    then success (String.drop 3 input) (Toml.nan_value)
+    then toml_float_signed (Input.input_advance 1 input) (I64.beq b 45)
+    else if Input.input_starts_with "inf" input
+    then success (Input.input_advance 3 input) (1.0f64 / 0.0f64)
+    else if Input.input_starts_with "nan" input
+    then success (Input.input_advance 3 input) (Toml.nan_value)
     else toml_float_body input false
 
 /// `+inf`/`-inf`/`+nan`/`-nan`, or a signed number.
 #[partial]
-def toml_float_signed (input : String) (neg : Bool) : ParseResult F64 :=
-    if String.starts_with "inf" input
-    then toml_float_inf neg (String.drop 3 input)
-    else if String.starts_with "nan" input
-    then success (String.drop 3 input) (Toml.nan_value)
+def toml_float_signed (input : Text) (neg : Bool) : ParseResult Text F64 :=
+    if Input.input_starts_with "inf" input
+    then toml_float_inf neg (Input.input_advance 3 input)
+    else if Input.input_starts_with "nan" input
+    then success (Input.input_advance 3 input) (Toml.nan_value)
     else toml_float_body input neg
 
 #[partial]
-def toml_float_inf (neg : Bool) (rest : String) : ParseResult F64 :=
+def toml_float_inf (neg : Bool) (rest : Text) : ParseResult Text F64 :=
     if neg
     then success rest (0.0f64 - (1.0f64 / 0.0f64))
     else success rest (1.0f64 / 0.0f64)
@@ -1098,7 +1096,7 @@ def Toml.nan_value : F64 := 0.0f64 / 0.0f64
 
 /// The unsigned number body: integer part, then `.`/exponent as found.
 #[partial]
-def toml_float_body (input : String) (neg : Bool) : ParseResult F64 :=
+def toml_float_body (input : Text) (neg : Bool) : ParseResult Text F64 :=
     match Toml.scan_bytes Toml.is_digit_or_underscore_byte input {
         Pair.pair int_raw rest =>
             let int_text : String := int_raw in
@@ -1112,17 +1110,17 @@ def toml_float_body (input : String) (neg : Bool) : ParseResult F64 :=
     }
 
 #[partial]
-def toml_float_after_int (int_text : String) (rest : String) (neg : Bool) : ParseResult F64 :=
-    if String.starts_with "." rest
-    then toml_float_frac int_text (String.drop 1 rest) neg
-    else if String.starts_with "e" rest || String.starts_with "E" rest
+def toml_float_after_int (int_text : String) (rest : Text) (neg : Bool) : ParseResult Text F64 :=
+    if Input.input_starts_with "." rest
+    then toml_float_frac int_text (Input.input_advance 1 rest) neg
+    else if Input.input_starts_with "e" rest || Input.input_starts_with "E" rest
     then toml_float_exp int_text "" rest neg
     else fail (ParseError.custom "a float needs a fraction or an exponent" rest)
 
 /// The fraction digits after the `.`: at least one (leading zeros fine —
 /// the fraction's own ABNF is zero-prefixable).
 #[partial]
-def toml_float_frac (int_text : String) (after_dot : String) (neg : Bool) : ParseResult F64 :=
+def toml_float_frac (int_text : String) (after_dot : Text) (neg : Bool) : ParseResult Text F64 :=
     match Toml.scan_bytes Toml.is_digit_or_underscore_byte after_dot {
         Pair.pair frac_raw rest =>
             let frac_text : String := frac_raw in
@@ -1134,25 +1132,25 @@ def toml_float_frac (int_text : String) (after_dot : String) (neg : Bool) : Pars
     }
 
 #[partial]
-def toml_float_frac_rest (int_text : String) (frac_text : String) (rest : String) (neg : Bool) : ParseResult F64 :=
-    if String.starts_with "e" rest || String.starts_with "E" rest
+def toml_float_frac_rest (int_text : String) (frac_text : String) (rest : Text) (neg : Bool) : ParseResult Text F64 :=
+    if Input.input_starts_with "e" rest || Input.input_starts_with "E" rest
     then toml_float_exp int_text frac_text rest neg
     else toml_float_assemble int_text frac_text "0" false neg rest
 
 /// The exponent after `e`/`E`: optional sign, then digits (leading zeros
 /// allowed — the exponent's ABNF is plain digits).
 #[partial]
-def toml_float_exp (int_text : String) (frac_text : String) (rest : String) (neg : Bool) : ParseResult F64 :=
-    toml_float_exp_body (String.drop 1 rest) int_text frac_text neg rest
+def toml_float_exp (int_text : String) (frac_text : String) (rest : Text) (neg : Bool) : ParseResult Text F64 :=
+    toml_float_exp_body (Input.input_advance 1 rest) int_text frac_text neg rest
 
 /// The exponent's own sign is tracked separately and re-attached in
 /// `toml_float_assemble` -- dropping it read `-2E-2` as -200.0.
 #[partial]
-def toml_float_exp_body (exp_input : String) (int_text : String) (frac_text : String) (neg : Bool) (orig : String) : ParseResult F64 :=
+def toml_float_exp_body (exp_input : Text) (int_text : String) (frac_text : String) (neg : Bool) (orig : Text) : ParseResult Text F64 :=
     let b : I64 := Toml.byte_at exp_input 0 in
     let exp_neg : Bool := I64.beq b 45 in
-    let after_sign : String :=
-        if I64.beq b 43 || I64.beq b 45 then String.drop 1 exp_input else exp_input in
+    let after_sign : Text :=
+        if I64.beq b 43 || I64.beq b 45 then Input.input_advance 1 exp_input else exp_input in
     match Toml.scan_bytes Toml.is_digit_or_underscore_byte after_sign {
         Pair.pair exp_raw rest =>
             let exp_text : String := exp_raw in
@@ -1168,7 +1166,7 @@ def toml_float_exp_body (exp_input : String) (int_text : String) (frac_text : St
 /// back in by prefixing `-`, and the exponent (if any) by re-attaching
 /// `e<digits>`, which is a spelling `Parse.f64` accepts.
 #[partial]
-def toml_float_assemble (int_text : String) (frac_text : String) (exp_text : String) (exp_neg : Bool) (neg : Bool) (rest : String) : ParseResult F64 :=
+def toml_float_assemble (int_text : String) (frac_text : String) (exp_text : String) (exp_neg : Bool) (neg : Bool) (rest : Text) : ParseResult Text F64 :=
     let body : String := String.concat (Toml.strip_underscores int_text)
         (if is_empty frac_text then "" else String.concat "." (Toml.strip_underscores frac_text)) in
     let with_exp : String :=
@@ -1184,7 +1182,7 @@ def toml_float_assemble (int_text : String) (frac_text : String) (exp_text : Str
 def Toml.float_value (f : F64) : Toml.Value := float f
 
 #[partial]
-def Toml.parse_float_value (input : String) : ParseResult Toml.Value :=
+def Toml.parse_float_value (input : Text) : ParseResult Text Toml.Value :=
     map_parse Toml.float_value Toml.parse_float input
 
 // ─── Parser: date-times ───
@@ -1196,34 +1194,34 @@ def Toml.parse_float_value (input : String) : ParseResult Toml.Value :=
 /// allowed; a space delimiter falls back to the bare date when no valid
 /// time follows it (so `1979-05-27 # comment` is a date, not an error).
 #[partial]
-def Toml.parse_datetime (input : String) : ParseResult Toml.Value :=
+def Toml.parse_datetime (input : Text) : ParseResult Text Toml.Value :=
     toml_dt_result (Toml.dt_scan input) input
 
 /// The scan: a date-led one first, then a bare local time.
 #[partial]
-def Toml.dt_scan (input : String) : Option String :=
+def Toml.dt_scan (input : Text) : Option String :=
     match Toml.dt_scan_date input {
         Option.some text => Option.some text,
         Option.none => Toml.dt_time_part input 0
     }
 
 #[partial]
-def toml_dt_result (r : Option String) (input : String) : ParseResult Toml.Value :=
+def toml_dt_result (r : Option String) (input : Text) : ParseResult Text Toml.Value :=
     match r {
         Option.none => fail (ParseError.custom "not a date-time" input),
         Option.some raw =>
             let text : String := raw in
-            success (String.drop (String.length text) input) (datetime text)
+            success (Input.input_advance (String.length text) input) (datetime text)
     }
 
 /// n digits at `input` starting at `start`, or `none` — the fixed-width
 /// fields. Reads past the end see byte -1, which is never a digit.
 #[partial]
-def Toml.dt_digits (input : String) (start : I64) (n : I64) : Option I64 :=
+def Toml.dt_digits (input : Text) (start : I64) (n : I64) : Option I64 :=
     toml_dt_digits_go input start n 0
 
 #[partial]
-def toml_dt_digits_go (s : String) (i : I64) (n : I64) (acc : I64) : Option I64 :=
+def toml_dt_digits_go (s : Text) (i : I64) (n : I64) (acc : I64) : Option I64 :=
     if I64.beq n 0
     then Option.some acc
     else if Toml.is_digit_byte (Toml.byte_at s i)
@@ -1232,7 +1230,7 @@ def toml_dt_digits_go (s : String) (i : I64) (n : I64) (acc : I64) : Option I64 
 
 /// The date `YYYY-MM-DD` at `input`, if a valid date-time starts there.
 #[partial]
-def Toml.dt_scan_date (input : String) : Option String :=
+def Toml.dt_scan_date (input : Text) : Option String :=
     match Toml.dt_digits input 0 4 {
         Option.none => Option.none,
         Option.some y =>
@@ -1274,23 +1272,23 @@ def Toml.leap_year (y : I64) : Bool :=
 /// After a valid date: `T`/`t` REQUIRES a time; a space tries one and
 /// falls back to the bare date; anything else is the bare date.
 #[partial]
-def toml_dt_delim (b : I64) (input : String) : Option String :=
+def toml_dt_delim (b : I64) (input : Text) : Option String :=
     if I64.beq b 84 || I64.beq b 116
     then Toml.dt_time_part input 11
     else if I64.beq b 32
     then toml_dt_space_time input
-    else Option.some (String.slice input 0 10)
+    else Option.some (Input.input_text 10 input)
 
 #[partial]
-def toml_dt_space_time (input : String) : Option String :=
+def toml_dt_space_time (input : Text) : Option String :=
     match Toml.dt_time_part input 11 {
         Option.some text => Option.some text,
-        Option.none => Option.some (String.slice input 0 10)
+        Option.none => Option.some (Input.input_text 10 input)
     }
 
 /// The time `HH:MM:SS` starting at `i`.
 #[partial]
-def Toml.dt_time_part (input : String) (i : I64) : Option String :=
+def Toml.dt_time_part (input : Text) (i : I64) : Option String :=
     match Toml.dt_digits input i 2 {
         Option.none => Option.none,
         Option.some hh =>
@@ -1316,14 +1314,14 @@ def Toml.time_ok (hh : I64) (mi : I64) (ss : I64) : Bool :=
 
 /// After the seconds: an optional secfrac, then offset-or-end.
 #[partial]
-def toml_dt_after_seconds (input : String) (i : I64) : Option String :=
+def toml_dt_after_seconds (input : Text) (i : I64) : Option String :=
     if I64.beq (Toml.byte_at input i) 46
     then toml_dt_frac_digits input (i + 1) (i + 1)
     else toml_dt_offset (Toml.byte_at input i) input i
 
 /// Secfrac digits: at least one.
 #[partial]
-def toml_dt_frac_digits (input : String) (start : I64) (i : I64) : Option String :=
+def toml_dt_frac_digits (input : Text) (start : I64) (i : I64) : Option String :=
     if Toml.is_digit_byte (Toml.byte_at input i)
     then toml_dt_frac_digits input start (i + 1)
     else if I64.beq i start then Option.none
@@ -1331,15 +1329,15 @@ def toml_dt_frac_digits (input : String) (start : I64) (i : I64) : Option String
 
 /// The offset: `Z`/`z`, `+HH:MM`/`-HH:MM`, or nothing (local).
 #[partial]
-def toml_dt_offset (b : I64) (input : String) (i : I64) : Option String :=
+def toml_dt_offset (b : I64) (input : Text) (i : I64) : Option String :=
     if I64.beq b 90 || I64.beq b 122
-    then Option.some (String.slice input 0 (i + 1))
+    then Option.some (Input.input_text (i + 1) input)
     else if I64.beq b 43 || I64.beq b 45
     then toml_dt_offset_digits input i
-    else Option.some (String.slice input 0 i)
+    else Option.some (Input.input_text i input)
 
 #[partial]
-def toml_dt_offset_digits (input : String) (i : I64) : Option String :=
+def toml_dt_offset_digits (input : Text) (i : I64) : Option String :=
     match Toml.dt_digits input (i + 1) 2 {
         Option.none => Option.none,
         Option.some oh =>
@@ -1348,7 +1346,7 @@ def toml_dt_offset_digits (input : String) (i : I64) : Option String :=
                 Option.none => Option.none,
                 Option.some om =>
                     if Bool.not (Toml.offset_ok oh om) then Option.none
-                    else Option.some (String.slice input 0 (i + 6))
+                    else Option.some (Input.input_text (i + 6) input)
             }
     }
 
@@ -1359,26 +1357,26 @@ def Toml.offset_ok (oh : I64) (om : I64) : Bool :=
 
 // ─── Parser: booleans ───
 
-def toml_parse_true_result (r : ParseResult String) : ParseResult Toml.Value :=
+def toml_parse_true_result (r : ParseResult Text String) : ParseResult Text Toml.Value :=
     match r {
         success rem _ => success rem (boolean true),
         fail e => fail e
     }
 
-def Toml.parse_true (input : String) : ParseResult Toml.Value :=
+def Toml.parse_true (input : Text) : ParseResult Text Toml.Value :=
     toml_parse_true_result (tag "true" input)
 
-def toml_parse_false_result (r : ParseResult String) : ParseResult Toml.Value :=
+def toml_parse_false_result (r : ParseResult Text String) : ParseResult Text Toml.Value :=
     match r {
         success rem _ => success rem (boolean false),
         fail e => fail e
     }
 
-def Toml.parse_false (input : String) : ParseResult Toml.Value :=
+def Toml.parse_false (input : Text) : ParseResult Text Toml.Value :=
     toml_parse_false_result (tag "false" input)
 
 /// Parse boolean values (true or false)
-def Toml.parse_bool (input : String) : ParseResult Toml.Value :=
+def Toml.parse_bool (input : Text) : ParseResult Text Toml.Value :=
     alt Toml.parse_true Toml.parse_false input
 
 // ─── Parser: arrays ───
@@ -1388,20 +1386,21 @@ def Toml.parse_bool (input : String) : ParseResult Toml.Value :=
 /// `[` and `]` TOML explicitly allows an array to span lines, which is
 /// how this repo's own root `mote.toml` writes `[workspace] members`.
 #[partial]
-def toml_array_ws (input : String) : ParseResult String :=
+def toml_array_ws (input : Text) : ParseResult Text String :=
     toml_array_ws_go input
 
 #[partial]
-def toml_array_ws_go (input : String) : ParseResult String :=
+def toml_array_ws_go (input : Text) : ParseResult Text String :=
     match take_while Toml.is_array_space input {
         success rem1 _ =>
-            if String.starts_with "#" rem1
+            let r1 : Text := rem1 in
+            if Input.input_starts_with "#" r1
             then
-                match take_while Toml.is_not_newline rem1 {
+                match take_while Toml.is_not_newline r1 {
                     success rem2 _ => toml_array_ws_go rem2,
                     fail e => fail e,
                 }
-            else success rem1 "",
+            else success r1 "",
         fail e => fail e,
     }
 
@@ -1418,7 +1417,7 @@ def Toml.is_not_newline (c : String) : Bool :=
 /// A comma inside an array, with newlines and comments allowed on both
 /// sides of it.
 #[partial]
-def toml_array_comma (input : String) : ParseResult String :=
+def toml_array_comma (input : Text) : ParseResult Text String :=
     delimited_by toml_array_ws (tag ",") toml_array_ws input
 
 /// The array body: comma-separated values (ANY value — nested arrays are
@@ -1426,32 +1425,33 @@ def toml_array_comma (input : String) : ParseResult String :=
 /// least one element (`[,]` is an error, and parsed as `[]` before the
 /// trailing-comma check gained its non-empty guard).
 #[partial]
-def toml_parse_array_body (input : String) : ParseResult (List Toml.Value) :=
+def toml_parse_array_body (input : Text) : ParseResult Text (List Toml.Value) :=
     delimited_by toml_array_ws (separated_by toml_array_comma Toml.parse_value) toml_array_ws input
 
 #[partial]
-def Toml.parse_array (input : String) : ParseResult Toml.Value :=
+def Toml.parse_array (input : Text) : ParseResult Text Toml.Value :=
     toml_parse_array_result (delimited_by (tag "[") toml_parse_array_trailing (tag "]") input)
 
 /// The array body plus an optional trailing comma (and whatever blanks
 /// or comments follow it) before the closing bracket.
 #[partial]
-def toml_parse_array_trailing (input : String) : ParseResult (List Toml.Value) :=
+def toml_parse_array_trailing (input : Text) : ParseResult Text (List Toml.Value) :=
     match toml_parse_array_body input {
         success rem elems =>
+            let r : Text := rem in
             if List.is_empty (Shared.get (Shared.of elems))
-            then success rem elems
-            else if String.starts_with "," rem
+            then success r elems
+            else if Input.input_starts_with "," r
             then
-                match toml_array_ws (String.drop 1 rem) {
+                match toml_array_ws (Input.input_advance 1 r) {
                     success rem2 _ => success rem2 elems,
                     fail e => fail e,
                 }
-            else success rem elems,
+            else success r elems,
         fail e => fail e
     }
 
-def toml_parse_array_result (r : ParseResult (List Toml.Value)) : ParseResult Toml.Value :=
+def toml_parse_array_result (r : ParseResult Text (List Toml.Value)) : ParseResult Text Toml.Value :=
     match r {
         success rem elems => success rem (array elems),
         fail e => fail e
@@ -1471,19 +1471,21 @@ def toml_parse_array_result (r : ParseResult (List Toml.Value)) : ParseResult To
 /// parser does too, deliberately -- the repo's own root manifest
 /// writes one) and forbids it in an inline table.
 #[partial]
-def toml_parse_inline_body (input : String) : ParseResult (List (Pair (List String) Toml.Value)) :=
+def toml_parse_inline_body (input : Text) : ParseResult Text (List (Pair (List String) Toml.Value)) :=
     toml_inline_body_start (toml_ws input)
 
 #[partial]
-def toml_inline_body_start (r : ParseResult String) : ParseResult (List (Pair (List String) Toml.Value)) :=
+def toml_inline_body_start (r : ParseResult Text String) : ParseResult Text (List (Pair (List String) Toml.Value)) :=
     match r {
-        success rem _ => toml_inline_body_first (Toml.parse_kv rem) rem,
+        success rem _ =>
+            let r : Text := rem in
+            toml_inline_body_first (Toml.parse_kv r) r,
         fail e => fail e
     }
 
 /// No pair at all is the empty inline table (`{}`), not a failure.
 #[partial]
-def toml_inline_body_first (r : ParseResult (Pair (List String) Toml.Value)) (input : String) : ParseResult (List (Pair (List String) Toml.Value)) :=
+def toml_inline_body_first (r : ParseResult Text (Pair (List String) Toml.Value)) (input : Text) : ParseResult Text (List (Pair (List String) Toml.Value)) :=
     match r {
         success rem p => toml_inline_body_more rem [p],
         fail _ => toml_inline_body_end input List.empty
@@ -1492,8 +1494,8 @@ def toml_inline_body_first (r : ParseResult (Pair (List String) Toml.Value)) (in
 /// After a pair: a comma means another pair MUST follow. A newline
 /// before the `}` is an error (the spec's single-line rule).
 #[partial]
-def toml_inline_body_more (input : String) (acc : List (Pair (List String) Toml.Value)) : ParseResult (List (Pair (List String) Toml.Value)) :=
-    if String.starts_with "\n" input || String.starts_with "\r" input
+def toml_inline_body_more (input : Text) (acc : List (Pair (List String) Toml.Value)) : ParseResult Text (List (Pair (List String) Toml.Value)) :=
+    if Input.input_starts_with "\n" input || Input.input_starts_with "\r" input
     then fail (ParseError.custom "a newline is not allowed inside an inline table" input)
     else match toml_comma input {
         success rem _ => toml_inline_body_next (Toml.parse_kv rem) acc,
@@ -1501,7 +1503,7 @@ def toml_inline_body_more (input : String) (acc : List (Pair (List String) Toml.
     }
 
 #[partial]
-def toml_inline_body_next (r : ParseResult (Pair (List String) Toml.Value)) (acc : List (Pair (List String) Toml.Value)) : ParseResult (List (Pair (List String) Toml.Value)) :=
+def toml_inline_body_next (r : ParseResult Text (Pair (List String) Toml.Value)) (acc : List (Pair (List String) Toml.Value)) : ParseResult Text (List (Pair (List String) Toml.Value)) :=
     match r {
         success rem p => toml_inline_body_more rem (List.append acc [p]),
         fail e => fail e
@@ -1509,7 +1511,7 @@ def toml_inline_body_next (r : ParseResult (Pair (List String) Toml.Value)) (acc
 
 /// Strip the horizontal space before the closing brace.
 #[partial]
-def toml_inline_body_end (input : String) (acc : List (Pair (List String) Toml.Value)) : ParseResult (List (Pair (List String) Toml.Value)) :=
+def toml_inline_body_end (input : Text) (acc : List (Pair (List String) Toml.Value)) : ParseResult Text (List (Pair (List String) Toml.Value)) :=
     match toml_ws input {
         success rem _ => success rem acc,
         fail e => fail e
@@ -1518,18 +1520,20 @@ def toml_inline_body_end (input : String) (acc : List (Pair (List String) Toml.V
 /// Parse an inline table (`{ path = "../x" }`, `{}`) — the dependency
 /// spelling `mote.toml` uses everywhere outside this repo.
 #[partial]
-def Toml.parse_inline_table (input : String) : ParseResult Toml.Value :=
+def Toml.parse_inline_table (input : Text) : ParseResult Text Toml.Value :=
     toml_inline_table_result (delimited_by (tag "{") toml_parse_inline_body (tag "}") input)
 
 #[partial]
-def toml_inline_table_result (r : ParseResult (List (Pair (List String) Toml.Value))) : ParseResult Toml.Value :=
+def toml_inline_table_result (r : ParseResult Text (List (Pair (List String) Toml.Value)))
+    : ParseResult Text Toml.Value :=
     match r {
         success rem pairs => toml_inline_table_built (Toml.inline_table_of_pairs pairs) rem,
         fail e => fail e
     }
 
 #[partial]
-def toml_inline_table_built (r : Result String (BTreeMap String Toml.Value)) (rem : String) : ParseResult Toml.Value :=
+def toml_inline_table_built (r : Result String (BTreeMap String Toml.Value)) (rem : Text)
+    : ParseResult Text Toml.Value :=
     match r {
         Result.err e => fail (ParseError.custom e rem),
         Result.ok t => success rem (table t)
@@ -1614,7 +1618,7 @@ def Toml.inline_insert_merge (k : String) (rest : List String) (value : Toml.Val
 /// the string parsers come before it so a quoted value never reaches the
 /// number grammar.
 #[partial]
-def Toml.parse_value (input : String) : ParseResult Toml.Value :=
+def Toml.parse_value (input : Text) : ParseResult Text Toml.Value :=
     alt_fold
         [Toml.parse_bool,
             Toml.parse_string,
@@ -1638,29 +1642,31 @@ def Toml.parse_value (input : String) : ParseResult Toml.Value :=
 /// structural subterm relation the checker can see, the same reason
 /// every combinator in `lang/src/parser/` carries the attribute.
 #[partial]
-def Toml.parse_kv (input : String) : ParseResult (Pair (List String) Toml.Value) :=
+def Toml.parse_kv (input : Text) : ParseResult Text (Pair (List String) Toml.Value) :=
     toml_kv_key (Toml.dotted_path input)
 
 #[partial]
-def toml_kv_key (r : ParseResult (List String)) : ParseResult (Pair (List String) Toml.Value) :=
+def toml_kv_key (r : ParseResult Text (List String)) : ParseResult Text (Pair (List String) Toml.Value) :=
     match r {
         success rem path => toml_kv_eq rem path,
         fail e => fail e
     }
 
 #[partial]
-def toml_kv_eq (rem : String) (path : List String) : ParseResult (Pair (List String) Toml.Value) :=
+def toml_kv_eq (rem : Text) (path : List String) : ParseResult Text (Pair (List String) Toml.Value) :=
     toml_kv_after_eq (toml_eq rem) path
 
 #[partial]
-def toml_kv_after_eq (r : ParseResult String) (path : List String) : ParseResult (Pair (List String) Toml.Value) :=
+def toml_kv_after_eq (r : ParseResult Text String) (path : List String)
+    : ParseResult Text (Pair (List String) Toml.Value) :=
     match r {
         success rem _ => toml_kv_value (Toml.parse_value rem) path,
         fail e => fail e
     }
 
 #[partial]
-def toml_kv_value (r : ParseResult Toml.Value) (path : List String) : ParseResult (Pair (List String) Toml.Value) :=
+def toml_kv_value (r : ParseResult Text Toml.Value) (path : List String)
+    : ParseResult Text (Pair (List String) Toml.Value) :=
     match r {
         success rem v => success rem (Pair.pair path v),
         fail e => fail e
@@ -1671,25 +1677,25 @@ def toml_kv_value (r : ParseResult Toml.Value) (path : List String) : ParseResul
 /// A header's dotted path, with the whitespace a `[ a . b ]` spelling
 /// puts around it.
 #[partial]
-def Toml.header_path (input : String) : ParseResult (List String) :=
+def Toml.header_path (input : Text) : ParseResult Text (List String) :=
     toml_header_path (toml_ws input)
 
 #[partial]
-def toml_header_path (r : ParseResult String) : ParseResult (List String) :=
+def toml_header_path (r : ParseResult Text String) : ParseResult Text (List String) :=
     match r {
         success rem _ => toml_header_path_end (Toml.dotted_path rem),
         fail e => fail e
     }
 
 #[partial]
-def toml_header_path_end (r : ParseResult (List String)) : ParseResult (List String) :=
+def toml_header_path_end (r : ParseResult Text (List String)) : ParseResult Text (List String) :=
     match r {
         success rem path => toml_header_ws_end (toml_ws rem) path,
         fail e => fail e
     }
 
 #[partial]
-def toml_header_ws_end (r : ParseResult String) (path : List String) : ParseResult (List String) :=
+def toml_header_ws_end (r : ParseResult Text String) (path : List String) : ParseResult Text (List String) :=
     match r {
         success rem _ => success rem path,
         fail e => fail e
@@ -1697,31 +1703,31 @@ def toml_header_ws_end (r : ParseResult String) (path : List String) : ParseResu
 
 /// Parse a `[table]` / `[a.b.c]` table header, returning the dotted path.
 #[partial]
-def Toml.parse_header (input : String) : ParseResult (List String) :=
+def Toml.parse_header (input : Text) : ParseResult Text (List String) :=
     delimited_by (tag "[") Toml.header_path (tag "]") input
 
 def toml_line_of_header (path : List String) : Toml.Line := header path
 
 #[partial]
-def Toml.parse_header_line (input : String) : ParseResult Toml.Line :=
+def Toml.parse_header_line (input : Text) : ParseResult Text Toml.Line :=
     map_parse toml_line_of_header Toml.parse_header input
 
 /// Parse an `[[array.of.tables]]` header, returning the dotted path.
 #[partial]
-def Toml.parse_array_header (input : String) : ParseResult (List String) :=
+def Toml.parse_array_header (input : Text) : ParseResult Text (List String) :=
     delimited_by (tag "[[") Toml.header_path (tag "]]") input
 
 def toml_line_of_array_header (path : List String) : Toml.Line := array_header path
 
 #[partial]
-def Toml.parse_array_header_line (input : String) : ParseResult Toml.Line :=
+def Toml.parse_array_header_line (input : Text) : ParseResult Text Toml.Line :=
     map_parse toml_line_of_array_header Toml.parse_array_header input
 
 def toml_line_of_kv (p : Pair (List String) Toml.Value) : Toml.Line :=
     match p { Pair.pair path v => kv path v }
 
 #[partial]
-def Toml.parse_kv_line (input : String) : ParseResult Toml.Line :=
+def Toml.parse_kv_line (input : Text) : ParseResult Text Toml.Line :=
     map_parse toml_line_of_kv Toml.parse_kv input
 
 /// Parse one document line's content (either a header or a kv pair) — does not
@@ -1731,7 +1737,7 @@ def Toml.parse_kv_line (input : String) : ParseResult Toml.Line :=
 /// makes `alt_fold` report the array header's own error for a malformed
 /// `[[x]` rather than the plain header's confusing one.
 #[partial]
-def Toml.parse_line (input : String) : ParseResult Toml.Line :=
+def Toml.parse_line (input : Text) : ParseResult Text Toml.Line :=
     alt_fold [Toml.parse_array_header_line, Toml.parse_header_line, Toml.parse_kv_line] input
 
 // ─── Parser: document (blank-line skipping, one line at a time) ───
@@ -1743,67 +1749,67 @@ def Toml.parse_line (input : String) : ParseResult Toml.Line :=
 def toml_is_not_newline (c : String) : Bool :=
     not (String.beq "\n" c)
 
-def toml_drop_comment_result (r : ParseResult String) : String :=
+def toml_drop_comment_result (orig : Text) (r : ParseResult Text String) : Text :=
     match r {
         success rem _ => rem,
-        fail _ => ""
+        fail _ => orig
     }
 
 /// Consume a `#` comment's text, leaving the line terminator (if any) in
 /// place for the caller's own end-of-line handling.
-def toml_drop_comment (rem : String) : String :=
-    toml_drop_comment_result (take_while toml_is_not_newline rem)
+def toml_drop_comment (rem : Text) : Text :=
+    toml_drop_comment_result rem (take_while toml_is_not_newline rem)
 
 /// The end of a line: EOF, LF, or CRLF — with a trailing comment
 /// consumed first. A lone CR is not a TOML newline and falls through to
 /// the "expected newline" error.
 #[partial]
-def toml_one_line_eol (rem : String) (line : Toml.Line) : ParseResult (Option Toml.Line) :=
-    if is_empty rem then success rem (Option.some line)
-    else if String.starts_with "\n" rem then success (String.drop 1 rem) (Option.some line)
-    else if String.starts_with "\r\n" rem then success (String.drop 2 rem) (Option.some line)
-    else if String.starts_with "#" rem then toml_one_line_eol (toml_drop_comment rem) line
+def toml_one_line_eol (rem : Text) (line : Toml.Line) : ParseResult Text (Option Toml.Line) :=
+    if Input.at_end rem then success rem (Option.some line)
+    else if Input.input_starts_with "\n" rem then success (Input.input_advance 1 rem) (Option.some line)
+    else if Input.input_starts_with "\r\n" rem then success (Input.input_advance 2 rem) (Option.some line)
+    else if Input.input_starts_with "#" rem then toml_one_line_eol (toml_drop_comment rem) line
     else fail (ParseError.custom "expected newline after line" rem)
 
-def toml_one_line_trailing_ws (r : ParseResult String) (line : Toml.Line) : ParseResult (Option Toml.Line) :=
+def toml_one_line_trailing_ws (r : ParseResult Text String) (line : Toml.Line) : ParseResult Text (Option Toml.Line) :=
     match r {
         success rem _ => toml_one_line_eol rem line,
         fail e => fail e
     }
 
-def toml_one_line_after_value (rem : String) (line : Toml.Line) : ParseResult (Option Toml.Line) :=
+def toml_one_line_after_value (rem : Text) (line : Toml.Line) : ParseResult Text (Option Toml.Line) :=
     toml_one_line_trailing_ws (toml_ws rem) line
 
-def toml_one_line_parse_result (r : ParseResult Toml.Line) : ParseResult (Option Toml.Line) :=
+def toml_one_line_parse_result (r : ParseResult Text Toml.Line) : ParseResult Text (Option Toml.Line) :=
     match r {
         success rem2 line => toml_one_line_after_value rem2 line,
         fail e => fail e
     }
 
-def toml_one_line_parse (rem : String) : ParseResult (Option Toml.Line) :=
+def toml_one_line_parse (rem : Text) : ParseResult Text (Option Toml.Line) :=
     toml_one_line_parse_result (Toml.parse_line rem)
 
 /// A blank (whitespace-only) line, or EOF right after leading whitespace,
 /// produces `None` and is skipped — otherwise the line is parsed and must be
 /// followed by a newline or EOF. CRLF counts as the line terminator.
-// NOTE: `is_empty rem` here must FAIL, not succeed — many0 (used by Toml.document
+// NOTE: `Input.at_end rem` here must FAIL, not succeed — many0 (used by Toml.document
 // below) has no zero-consumption guard, so a parser that succeeds without
 // consuming input on an already-empty remainder loops forever. Failing here lets
 // many0 stop naturally via its own `fail _ => success input List.empty` branch.
-def toml_one_line_check_blank (rem : String) : ParseResult (Option Toml.Line) :=
-    if is_empty rem then fail (ParseError.custom "no more lines" rem)
-    else if String.starts_with "\n" rem then success (String.drop 1 rem) Option.none
-    else if String.starts_with "\r\n" rem then success (String.drop 2 rem) Option.none
-    else if String.starts_with "#" rem then toml_comment_line (toml_drop_comment rem)
+def toml_one_line_check_blank (rem : Text) : ParseResult Text (Option Toml.Line) :=
+    if Input.at_end rem then fail (ParseError.custom "no more lines" rem)
+    else if Input.input_starts_with "\n" rem then success (Input.input_advance 1 rem) Option.none
+    else if Input.input_starts_with "\r\n" rem then success (Input.input_advance 2 rem) Option.none
+    else if Input.input_starts_with "#" rem then toml_comment_line (toml_drop_comment rem)
     else toml_one_line_parse rem
 
 /// A whole-line comment yields no `Toml.Line`, exactly like a blank line.
-def toml_comment_line (rem : String) : ParseResult (Option Toml.Line) :=
-    if String.starts_with "\n" rem then success (String.drop 1 rem) Option.none
-    else if String.starts_with "\r\n" rem then success (String.drop 2 rem) Option.none
+def toml_comment_line (rem : Text) : ParseResult Text (Option Toml.Line) :=
+    if Input.input_starts_with "\n" rem then success (Input.input_advance 1 rem) Option.none
+    else if Input.input_starts_with "\r\n" rem then success (Input.input_advance 2 rem) Option.none
     else success rem Option.none
 
-def toml_one_line_hws (r : ParseResult String) : ParseResult (Option Toml.Line) :=
+def toml_one_line_hws (r : ParseResult Text String) : ParseResult Text (Option Toml.Line) :=
     match r {
         success rem _ => toml_one_line_check_blank rem,
         fail e => fail e
@@ -1811,7 +1817,7 @@ def toml_one_line_hws (r : ParseResult String) : ParseResult (Option Toml.Line) 
 
 /// Attempt to parse (and consume, including its trailing newline) exactly one
 /// document line, returning `None` for a blank line.
-def Toml.parse_one_line (input : String) : ParseResult (Option Toml.Line) :=
+def Toml.parse_one_line (input : Text) : ParseResult Text (Option Toml.Line) :=
     toml_one_line_hws (toml_ws input)
 
 def Toml.filter_some (opts : List (Option Toml.Line)) : List Toml.Line :=
@@ -1830,7 +1836,7 @@ def toml_filter_some_one (o : Option Toml.Line) (rest : List (Option Toml.Line))
 /// Parse the whole document into a flat list of lines (blank lines dropped).
 /// Anything that isn't a valid blank/header/kv line is left unconsumed — the
 /// caller (Toml.parse) turns leftover input into a parse error.
-def Toml.document (input : String) : ParseResult (List Toml.Line) :=
+def Toml.document (input : Text) : ParseResult Text (List Toml.Line) :=
     map_parse Toml.filter_some (many0 Toml.parse_one_line) input
 
 // ─── Document assembly: lines -> kinded tree -> nested table ───
@@ -2361,9 +2367,9 @@ def Toml.assemble_result (r : Result String (BTreeMap String Toml.Value)) : Resu
 /// Main parse function: parse a full TOML document into its root table.
 #[partial]
 pub def Toml.parse (s : String) : Result Toml.ParseError (BTreeMap String Toml.Value) :=
-    match Toml.document (Toml.strip_bom s) {
+    match Toml.document (Text.of_string (Toml.strip_bom s)) {
         success rem lines =>
-            if is_empty rem
+            if Input.at_end rem
             then Toml.assemble_result (Toml.assemble lines)
             else err (Toml.ParseError.generic "unexpected trailing input"),
         fail e => err (Toml.from_parse_error e)
@@ -2418,16 +2424,16 @@ def Toml.escape_other_byte (b : U8) (rest : List U8) (c : String) : String :=
 /// documents).
 #[partial]
 def Toml.escape_string (input : String) : String :=
-    String.concat_list (Toml.escape_pieces input List.empty)
+    String.concat_list (Toml.escape_pieces (Text.of_string input) List.empty)
 
 #[partial]
-def Toml.escape_pieces (input : String) (acc : List String) : List String :=
-    match String.get input 0 {
+def Toml.escape_pieces (input : Text) (acc : List String) : List String :=
+    match Input.input_head input {
         Option.none => List.reverse acc,
         Option.some _ =>
-            let width : I64 := utf8_char_width input in
-            let ch : String := String.slice input 0 width in
-            Toml.escape_pieces (String.drop width input) (List.cons (Toml.escape_char ch) acc),
+            let width : I64 := text_char_width input in
+            let ch : String := Input.input_text width input in
+            Toml.escape_pieces (Input.input_advance width input) (List.cons (Toml.escape_char ch) acc),
     }
 
 def Toml.string_to_string (s : String) : String :=
@@ -2458,7 +2464,7 @@ def Toml.key_to_string (k : String) : String :=
     if Toml.key_is_bare k then k else Toml.string_to_string k
 
 def Toml.key_is_bare (k : String) : Bool :=
-    Bool.not (String.is_empty k) && Toml.all_bare_chars (Toml.string_chars k)
+    Bool.not (String.is_empty k) && Toml.all_bare_chars (Toml.string_chars (Text.of_string k))
 
 #[partial]
 def Toml.all_bare_chars (cs : List String) : Bool :=

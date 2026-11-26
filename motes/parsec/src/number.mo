@@ -8,7 +8,8 @@
 /// without depending on the compiler's AST, which `lang/src/toml.mo` and
 /// `lang/src/json.mo` both do. Keep this file free of `lang::types`.
 
-use lib::core {ParseResult, custom, is_empty}
+use lib::core {ParseError, ParseResult, is_empty}
+use lib::input {Input, Text}
 use lib::char_preds {is_digit, is_digit_byte, is_digit_or_underscore_byte, is_hex_digit_byte}
 use lib::combinators {tag, take_while_byte}
 
@@ -22,11 +23,11 @@ def is_digit_or_underscore (c : String) : Bool :=
     else String.beq "_" c
 
 #[partial]
-pub def number (input : String) : ParseResult I64 :=
+pub def number (input : Text) : ParseResult Text I64 :=
     number_body (take_while_byte is_digit_or_underscore_byte input)
 
 #[partial]
-def number_body (r : ParseResult String) : ParseResult I64 :=
+def number_body (r : ParseResult Text String) : ParseResult Text I64 :=
     match r {
         success rem out => number_body_out out rem,
         fail e => fail e
@@ -36,13 +37,13 @@ def number_body (r : ParseResult String) : ParseResult I64 :=
 /// `success` binder is typed by the constructor's `A` (so the affine walk
 /// cannot name it as `String` and a second mention is an affine use); a
 /// `String` parameter is `Copy`.
-def number_body_out (out : String) (rem : String) : ParseResult I64 :=
+def number_body_out (out : String) (rem : Text) : ParseResult Text I64 :=
     if is_empty out
     then fail (ParseError.custom "expected number" rem)
     else number_parse out rem
 
 #[partial]
-def number_parse (s : String) (rem : String) : ParseResult I64 :=
+def number_parse (s : String) (rem : Text) : ParseResult Text I64 :=
     if is_empty s
     then fail (ParseError.custom "empty number" rem)
     else if is_digit (String.slice s 0 1)
@@ -109,18 +110,18 @@ def parse_i64_loop (s : String) (acc : I64) : Option I64 :=
 // no underscore-grouping support for any numeric literal.
 
 #[partial]
-pub def hex_number (input : String) : ParseResult I64 :=
+pub def hex_number (input : Text) : ParseResult Text I64 :=
     hex_number_body (take_while_byte is_hex_digit_byte input)
 
 #[partial]
-def hex_number_body (r : ParseResult String) : ParseResult I64 :=
+def hex_number_body (r : ParseResult Text String) : ParseResult Text I64 :=
     match r {
         success rem out => hex_number_body_out out rem,
         fail e => fail e
     }
 
 /// See `number_body_out` for why the payload is checked in its own def.
-def hex_number_body_out (out : String) (rem : String) : ParseResult I64 :=
+def hex_number_body_out (out : String) (rem : Text) : ParseResult Text I64 :=
     if is_empty out
     then fail (ParseError.custom "expected hex digits" rem)
     else success rem (parse_hex_digits out)

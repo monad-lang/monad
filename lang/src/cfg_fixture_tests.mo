@@ -12,6 +12,7 @@ use std::stream {StreamError}
 use std::list {List.intercalate}
 use parsec::core {ParseResult.fail, ParseResult.success}
 use lang::types {Decl, show_name_path}
+use parsec::core {Text}
 use lang::parser {decls_parser_located_cfg}
 use lib::module {cfg_env_for_file}
 
@@ -27,7 +28,7 @@ def survivors (dir : String) : IO String := do {
     match read {
         Result.ok source => do {
             let env <- cfg_env_for_file path source;
-            match decls_parser_located_cfg env source {
+            match decls_parser_located_cfg env (Text.of_string source) {
                 success _ ds => return (List.intercalate "," (List.map label ds)),
                 fail _ => return "<fail>",
             }

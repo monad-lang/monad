@@ -72,7 +72,8 @@ use lang::module {DeclRange, decl_range_span, decl_ranges_of_source}
 use lang::parser {decls_skip, skip_docstrings}
 use lang::parser::whitespace {skip_spaces}
 use lang::types {Location, ParseDecl, ParseDeclKind, SourceRange}
-use parsec::core {ParseResult}
+use parsec::core {ParseResult, Text}
+use parsec::input {Input}
 use lib::config {LintConfig, LintLevel, effective_level, level_name, level_reports}
 use lib::diagnostic {LintDiagnostic, mk_lint}
 use lib::rules {
@@ -197,9 +198,9 @@ pub type LintParse {
 /// The failure arm short-circuits before the range scan, because a range list
 /// over text that did not parse is not worth computing.
 pub def lint_parse (path : String) (src : String) : LintParse :=
-    match decls_skip (skip_docstrings (skip_spaces src)) List.empty {
+    match decls_skip (skip_docstrings (skip_spaces (Text.of_string src))) List.empty {
         ParseResult.success rem ds =>
-            if String.is_empty (skip_docstrings (skip_spaces rem))
+            if Input.at_end (skip_docstrings (skip_spaces rem))
             then LintParse.lint_ok (mk_lint_file path src ds)
             else LintParse.lint_failed (parse_failure_message path),
         ParseResult.fail _ => LintParse.lint_failed (parse_failure_message path),

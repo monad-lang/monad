@@ -30,7 +30,7 @@
 // -- real source text registers the same `Inductive`/`InductConstructor`
 // values with no new export needed.
 
-use lang::module {try_parse_decls}
+use lang::module {try_parse_decls_str}
 use lang::scope {build_scope_from_decls}
 use lang::typecheck::infer {empty_locals, type_check}
 use lang::typecheck::whnf {whnf}
@@ -49,7 +49,7 @@ def named_free_var (name : String) : Term := Term.var sentinel (DebugName.named 
 /// than silently passing against an empty one.
 def scope_of (source : String) : Scope :=
     let sd : ScopeData :=
-        match try_parse_decls source {
+        match try_parse_decls_str source {
             Option.some decl_list => build_scope_from_decls elim_props_path decl_list,
             Option.none => build_scope_from_decls elim_props_path List.empty,
         } in

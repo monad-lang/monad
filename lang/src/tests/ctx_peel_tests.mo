@@ -38,6 +38,7 @@ use lang::types {
 }
 use lang::module {try_parse_decls}
 use lang::scope {build_scope_from_decls, type_head_name_local}
+use parsec::core {Text}
 use lang::typecheck::infer {
     con_spine_result_typ, solve_typevars, type_head_name,
 }
@@ -58,7 +59,7 @@ def ctx_peel_loc : Location := { offset := 0, line := 1, column := 1 }
 /// produces rather than ones this file guesses.
 def ctx_peel_scope : Scope :=
     let sd : ScopeData :=
-        match try_parse_decls "type Box { box }\n" {
+        match try_parse_decls (Text.of_string "type Box { box }\n") {
             Option.some decl_list => build_scope_from_decls ctx_peel_synthetic_path decl_list,
             Option.none => build_scope_from_decls ctx_peel_synthetic_path List.empty,
         } in

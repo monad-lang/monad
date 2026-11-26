@@ -27,7 +27,7 @@
 /// `parse_fragment`, the string path, so a char literal has no
 /// continuation branch and `'\<newline>'` is an error in both compilers.
 use lib::parser::string {char_literal, string_parse}
-use parsec::core {ParseResult}
+use parsec::core {ParseResult, Text}
 use lib::types {ParseTerm, ParseTermKind, ParseLiteral, char_to_string}
 
 def nl : String := "\n"
@@ -47,14 +47,14 @@ def char_src (body : String) : String :=
     String.concat "'" (String.concat body "'")
 
 /// `true` when `string_parse` REJECTS `src`.
-def string_rejected (src : String) : Bool :=
+def string_rejected (src : Text) : Bool :=
     match string_parse src {
         ParseResult.fail _ => Bool.true,
         ParseResult.success _ _ => Bool.false,
     }
 
 /// `true` when `char_literal` REJECTS `src`.
-def char_rejected (src : String) : Bool :=
+def char_rejected (src : Text) : Bool :=
     match char_literal src {
         ParseResult.fail _ => Bool.true,
         ParseResult.success _ _ => Bool.false,
@@ -64,7 +64,7 @@ def char_rejected (src : String) : Bool :=
 /// shape. The string-side twin of `char_value`, and what lets the fixed
 /// escapes below be checked through the decoder rather than against
 /// themselves.
-def string_value (src : String) : String :=
+def string_value (src : Text) : String :=
     match string_parse src {
         ParseResult.fail _ => "<rejected>",
         ParseResult.success _ t =>
@@ -79,7 +79,7 @@ def string_value (src : String) : String :=
     }
 
 /// The `Char` a parsed char literal holds, or `'?'` for another shape.
-def char_value (src : String) : String :=
+def char_value (src : Text) : String :=
     match char_literal src {
         ParseResult.fail _ => "<rejected>",
         ParseResult.success _ t =>
@@ -232,81 +232,81 @@ def test_line_continuation_before_a_unicode_escape : Bool :=
 
 #[test]
 def test_fixed_escape_newline : Bool :=
-    String.beq (string_value (lit_src (String.concat bs "n"))) nl
+    String.beq (string_value (Text.of_string (lit_src (String.concat bs "n")))) nl
 
 #[test]
 def test_fixed_escape_backslash : Bool :=
-    String.beq (string_value (lit_src (String.concat bs bs))) bs
+    String.beq (string_value (Text.of_string (lit_src (String.concat bs bs)))) bs
 
 #[test]
 def test_fixed_escape_quote : Bool :=
-    String.beq (string_value (lit_src (String.concat bs "\""))) "\""
+    String.beq (string_value (Text.of_string (lit_src (String.concat bs "\"")))) "\""
 
 #[test]
 def test_fixed_escape_tab : Bool :=
-    String.beq (string_value (lit_src (String.concat bs "t"))) tab
+    String.beq (string_value (Text.of_string (lit_src (String.concat bs "t")))) tab
 
 // ─── The boundary cases, which can only be written programmatically ──
 
 /// `char::from_u32` rejects anything above the last scalar value.
 #[test]
 def test_unicode_escape_rejects_above_max_scalar : Bool :=
-    string_rejected (lit_src (String.concat bs "u{110000}"))
+    string_rejected (Text.of_string (lit_src (String.concat bs "u{110000}")))
 
 /// ... and the surrogate range, which is a `char` in Rust only through
 /// `from_u32_unchecked`.
 #[test]
 def test_unicode_escape_rejects_surrogate_range : Bool :=
     Bool.and
-        (string_rejected (lit_src (String.concat bs "u{D800}")))
-        (string_rejected (lit_src (String.concat bs "u{DFFF}")))
+        (string_rejected (Text.of_string (lit_src (String.concat bs "u{D800}"))))
+        (string_rejected (Text.of_string (lit_src (String.concat bs "u{DFFF}"))))
 
 /// `take_while_m_n(1, 6, ...)` needs at least one digit ...
 #[test]
 def test_unicode_escape_rejects_empty_digits : Bool :=
-    string_rejected (lit_src (String.concat bs "u{}"))
+    string_rejected (Text.of_string (lit_src (String.concat bs "u{}")))
 
 /// ... and stops at six, so a seventh is a parse error rather than an
 /// out-of-range codepoint.
 #[test]
 def test_unicode_escape_rejects_seven_digits : Bool :=
-    string_rejected (lit_src (String.concat bs "u{1234567}"))
+    string_rejected (Text.of_string (lit_src (String.concat bs "u{1234567}")))
 
 #[test]
 def test_unicode_escape_rejects_non_hex_digit : Bool :=
-    string_rejected (lit_src (String.concat bs "u{4g}"))
+    string_rejected (Text.of_string (lit_src (String.concat bs "u{4g}")))
 
 /// The `{` is not optional -- this is what separates the escape from the
 /// fixed table, which would otherwise have to know about `u`.
 #[test]
 def test_unicode_escape_rejects_missing_brace : Bool :=
     Bool.and
-        (string_rejected (lit_src (String.concat bs "u41")))
-        (string_rejected (lit_src (String.concat bs "u{41")))
+        (string_rejected (Text.of_string (lit_src (String.concat bs "u41"))))
+        (string_rejected (Text.of_string (lit_src (String.concat bs "u{41"))))
 
 /// A letter that is neither `u` nor one of the nine is still unknown.
 #[test]
 def test_unknown_escape_is_rejected : Bool :=
-    string_rejected (lit_src (String.concat bs "q"))
+    string_rejected (Text.of_string (lit_src (String.concat bs "q")))
 
 // ─── Char literals: `\u{...}` yes, escaped whitespace NO ────────────
 
 #[test]
 def test_char_literal_unicode_escape : Bool :=
-    String.beq (char_value (char_src (String.concat bs "u{41}"))) "A"
+    String.beq (char_value (Text.of_string (char_src (String.concat bs "u{41}")))) "A"
 
 /// The decoded codepoint is stored as its UTF-8 BYTES in the `Char`, so
 /// a two-byte one round-trips.
 #[test]
 def test_char_literal_unicode_escape_multibyte : Bool :=
-    String.beq (char_value (char_src (String.concat bs "u{00e9}"))) "é"
+    String.beq (char_value (Text.of_string (char_src (String.concat bs "u{00e9}")))) "é"
 
 /// The char path's width ladder stops at two bytes above it; a three-byte
 /// codepoint has to survive the same way (the payload is the codepoint's
 /// UTF-8 bytes, so what is asserted is the text, not the length).
 #[test]
 def test_char_literal_unicode_escape_three_byte : Bool :=
-    String.beq (char_value (char_src (String.concat bs "u{4E00}"))) "一"
+    String.beq (char_value (Text.of_string (char_src (String.concat bs "u{4E00}")))) "一"
 
 /// This is the literal `pretty_tests.mo`'s
 /// `test_show_literal_char_multibyte` cross-references by name -- it builds
@@ -315,17 +315,17 @@ def test_char_literal_unicode_escape_three_byte : Bool :=
 /// cross-reference pointed at a case that did not exist.
 #[test]
 def test_char_literal_unicode_escape_lambda : Bool :=
-    String.beq (char_value (char_src (String.concat bs "u{03BB}"))) "λ"
+    String.beq (char_value (Text.of_string (char_src (String.concat bs "u{03BB}")))) "λ"
 
 #[test]
 def test_char_literal_fixed_escape : Bool :=
     Bool.and
-        (String.beq (char_value (char_src (String.concat bs "n"))) nl)
-        (String.beq (char_value (char_src (String.concat bs bs))) bs)
+        (String.beq (char_value (Text.of_string (char_src (String.concat bs "n")))) nl)
+        (String.beq (char_value (Text.of_string (char_src (String.concat bs bs)))) bs)
 
 #[test]
 def test_char_literal_plain : Bool :=
-    String.beq (char_value (char_src "M")) "M"
+    String.beq (char_value (Text.of_string (char_src "M"))) "M"
 
 /// `parse_char_literal` is `complete(delimited(char('\''),
 /// alt((parse_escaped_char, anychar)), char('\'')))` -- there is no
@@ -334,11 +334,11 @@ def test_char_literal_plain : Bool :=
 #[test]
 def test_char_literal_has_no_escaped_whitespace : Bool :=
     Bool.and
-        (char_rejected (char_src (String.concat bs nl)))
-        (char_rejected (char_src (String.concat bs tab)))
+        (char_rejected (Text.of_string (char_src (String.concat bs nl))))
+        (char_rejected (Text.of_string (char_src (String.concat bs tab))))
 
 #[test]
 def test_char_literal_unicode_escape_boundaries : Bool :=
     Bool.and
-        (char_rejected (char_src (String.concat bs "u{110000}")))
-        (char_rejected (char_src (String.concat bs "u{4g}")))
+        (char_rejected (Text.of_string (char_src (String.concat bs "u{110000}"))))
+        (char_rejected (Text.of_string (char_src (String.concat bs "u{4g}"))))

@@ -1,4 +1,6 @@
 use std::show {Show}
+use parsec::core {Text}
+use parsec::input {Input}
 use std::path {Path}
 // `ScopeData.def_refs`/`inductives` below are typed `NameMap`s backed by a
 // `std.map` `HashMap String _`.
@@ -1336,9 +1338,9 @@ pub type AffineMode {
 /// each one is handed only the unconsumed remainder, and the whole file
 /// exists nowhere in the grammar at all -- only `build_loc_table`, which
 /// runs after the parse, ever holds it. Both
-/// numbers here are available locally and for free: `String.length input`
-/// before a parser runs and `String.length rem` after it succeeds, each
-/// an O(1) read on the `SharedStr` window the remainder actually is.
+/// numbers here are available locally and for free: `Input.input_len input`
+/// before a parser runs and `Input.input_len rem` after it succeeds, each
+/// an O(1) field read on the cursor.
 /// Recording an absolute offset instead would mean threading the file
 /// (or its length) through all ~235 grammar defs -- re-adding exactly
 /// the threading that dropping the de Bruijn `ctx` removes.
@@ -1376,8 +1378,8 @@ def pt_ (k : ParseTermKind) : ParseTerm :=
 /// remainder it left, which is the shape every parser already has in
 /// hand at the point it succeeds.
 #[partial]
-def pt_at (input : String) (rem : String) (k : ParseTermKind) : ParseTerm :=
-    { span := { start_rem := String.length input, end_rem := String.length rem }, kind := k }
+def pt_at (input : Text) (rem : Text) (k : ParseTermKind) : ParseTerm :=
+    { span := { start_rem := Input.input_len input, end_rem := Input.input_len rem }, kind := k }
 
 /// Span a compound term from the start of its LEFTMOST sub-term to
 /// `rem`. The grammar builds application chains and infix climbs
@@ -1391,10 +1393,10 @@ def pt_at (input : String) (rem : String) (k : ParseTermKind) : ParseTerm :=
 /// to a real end is not a position, and half a location is worse than
 /// none.
 #[partial]
-def pt_from (left : ParseTerm) (rem : String) (k : ParseTermKind) : ParseTerm :=
+def pt_from (left : ParseTerm) (rem : Text) (k : ParseTermKind) : ParseTerm :=
     if parse_span_is_unknown left.span
     then pt_ k
-    else { span := { start_rem := left.span.start_rem, end_rem := String.length rem }, kind := k }
+    else { span := { start_rem := left.span.start_rem, end_rem := Input.input_len rem }, kind := k }
 
 // Same-arity constructors for each kind, so converting a grammar site is
 // a token rename (`Term.app` -> `pt_app`) rather than a wrap that would
@@ -1617,8 +1619,8 @@ def pd_ (k : ParseDeclKind) : ParseDecl :=
 /// Build a located `ParseDecl` from the input it started at and the
 /// remainder it left.
 #[partial]
-def pd_at (input : String) (rem : String) (k : ParseDeclKind) : ParseDecl :=
-    { span := { start_rem := String.length input, end_rem := String.length rem }, kind := k }
+def pd_at (input : Text) (rem : Text) (k : ParseDeclKind) : ParseDecl :=
+    { span := { start_rem := Input.input_len input, end_rem := Input.input_len rem }, kind := k }
 
 // Same-arity constructors per declaration kind, for the same reason the
 // `pt_*` family exists: a grammar site converts by renaming

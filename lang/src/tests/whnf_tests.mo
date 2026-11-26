@@ -7,7 +7,7 @@ use lang::types {case_minors,
     cub, imeet, ineg,
 }
 use lib::module {parse_all_decls}
-use parsec::core {fail, success}
+use parsec::core {fail, success, Text}
 use lib::scope {build_scope_from_decls}
 use lib::typecheck::whnf {normalize_path_endpoints, whnf}
 
@@ -31,7 +31,7 @@ def empty_locals : LocalScope := {
 /// rather than silently pass on a stuck term.
 def scope_of (source : String) : Scope :=
     let sd : ScopeData :=
-        match parse_all_decls source {
+        match parse_all_decls (Text.of_string source) {
             success _ decl_list => build_scope_from_decls synthetic_path decl_list,
             fail _ => build_scope_from_decls synthetic_path List.empty,
         } in

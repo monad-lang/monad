@@ -117,6 +117,7 @@ use lang::typecheck::usage {spine_head_name}
 // (`lang/log` -- helpers gate on `verbose` themselves; the fail lines
 // are ungated, printing in both modes as they did before).
 use std::log {fail_line, stage}
+use parsec::core {Text}
 
 open IO {println, get_env}
 open LLVMType {i1_, i8_, i32_, i64_, f32_, f64_, ptr, void}
@@ -3532,7 +3533,7 @@ def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option 
 /// see its own doc comment) can't distinguish an ordinary top-level
 /// FUNCTION from a data constructor of some unrelated type that happens
 /// to share the same bare name -- e.g. `lang/parser/combinators.mo`'s own
-/// `def tag (s : String) (input : String) : ParseResult String` versus
+/// `def tag (s : String) (input : Text) : ParseResult String` versus
 /// `lang/parser/core.mo`'s `ParseError`'s `tag (expected) (remaining)`
 /// constructor: same bare name, same arity. Reusing that table here to
 /// decide "is this call spine's head actually a constructor?" silently

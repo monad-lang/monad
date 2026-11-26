@@ -5,19 +5,16 @@ use lib::types {LocatedSpan, Location}
 use parsec::combinators {utf8_char_width}
 
 /// Create a new LocatedSpan starting at offset 0, line 1, column 1
-#[partial]
 def new_span (s : String) : LocatedSpan :=
     LocatedSpan.mk s (Location.mk 0 1 1)
 
 /// Extract the location from a LocatedSpan
-#[partial]
 def span_location (span : LocatedSpan) : Location :=
     match span {
         mk frag loc => loc
     }
 
 /// Extract the fragment string from a LocatedSpan
-#[partial]
 def span_fragment (span : LocatedSpan) : String :=
     match span {
         mk frag loc => frag
@@ -86,7 +83,6 @@ def line_col_scan_direct (s : String) (nl : I64) (trailing : I64) : LineColScan 
 /// Scan `s` for the newline/trailing-column bookkeeping `advance_location`
 /// needs. Two native passes over the bytes: no recursion, no allocation,
 /// and no length limit.
-#[partial]
 def line_col_scan (s : String) : LineColScan :=
     let len : I64 := String.length s in
     { newlines := String.count_newlines s len,
@@ -104,7 +100,6 @@ def line_col_scan (s : String) : LineColScan :=
 /// this same range. `test_trailing_chars_matches_continuation_byte_rule`
 /// holds the native to it directly, rather than leaving the agreement to
 /// a comment.
-#[partial]
 def is_utf8_continuation_byte (byte : U8) : Bool :=
     U8.gt byte 127u8 && U8.lt byte 192u8
 
@@ -113,7 +108,6 @@ def is_utf8_continuation_byte (byte : U8) : Bool :=
 /// with no per-character recursion to overflow. `consumed`'s own byte
 /// length determines the new `offset` (matching `String.slice`/
 /// `String.drop`'s byte semantics).
-#[partial]
 def advance_location (loc : Location) (consumed : String) : Location :=
     match loc {
         mk off line col =>
@@ -128,7 +122,6 @@ def advance_location (loc : Location) (consumed : String) : Location :=
     }
 
 /// Consume n bytes from a LocatedSpan, advancing the location
-#[partial]
 def consume_span (span : LocatedSpan) (n : I64) : LocatedSpan :=
     match span {
         mk frag loc =>
@@ -137,6 +130,20 @@ def consume_span (span : LocatedSpan) (n : I64) : LocatedSpan :=
             let new_loc : Location := advance_location loc consumed in
             LocatedSpan.mk rest new_loc
     }
+
+/// The `Location` of absolute byte `offset` in `source`. Two native passes
+/// over the consumed prefix (`String.count_newlines` / `String.trailing_chars`):
+/// no recursion and no allocation. This is what a `ParseError` needs now: it
+/// carries its cursor's ABSOLUTE offset, so there is no remainder length to
+/// diff against the source any more.
+pub def location_at_offset (source : String) (offset : I64) : Location :=
+    let limit : I64 := String.length source in
+    let off : I64 :=
+        if I64.gt offset limit then limit
+        else if I64.lt offset 0 then 0
+        else offset
+    in
+    resolve_advance source off (Location.mk 0 1 1)
 
 /// Compute the `Location` where `remaining` begins within `original` —
 /// how this parser surfaces error positions: rather than threading a
@@ -150,7 +157,6 @@ def consume_span (span : LocatedSpan) (n : I64) : LocatedSpan :=
 /// always a suffix of `original` at a valid UTF-8 boundary (every
 /// scanner in this parser now steps by `utf8_char_width`, never a raw
 /// byte), so the byte-length diff below always lands on one too.
-#[partial]
 def location_of_remaining (original : String) (remaining : String) : Location :=
     location_of_remaining_len original (String.length remaining)
 
@@ -226,7 +232,6 @@ def location_of_remaining_len (original : String) (remaining_len : I64) : Locati
 /// UTF-8 continuation bytes, which is what
 /// `test_resolve_offsets_column_counts_characters` pins down. The byte
 /// `offset` still advances by `len`, since offsets are byte-measured.
-#[partial]
 def resolve_advance (rest : String) (len : I64) (loc : Location) : Location :=
     let nl : I64 := String.count_newlines rest len in
     let trail : I64 := String.trailing_chars rest len in
@@ -364,7 +369,6 @@ def boundary_at_or_after (s : String) (i : I64) : I64 :=
 /// rather than being dropped: end-of-input is a real position, and a
 /// dropped entry would leave a term with no location for no visible
 /// reason.
-#[partial]
 pub def resolve_offsets_in_file (source : String) (offsets : List I64) : List (Pair I64 Location) :=
     if is_ascending offsets
     then resolve_ascending source offsets
@@ -410,7 +414,6 @@ def split_alternating (xs : List I64) (l : List I64) (r : List I64) (to_left : B
             else split_alternating rest l (List.cons x r) true,
     }
 
-#[partial]
 def merge_asc (a : List I64) (b : List I64) : List I64 :=
     reverse_offsets (merge_asc_go a b List.empty) List.empty
 
@@ -440,7 +443,6 @@ def reverse_offsets (xs : List I64) (acc : List I64) : List I64 :=
         List.cons x rest => reverse_offsets rest (List.cons x acc),
     }
 
-#[partial]
 pub def is_ascending (offsets : List I64) : Bool := match offsets {
     List.empty => true,
     List.cons a rest => is_ascending_from a rest,
@@ -459,7 +461,6 @@ def is_ascending_from (prev : I64) (offsets : List I64) : Bool := match offsets 
 /// `resolve_walk` accumulates in reverse, hence the reverse at the end --
 /// the same accumulator-passing shape, and for the same
 /// recursion-depth reason, as `merge_asc` above.
-#[partial]
 def resolve_ascending (source : String) (offsets : List I64) : List (Pair I64 Location) :=
     list_reverse_pairs
         (resolve_walk source (Location.mk 0 1 1) (String.length source) offsets List.empty)
@@ -480,7 +481,6 @@ def list_reverse_pairs (xs : List (Pair I64 Location)) (acc : List (Pair I64 Loc
 // check, not a restatement of the implementation.
 
 /// Look one offset up in a resolved table.
-#[partial]
 def lookup_resolved (pairs : List (Pair I64 Location)) (off : I64) : Option Location :=
     match pairs {
         List.empty => Option.none,
@@ -496,18 +496,15 @@ def lookup_resolved_step (p : Pair I64 Location) (rest : List (Pair I64 Location
 /// `location_of_remaining_len` takes a REMAINING length; the bulk path
 /// takes an absolute offset. This converts, so both sides of the
 /// comparison below describe the same point.
-#[partial]
 def single_location_at (source : String) (off : I64) : Location :=
     location_of_remaining_len source (I64.sub (String.length source) off)
 
-#[partial]
 def agrees_at (source : String) (pairs : List (Pair I64 Location)) (off : I64) : Bool :=
     match lookup_resolved pairs off {
         Option.some got => location_beq got (single_location_at source off),
         Option.none => false,
     }
 
-#[partial]
 def location_beq (a : Location) (b : Location) : Bool :=
     I64.beq a.offset b.offset && I64.beq a.line b.line && I64.beq a.column b.column
 
@@ -545,7 +542,6 @@ def test_line_col_scan_matches_reference : Bool :=
         && scan_agrees "—\n—\n—"
         && scan_agrees "def a : I64 := 1\ndef b : I64 := 2\n\ndef c : I64 := 3\n"
 
-#[partial]
 def scan_agrees (s : String) : Bool :=
     match line_col_scan s {
         mk nl trail =>
@@ -684,7 +680,6 @@ def test_resolve_offsets_mid_character_batch : Bool :=
 
 /// `Option.some loc` equal to `expect` on all three fields; `Option.none`
 /// is never equal, so a missing entry fails rather than passing vacuously.
-#[partial]
 def loc_eq_opt (got : Option Location) (expect : Location) : Bool :=
     match got {
         Option.some l =>

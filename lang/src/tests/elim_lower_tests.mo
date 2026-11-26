@@ -22,12 +22,13 @@ use lib::scope {build_scope_from_decls, scope_find_inductive}
 use lib::elim_lower {ElimArm, bool_branches, elim_arms, elim_arms_in}
 use lib::typecheck::infer {canonicalize_ctor_refs, empty_local_types, empty_locals, type_check}
 use lib::typecheck::diagnostic {type_error_message}
+use parsec::core {Text}
 
 def elim_lower_test_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "elim_lower_tests") List.empty)
 
 def scope_of (source : String) : Scope :=
     let sd : ScopeData :=
-        match try_parse_decls source {
+        match try_parse_decls (Text.of_string source) {
             Option.some decl_list => build_scope_from_decls elim_lower_test_path decl_list,
             Option.none => build_scope_from_decls elim_lower_test_path List.empty,
         } in

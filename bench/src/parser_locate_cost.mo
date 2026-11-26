@@ -31,7 +31,7 @@ use std::list {}
 open IO {println}
 use std::bench {Bench.now, Bench.report_since}
 use lang::types {Decl, Location, ParseDecl}
-use parsec::core {ParseResult}
+use parsec::core {ParseResult, Text}
 use lang::parser::lower_parse {collect_decl_rems, lower_ctx_bare, lower_ctx_locating, lower_parse_decls}
 use lang::parser {build_loc_table, decls_skip, rekey_by_rem, rems_to_offsets, skip_docstrings}
 use lang::parser::position {resolve_offsets_in_file}
@@ -39,7 +39,7 @@ use lang::typecheck::macro_queue {expand_decls}
 use std::map {HashMap}
 
 #[partial]
-def pre_decls (r : ParseResult (List ParseDecl)) : List ParseDecl :=
+def pre_decls (r : ParseResult Text (List ParseDecl)) : List ParseDecl :=
     match r {
         ParseResult.success _ ds => ds,
         ParseResult.fail _ => List.empty,
@@ -78,7 +78,7 @@ def run_locate_cost_on (path : String) (src : String) : IO Bool := do {
 
     // The control: the raw parse, identical in both modes.
     let t_parse : I64 <- Bench.now;
-    let pre : List ParseDecl := pre_decls (decls_skip (skip_docstrings (skip_spaces src)) List.empty);
+    let pre : List ParseDecl := pre_decls (decls_skip (skip_docstrings (skip_spaces (Text.of_string src))) List.empty);
     let n_pre : I64 := List.length pre;
     Bench.report_since "  parse (shared by both modes) " t_parse;
 

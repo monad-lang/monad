@@ -2,7 +2,7 @@
 /// Extracted from parser.mo as part of Phase C
 
 use lib::types {}
-use parsec::core {ParseResult, custom, is_empty}
+use parsec::core {ParseResult, custom, is_empty, Text}
 use parsec::char_preds {ident_start, is_ident_char_byte}
 use lib::parser::keywords {is_keyword}
 use parsec::combinators {take_while_byte}
@@ -12,12 +12,12 @@ open ParseResult {fail, success}
 /// Parse an identifier from the input string
 /// Returns the parsed identifier string and remaining input
 #[partial]
-def identifier (input : String) : ParseResult String :=
+def identifier (input : Text) : ParseResult Text String :=
     identifier_try (take_while_byte is_ident_char_byte input)
 
 /// Helper: validate and return the parsed identifier
 #[partial]
-def identifier_try (r : ParseResult String) : ParseResult String :=
+def identifier_try (r : ParseResult Text String) : ParseResult Text String :=
     match r {
         success rem out =>
             if String.is_empty out
@@ -28,14 +28,14 @@ def identifier_try (r : ParseResult String) : ParseResult String :=
 
 /// Check if the identifier starts with a valid character
 #[partial]
-def identifier_check_start (s : String) (rem : String) : ParseResult String :=
+def identifier_check_start (s : String) (rem : Text) : ParseResult Text String :=
     if ident_start (String.slice s 0 1)
     then identifier_check_kw s rem
     else fail (ParseError.custom "identifier cannot start with digit" rem)
 
 /// Check if the identifier is a reserved keyword
 #[partial]
-def identifier_check_kw (s : String) (rem : String) : ParseResult String :=
+def identifier_check_kw (s : String) (rem : Text) : ParseResult Text String :=
     if is_keyword s
     then fail (ParseError.custom ("reserved keyword: " ++ s) rem)
     else success rem s

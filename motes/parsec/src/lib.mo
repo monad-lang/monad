@@ -17,7 +17,9 @@
 // No `{*}` globs: at this size a glob drags a whole namespace into every
 // importer's scope, which is both slow and a name-collision hazard.
 
-pub use lib::core {ParseError, ParseResult}
+pub use lib::core {ParseError, ParseResult, Text}
+pub use lib::input {Bytes, Input}
+pub use lib::parser {Parser}
 pub use lib::combinators {take_while, take_while_byte}
 pub use lib::char_preds {is_ident_char, is_ident_char_byte, is_space, is_space_byte}
 pub use lib::number {parse_i64}

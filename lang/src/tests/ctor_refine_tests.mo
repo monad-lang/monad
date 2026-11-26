@@ -12,6 +12,7 @@ use lang::types {
 }
 use lib::module {try_parse_decls}
 use lib::scope {build_scope_from_decls, find_constructor_in_inductive, scope_find_inductive}
+use parsec::core {Text}
 use lib::typecheck::ctor_refine {
     IndexMatch, IndexSolution, MatchEnv, empty_solution, index_positions, intro_clash, intro_ctor,
     intro_indices, refine_expected, refine_field_types, solve_ctor,
@@ -27,7 +28,7 @@ def source : String :=
 
 def scope_ : Scope :=
     let sd : ScopeData :=
-        match try_parse_decls source {
+        match try_parse_decls (Text.of_string source) {
             Option.some decl_list => build_scope_from_decls ctor_refine_test_path decl_list,
             Option.none => build_scope_from_decls ctor_refine_test_path List.empty,
         } in
@@ -303,7 +304,7 @@ def show_np (n : NamePath) : String :=
 
 def qualified_scope : Scope :=
     let sd : ScopeData :=
-        match try_parse_decls source {
+        match try_parse_decls (Text.of_string source) {
             Option.some decl_list => build_scope_from_decls ctor_refine_test_path (qualified_decls decl_list),
             Option.none => build_scope_from_decls ctor_refine_test_path List.empty,
         } in

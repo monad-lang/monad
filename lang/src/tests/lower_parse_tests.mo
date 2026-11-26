@@ -9,6 +9,7 @@
 
 use lang::types {Decl, Literal, Term}
 use lib::module {parse_all_decls}
+use parsec::core {Text}
 
 open ParseResult {fail, success}
 
@@ -110,7 +111,7 @@ def dom_is (o : Option Term) (want : I64) : Bool :=
 /// report 0.
 #[test]
 def test_anonymous_arrow_codomain_counts_its_binder : Bool :=
-    match parse_all_decls "def ArrowT (A B : Type) : Type := A -> B" {
+    match parse_all_decls (Text.of_string "def ArrowT (A B : Type) : Type := A -> B") {
         success _ decls =>
             dom_is (arrow_body decls) 1 && cod_is (arrow_body decls) 1,
         fail _ => false,
@@ -121,7 +122,7 @@ def test_anonymous_arrow_codomain_counts_its_binder : Bool :=
 /// parameter has, so it is the one that matters corpus-wide.
 #[test]
 def test_parameter_arrow_codomain_counts_its_binder : Bool :=
-    match parse_all_decls "def use_arrow (A B : Type) (g : A -> B) : B := g" {
+    match parse_all_decls (Text.of_string "def use_arrow (A B : Type) (g : A -> B) : B := g") {
         success _ decls =>
             dom_is (param_arrow decls) 1 && cod_is (param_arrow decls) 1,
         fail _ => false,
@@ -131,7 +132,7 @@ def test_parameter_arrow_codomain_counts_its_binder : Bool :=
 /// the fix did not change the one case that worked.
 #[test]
 def test_named_arrow_codomain_counts_its_binder : Bool :=
-    match parse_all_decls "def Named (A B : Type) : Type := (x : A) -> B" {
+    match parse_all_decls (Text.of_string "def Named (A B : Type) : Type := (x : A) -> B") {
         success _ decls => cod_is (arrow_body decls) 1,
         fail _ => false,
     }
@@ -160,7 +161,7 @@ def is_field_match (t : Term) : Bool :=
 #[test]
 def test_parenthesized_projection_lowers_to_a_field_match : Bool :=
     let src : String := "def via (p : I64) : I64 := (p).a\n" in
-    match parse_all_decls src {
+    match parse_all_decls (Text.of_string src) {
         ParseResult.success _ decls =>
             match def_term_of decls {
                 Option.some t => is_field_match t,

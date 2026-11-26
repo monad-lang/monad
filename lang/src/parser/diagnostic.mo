@@ -3,7 +3,7 @@
 /// `error: <message> at L:C\n  --> path:L:C\n<context lines>` — using
 /// `lang/parser/core.mo`'s `ParseError` (which carries the input
 /// remaining at the point of failure) and
-/// `lang/parser/position.mo`'s `location_of_remaining` to recover a
+/// `lang/parser/position.mo`'s `location_at_offset` to recover a
 /// real line:column. No ANSI color codes (mirrors the Rust renderer's
 /// `use_colors: false` path) — this is a CLI-and-log-friendly plain
 /// rendering, not a byte-for-byte reproduction of every `diag.rs`
@@ -12,14 +12,14 @@
 /// like" diagnostic, which is what a parse failure actually needs.
 
 use lib::types {Location}
-use parsec::core {ParseError, parse_error_remaining}
-use lib::parser::position {location_of_remaining}
+use parsec::core {ParseError, Text}
+use parsec::input {Input}
+use lib::parser::position {location_at_offset}
 
 /// A human-readable description of what went wrong — `tag` failures
 /// (the vast majority, since almost every leaf-level literal match goes
 /// through `combinators.mo`'s `tag`) render as `expected '<text>'`;
 /// `custom` failures already carry their own full message.
-#[partial]
 def error_message (err : ParseError) : String :=
     match err {
         ParseError.tag expected _ => String.concat "expected '" (String.concat expected "'"),
@@ -27,16 +27,15 @@ def error_message (err : ParseError) : String :=
     }
 
 /// Render a full Rust-diag.rs-style diagnostic for a parse failure.
-/// `source` must be the SAME full text `err`'s remaining was produced
-/// from (i.e. what was originally handed to `decls_parser`/whichever
-/// top-level parser call failed) — `location_of_remaining` diffs
-/// against it to recover a position, so a mismatched `source` silently
-/// produces a nonsense location rather than an error (same caveat as
-/// `location_of_remaining` itself).
+/// `source` must be the SAME full text `err` was produced from (i.e. what
+/// was originally handed to `decls_parser`/whichever top-level parser call
+/// failed) — the error carries an absolute byte offset into it, so a
+/// mismatched `source` silently produces a nonsense location rather than an
+/// error.
 #[partial]
 def render_parse_error (source : String) (path : Option String) (err : ParseError) : String :=
     let msg : String := error_message err in
-    let loc : Location := location_of_remaining source (parse_error_remaining err) in
+    let loc : Location := location_at_offset source (ParseError.error_offset err) in
     match loc {
         Location.mk offset line col =>
             let header : String := render_header msg line col in
@@ -50,22 +49,20 @@ def render_parse_error (source : String) (path : Option String) (err : ParseErro
 /// `render_parse_error` above folds exactly this into a rendered string,
 /// which is right for a terminal and wrong for an editor: a language server
 /// needs the position as DATA, and by the time a caller holds the rendered
-/// message the `Location` is gone. Same `location_of_remaining` call, and
-/// the same caveat -- `source` must be the full text `err`'s remaining came
-/// from, or the position is silently nonsense.
+/// message the `Location` is gone. Same offset lookup, and the same
+/// caveat -- `source` must be the full text `err` came from, or the position
+/// is silently nonsense.
 ///
 /// A `Location` is a point, so a caller turning this into a range
 /// synthesizes the end; using the same point twice is correct and honest,
 /// marking the spot rather than inventing an extent.
 pub def parse_error_location (source : String) (err : ParseError) : Location :=
-    location_of_remaining source (parse_error_remaining err)
+    location_at_offset source (ParseError.error_offset err)
 
-#[partial]
 def render_header (msg : String) (line : I64) (col : I64) : String :=
     let loc_str : String := String.concat (I64.to_string line) (String.concat ":" (I64.to_string col)) in
     String.concat "error: " (String.concat msg (String.concat " at " (String.concat loc_str "\n")))
 
-#[partial]
 def render_arrow_line (path : Option String) (line : I64) (col : I64) : String :=
     let path_str : String := match path {
         Option.some p => p,
@@ -98,7 +95,6 @@ def newline_byte : U8 := 10u8
 /// The start of the line containing byte offset `pos` — scans backward
 /// for the nearest preceding `\n`, returning the position right after
 /// it (or 0 if none exists, i.e. `pos` is on the first line).
-#[partial]
 def line_start_before (s : String) (pos : I64) : I64 :=
     line_start_before_go s (pos - 1)
 
@@ -117,7 +113,6 @@ def line_start_before_go (s : String) (pos : I64) : I64 :=
 /// The end of the line containing byte offset `pos` (exclusive) — scans
 /// forward for the nearest following `\n`, returning its position, or
 /// `String.length s` if none exists (the line runs to EOF).
-#[partial]
 def line_end_after (s : String) (pos : I64) : I64 :=
     line_end_after_go s pos (String.length s)
 
@@ -140,7 +135,6 @@ def line_end_after_go (s : String) (pos : I64) (len : I64) : I64 :=
 /// context neighbors alike) lines up its `|` in the same column. If `n`
 /// itself needs more digits than `width`, the field just grows (no
 /// truncation), same as Rust's own formatter.
-#[partial]
 def pad_line_num (width : I64) (n : I64) : String :=
     let s : String := I64.to_string n in
     if I64.lt (String.length s) width
@@ -163,7 +157,6 @@ def spaces (n : I64) : String :=
 /// Every displayed line — error line and context neighbors alike — uses
 /// the SAME `width`-padded number field followed by `" | "`, with no
 /// extra literal prefix on either branch, so the gutters all align.
-#[partial]
 def render_context_line (width : I64) (line_num : I64) (content : String) (is_error_line : Bool) (col : I64) : String :=
     let prefix : String := String.concat (pad_line_num width line_num) (String.concat " | " content) in
     if is_error_line
@@ -173,14 +166,12 @@ def render_context_line (width : I64) (line_num : I64) (content : String) (is_er
 /// Caret indent is `width + 3` spaces (the number field plus the literal
 /// `" | "`) so it lands under the first character of the error line's
 /// own content, then `col - 1` more spaces to reach the actual column.
-#[partial]
 def render_caret (width : I64) (col : I64) : String :=
     if I64.gt col 0
     then String.concat (spaces (I64.add width 3)) (String.concat (spaces (col - 1)) "^---\n")
     else ""
 
 /// Number of decimal digits in a non-negative line number.
-#[partial]
 def digit_count (n : I64) : I64 :=
     String.length (I64.to_string n)
 
@@ -193,7 +184,6 @@ def i64_max (a : I64) (b : I64) : I64 :=
 /// `diag.rs`'s `write_source_context`. `offset` is the failing byte
 /// position (`location_of_remaining`'s own `Location.offset`), which is
 /// what anchors the local backward/forward scans described above.
-#[partial]
 def render_source_context (source : String) (line : I64) (col : I64) (offset : I64) : String :=
     if I64.beq line 0
     then ""
@@ -230,18 +220,23 @@ def render_source_context (source : String) (line : I64) (col : I64) (offset : I
 
 // --- Tests ---
 
+/// The cursor of a failure at absolute `off` in `source`: exactly the shape
+/// a real parse produces (the still-unconsumed suffix).
+def at (source : String) (off : I64) : Text :=
+    Input.input_advance off (Text.of_string source)
+
 #[test]
 def test_error_message_tag : Bool :=
-    String.beq (error_message (ParseError.tag "}" "abc")) "expected '}'"
+    String.beq (error_message (ParseError.tag "}" (at "abc" 0))) "expected '}'"
 
 #[test]
 def test_error_message_custom : Bool :=
-    String.beq (error_message (ParseError.custom "unknown declaration" "abc")) "unknown declaration"
+    String.beq (error_message (ParseError.custom "unknown declaration" (at "abc" 0))) "unknown declaration"
 
 #[test]
 def test_render_parse_error_simple : Bool :=
     let source : String := "def f := x" in
-    let err : ParseError := ParseError.custom "unknown declaration" "x" in
+    let err : ParseError := ParseError.custom "unknown declaration" (at source 9) in
     let rendered : String := render_parse_error source Option.none err in
     // "error: unknown declaration at 1:10\n  --> :1:10\n  1 | def f := x\n               ^---\n"
     String.contains rendered "error: unknown declaration at 1:10"
@@ -251,7 +246,7 @@ def test_render_parse_error_simple : Bool :=
 #[test]
 def test_render_parse_error_with_path : Bool :=
     let source : String := "def f := x" in
-    let err : ParseError := ParseError.custom "unknown declaration" "x" in
+    let err : ParseError := ParseError.custom "unknown declaration" (at source 9) in
     let rendered : String := render_parse_error source (Option.some "examples/foo.mo") err in
     String.contains rendered "--> examples/foo.mo:1:10"
 
@@ -262,7 +257,7 @@ def test_render_parse_error_multi_line : Bool :=
     // in real usage — a `ParseError`'s `remaining` field is always
     // literally the still-unconsumed tail of whatever was being parsed),
     // not just the offending token on its own.
-    let err : ParseError := ParseError.custom "unknown declaration" "bad_here\ndef c := 3" in
+    let err : ParseError := ParseError.custom "unknown declaration" (at source 20) in
     let rendered : String := render_parse_error source Option.none err in
     // error is on line 2, column 10 ("def b := " is 9 chars before "bad_here")
     String.contains rendered "at 2:10"
@@ -273,7 +268,7 @@ def test_render_parse_error_multi_line : Bool :=
 #[test]
 def test_render_source_context_first_line_no_prev : Bool :=
     let source : String := "bad_here\ndef b := 1\ndef c := 3" in
-    let err : ParseError := ParseError.custom "unknown declaration" source in
+    let err : ParseError := ParseError.custom "unknown declaration" (at source 0) in
     let rendered : String := render_parse_error source Option.none err in
     String.contains rendered "at 1:1"
         && String.contains rendered "1 | bad_here"
@@ -283,7 +278,7 @@ def test_render_source_context_first_line_no_prev : Bool :=
 #[test]
 def test_render_source_context_last_line_no_next : Bool :=
     let source : String := "def a := 1\ndef b := 2\nbad_here" in
-    let err : ParseError := ParseError.custom "unknown declaration" "bad_here" in
+    let err : ParseError := ParseError.custom "unknown declaration" (at source 22) in
     let rendered : String := render_parse_error source Option.none err in
     String.contains rendered "at 3:1"
         && String.contains rendered "2 | def b := 2"
@@ -303,7 +298,7 @@ def test_render_source_context_last_line_no_next : Bool :=
 def test_render_source_context_gutter_alignment_exact : Bool :=
     let source : String := "abcdefghij\nklmnop" in
     // remaining is the genuine unconsumed suffix starting at column 5 ('e').
-    let err : ParseError := ParseError.custom "unknown declaration" "efghij\nklmnop" in
+    let err : ParseError := ParseError.custom "unknown declaration" (at source 4) in
     let rendered : String := render_parse_error source Option.none err in
     // width = 3 (only 1- and 2-digit line numbers shown): error line's
     // "  1 | " gutter and the context line's "  2 | " gutter must match
@@ -321,7 +316,7 @@ def test_render_source_context_gutter_alignment_exact : Bool :=
 def test_render_source_context_gutter_width_grows_for_wide_line_numbers : Bool :=
     let padding : String := repeat_line "// padding line to bulk up the source\n" 999 in
     let source : String := String.concat padding "bad_here\nfinal_line" in
-    let err : ParseError := ParseError.custom "unknown declaration" "bad_here\nfinal_line" in
+    let err : ParseError := ParseError.custom "unknown declaration" (at source (String.length padding)) in
     let rendered : String := render_parse_error source Option.none err in
     String.contains rendered "at 1000:1"
         && String.contains rendered " 999 | // padding line to bulk up the source\n"
@@ -340,7 +335,7 @@ def test_render_source_context_gutter_width_grows_for_wide_line_numbers : Bool :
 def test_render_parse_error_large_source_does_not_overflow : Bool :=
     let padding : String := repeat_line "// padding line to bulk up the source\n" 2000 in
     let source : String := String.concat padding "bad_here" in
-    let err : ParseError := ParseError.custom "unknown declaration" "bad_here" in
+    let err : ParseError := ParseError.custom "unknown declaration" (at source (String.length padding)) in
     let rendered : String := render_parse_error source Option.none err in
     String.contains rendered "at 2001:1" && String.contains rendered "bad_here"
 

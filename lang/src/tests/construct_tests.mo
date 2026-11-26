@@ -8,7 +8,7 @@ use lib::construct {
 }
 use lib::parser {decls_parser}
 use lib::pretty {show_term}
-use parsec::core {ParseResult}
+use parsec::core {ParseResult, Text}
 use std::list {List.intercalate}
 
 // --- Rendering ---
@@ -56,7 +56,7 @@ def test_def_text_shape : Bool :=
 
 #[partial]
 def round_trips (text : String) : Bool :=
-    match decls_parser text {
+    match decls_parser (Text.of_string text) {
         ParseResult.success _ decls => one_def_matches text decls,
         ParseResult.fail _ => false,
     }

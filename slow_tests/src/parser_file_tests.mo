@@ -3,7 +3,8 @@
 
 use std::test {Test.read_fixture}
 use lang::parser {decls_parser}
-use parsec::core {}
+use parsec::core {Text}
+use parsec::input {Input}
 
 open ParseResult {fail, success}
 
@@ -96,7 +97,7 @@ def parse_file (path : String) : IO Bool := do {
 
 #[partial]
 def text_parses (text : String) : Bool :=
-    match decls_parser text {
+    match decls_parser (Text.of_string text) {
         success _ _ => true,
         fail _ => false
     }
@@ -174,8 +175,8 @@ def file_fully_parses (path : String) : IO Bool := do {
 
 #[partial]
 def text_fully_parses (text : String) : Bool :=
-    match decls_parser text {
-        success rem _ => String.is_empty rem,
+    match decls_parser (Text.of_string text) {
+        success rem _ => String.Input.at_end rem,
         fail _ => false
     }
 

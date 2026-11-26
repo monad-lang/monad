@@ -6,12 +6,13 @@ use lib::date {Date.to_iso}
 use lib::datetime {DateTime.to_iso}
 use lib::iso8601 {Date.parse_iso, DateTime.parse, parse_offset}
 use lib::error {TimeError.kind}
-use parsec::core {ParseResult}
+use parsec::input {Input}
+use parsec::core {ParseResult, Text}
 open ParseResult {success, fail}
 
 def date_parses_to (s : String) (shown : String) : Bool :=
-    match Date.parse_iso s {
-        success rem date => String.is_empty rem && Date.to_iso date == shown,
+    match Date.parse_iso (Text.of_string s) {
+        success rem date => Input.at_end rem && Date.to_iso date == shown,
         fail _ => false
     }
 
@@ -33,7 +34,7 @@ def test_parse_date_iso : Bool :=
 
 #[test]
 def test_parse_date_iso_rejects_bad_month : Bool :=
-    match Date.parse_iso "2024-13-01" {
+    match Date.parse_iso (Text.of_string "2024-13-01") {
         success _ _ => false,
         fail _ => true
     }
@@ -60,22 +61,22 @@ def test_parse_nine_fraction_digits : Bool :=
 
 #[test]
 def test_parse_offset_z : Bool :=
-    match parse_offset "Z" {
-        success rem value => String.is_empty rem && value == 0,
+    match parse_offset (Text.of_string "Z") {
+        success rem value => Input.at_end rem && value == 0,
         fail _ => false
     }
 
 #[test]
 def test_parse_offset_positive : Bool :=
-    match parse_offset "+02:00" {
-        success rem value => String.is_empty rem && value == 120,
+    match parse_offset (Text.of_string "+02:00") {
+        success rem value => Input.at_end rem && value == 120,
         fail _ => false
     }
 
 #[test]
 def test_parse_offset_negative : Bool :=
-    match parse_offset "-05:00" {
-        success rem value => String.is_empty rem && value == (-300),
+    match parse_offset (Text.of_string "-05:00") {
+        success rem value => Input.at_end rem && value == (-300),
         fail _ => false
     }
 

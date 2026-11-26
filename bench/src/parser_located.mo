@@ -41,7 +41,7 @@ use std::list {}
 open IO {println}
 use std::bench {Bench.now, Bench.report_since}
 use lang::types {Decl, ParseDecl}
-use parsec::core {ParseResult}
+use parsec::core {ParseResult, Text}
 use lang::parser::position {is_ascending}
 use lang::parser::lower_parse {collect_decl_rems}
 use lang::parser {decls_parser, decls_parser_located, decls_skip, rems_to_offsets, skip_docstrings}
@@ -51,7 +51,7 @@ use std::map {}
 /// is being timed in -- a benchmark that measures nothing is worse than
 /// one that measures the wrong thing (AGENTS.md item 25).
 #[partial]
-def parsed_count (r : ParseResult (List Decl)) : I64 :=
+def parsed_count (r : ParseResult Text (List Decl)) : I64 :=
     match r {
         ParseResult.success _ ds => List.length ds,
         ParseResult.fail _ => 0,
@@ -60,11 +60,11 @@ def parsed_count (r : ParseResult (List Decl)) : I64 :=
 /// The `List ParseDecl` `build_loc_table` is handed, reached the same way
 /// `decls_parser_located` reaches it.
 #[partial]
-def parse_decls_only (input : String) : ParseResult (List ParseDecl) :=
+def parse_decls_only (input : Text) : ParseResult Text (List ParseDecl) :=
     decls_skip (skip_docstrings (skip_spaces input)) List.empty
 
 #[partial]
-def pre_decls (r : ParseResult (List ParseDecl)) : List ParseDecl :=
+def pre_decls (r : ParseResult Text (List ParseDecl)) : List ParseDecl :=
     match r {
         ParseResult.success _ ds => ds,
         ParseResult.fail _ => List.empty,
@@ -126,17 +126,17 @@ def run_located_bench_on (path : String) (src : String) : IO Bool := do {
 
     // Then the two parses, back to back in one process.
     let t_plain : I64 <- Bench.now;
-    let plain : I64 := parsed_count (decls_parser src);
+    let plain : I64 := parsed_count (decls_parser (Text.of_string src));
     Bench.report_since "  decls_parser         " t_plain;
     let t_loc : I64 <- Bench.now;
-    let located : I64 := parsed_count (decls_parser_located src);
-    Bench.report_since "  decls_parser_located " t_loc;
+    let located : I64 := parsed_count (decls_parser_located (Text.of_string src));
+    Bench.report_since "  decls_parser_located (Text.of_string " t_loc;
 
     // Both parsers must agree on the decl count. A located parse that
     // silently produced fewer decls would look faster here rather than
     // showing up as a wrong answer -- the same guard
     // `bench/parser_take_while.mo` uses for its byte scanners.
-    println (String.concat "  decls: plain " (String.concat (I64.to_string plain)
+    println (String.concat ")  decls: plain " (String.concat (I64.to_string plain)
         (String.concat " located " (I64.to_string located))));
     return (I64.gt plain 0 && I64.beq plain located)
 }

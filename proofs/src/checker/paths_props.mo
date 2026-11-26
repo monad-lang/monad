@@ -20,7 +20,7 @@
 // has no `with Cubical` block) -- the same arrangement, and the same
 // reason, as `equiv_props.mo`.
 
-use lang::module {def_body_diagnostics, try_parse_decls}
+use lang::module {def_body_diagnostics, try_parse_decls_str}
 use lang::scope {build_scope_from_decls}
 use lang::typecheck::infer {empty_locals}
 use lang::types {Decl, Def, ModulePath, Scope, ScopeData, id, show_name_path}
@@ -71,7 +71,7 @@ def paths_decls_source : String :=
 /// The declarations, or the empty list on a parse failure -- which makes
 /// every pin below fail rather than silently pass against nothing.
 def paths_decls : List Decl :=
-    match try_parse_decls paths_decls_source {
+    match try_parse_decls_str paths_decls_source {
         Option.some decl_list => decl_list,
         Option.none => List.empty,
     }

@@ -28,7 +28,8 @@ use lib::parser {
     LocatedDecls, decls_parser, decls_parser_located, decls_parser_located_cfg, decls_parser_located_with_ranges,
     decls_parser_strict,
 }
-use parsec::core {ParseError, ParseResult, parse_error_remaining}
+use parsec::core {ParseError, ParseResult, parse_error_remaining, Text}
+use parsec::input {Input}
 use lib::parser::diagnostic {parse_error_location, render_parse_error}
 use lang::mote {
     BinTarget, Mote.affine_mode_of_path, Mote.dir_above, Mote.discover, Mote.manifest_at,
@@ -161,12 +162,12 @@ def std_test_module_path : ModulePath := ModulePath.mk [Identifier.id "std", Ide
 /// (`try_parse_decls_strict` is still on the PLAIN parser: it only feeds
 /// rendered parse-error diagnostics on a cold path, so it has no reason
 /// to build wrappers. Locating it would be harmless, not useful.)
-pub def parse_all_decls (input : String) : ParseResult (List Decl) :=
+pub def parse_all_decls (input : Text) : ParseResult Text (List Decl) :=
     parse_all_decls_cfg CfgEnv.empty input
 
 /// `parse_all_decls` under a feature set (`lang/src/cfg.mo`): declarations
 /// whose `#[cfg]` is false under `env` are dropped before expansion.
-pub def parse_all_decls_cfg (env : CfgEnv) (input : String) : ParseResult (List Decl) :=
+pub def parse_all_decls_cfg (env : CfgEnv) (input : Text) : ParseResult Text (List Decl) :=
     match decls_parser_located_cfg env input {
         ParseResult.success rem decl_list => ParseResult.success rem (expand_decls decl_list),
         ParseResult.fail e => ParseResult.fail e,
@@ -198,8 +199,14 @@ def cfg_env_of_manifest (manifest : Option MoteManifest) (spec : Option String) 
     }
 
 /// Parse source text, returning the parsed declarations or none on parse error.
-pub def try_parse_decls (input : String) : Option (List Decl) :=
-    let result : ParseResult (List Decl) := parse_all_decls input in
+/// `try_parse_decls` from source TEXT -- the shape a caller holding a string
+/// (the proofs corpus's fixtures) wants; the cursor variant is the
+/// parser-facing one.
+pub def try_parse_decls_str (src : String) : Option (List Decl) :=
+    try_parse_decls (Text.of_string src)
+
+pub def try_parse_decls (input : Text) : Option (List Decl) :=
+    let result : ParseResult Text (List Decl) := parse_all_decls input in
     match result {
         ParseResult.success _ decl_list => Option.some decl_list,
         ParseResult.fail _ => Option.none,
@@ -225,7 +232,7 @@ pub def try_parse_decls (input : String) : Option (List Decl) :=
 /// `check_module_with_scope`), so `expand_decls` runs here too, same
 /// as `parse_all_decls` above.
 pub def try_parse_decls_strict (input : String) (path : Option String) : Result String (List Decl) :=
-    match try_parse_decls_strict_diag input {
+    match try_parse_decls_strict_diag (Text.of_string input) {
         Result.ok decl_list => Result.ok decl_list,
         Result.err e => Result.err (show_parse_error input path e),
     }
@@ -236,7 +243,7 @@ pub def try_parse_decls_strict (input : String) (path : Option String) : Result 
 /// wrong" needs the error's remaining text, which the printed diagnostic
 /// no longer carries (the REPL's continuation signal; see
 /// `parse_error_at_eof`).
-pub def try_parse_decls_strict_diag (input : String) : Result ParseError (List Decl) :=
+pub def try_parse_decls_strict_diag (input : Text) : Result ParseError (List Decl) :=
     match decls_parser_strict input {
         ParseResult.success _ decl_list => Result.ok (expand_decls decl_list),
         ParseResult.fail e => Result.err e,
@@ -247,7 +254,7 @@ pub def try_parse_decls_strict_diag (input : String) : Result ParseError (List D
 /// means the construct was cut off rather than malformed. A failure with
 /// real text remaining (`1 +* 2`) is a genuine error, not a continuation.
 pub def parse_error_at_eof (e : ParseError) : Bool :=
-    String.is_empty (String.trim (parse_error_remaining e))
+    String.is_empty (String.trim (Text.rest (parse_error_remaining e)))
 
 /// Render a strict-parse failure the way `try_parse_decls_strict` does.
 pub def show_parse_error (input : String) (path : Option String) (e : ParseError) : String :=
@@ -376,7 +383,7 @@ def decl_name_and_kind (d : Decl) : Pair NamePath DeclKind := match d {
 /// and this does not.
 #[partial]
 pub def decl_ranges_of_source (src : String) : List DeclRange :=
-    match decls_parser_located_with_ranges src {
+    match decls_parser_located_with_ranges (Text.of_string src) {
         ParseResult.success _rem located => decl_ranges_of_located located,
         ParseResult.fail _e => List.empty,
     }
@@ -1330,10 +1337,10 @@ def load_module_decls (base_dir : Path) (mp : ModulePath) : IO (Option (List Dec
 #[partial]
 def load_module_decls_of_text (file_path : Path) (mp : ModulePath) (content : String) : IO (Option (List Decl)) := do {
     let env <- cfg_env_for_file (Path.to_string file_path) content;
-    let result : ParseResult (List Decl) := parse_all_decls_cfg env content;
+    let result : ParseResult Text (List Decl) := parse_all_decls_cfg env (Text.of_string content);
     match result {
         ParseResult.success rem decl_list =>
-            if String.is_empty rem
+            if Input.at_end rem
             then do { return Option.some decl_list }
             else do {
                 // Re-parse STRICTLY to recover a located diagnostic. The
@@ -1341,7 +1348,7 @@ def load_module_decls_of_text (file_path : Path) (mp : ModulePath) (content : St
                 // so without this the only message was prose plus a dump of
                 // the remaining text (no file:line:col).
                 let msg : String :=
-                    match decls_parser_strict content {
+                    match decls_parser_strict (Text.of_string content) {
                         ParseResult.fail e =>
                             render_parse_error content (Option.some (Path.to_string file_path)) e,
                         ParseResult.success _ _ =>
@@ -3519,7 +3526,7 @@ def no_decl_ranges : List DeclRange := List.empty
 def ranged_truncation (cache : ModuleInfoCache) (file_path : String) (source : String)
     (located : LocatedDecls) : RangedFileCheck :=
     let ranges : List DeclRange := decl_ranges_of_located located in
-    match decls_parser_strict source {
+    match decls_parser_strict (Text.of_string source) {
         ParseResult.fail e => ranged_parse_failure cache file_path source ranges located e,
         // Unreachable in practice: `decls_skip_strict` consumes the whole
         // input or fails, so a lenient truncation implies a strict failure.
@@ -3637,11 +3644,11 @@ def check_buffer_ranged (cache : ModuleInfoCache) (file_path : String) (source :
 #[partial]
 pub def check_file_cached_from_source_ranged (cache : ModuleInfoCache) (file_path : String)
     (source : String) (verbose : Bool) : IO RangedFileCheck :=
-    match decls_parser_located_with_ranges source {
+    match decls_parser_located_with_ranges (Text.of_string source) {
         ParseResult.fail e =>
             do { return (ranged_parse_failure cache file_path source no_decl_ranges no_located_decls e) },
         ParseResult.success rem located =>
-            if String.is_empty rem
+            if Input.at_end rem
             then check_buffer_ranged cache file_path source located verbose
             else do { return (ranged_truncation cache file_path source located) },
     }
@@ -3716,7 +3723,7 @@ pub def expand_check_paths (paths : List String) : IO (List String) :=
 
 #[test]
 def test_parse_all_decls_empty : Bool :=
-    let result : ParseResult (List Decl) := parse_all_decls "" in
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string "") in
     match result {
         ParseResult.success _ _ => true,
         ParseResult.fail _ => false
@@ -3761,7 +3768,7 @@ def test_merge_scope_data_preserves_def_sigs : Bool :=
 #[test]
 def test_parse_def_resolve : Bool :=
     let path : ModulePath := ModulePath.mk List.empty in
-    let result : ParseResult (List Decl) := parse_all_decls "def foo : Bool := true" in
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string "def foo : Bool := true") in
     match result {
         ParseResult.success _ decl_list =>
             let sd : ScopeData := build_scope_from_decls path decl_list in
@@ -3789,7 +3796,7 @@ def test_parse_def_resolve : Bool :=
 #[test]
 def test_parse_type_resolve_inductive : Bool :=
     let path : ModulePath := ModulePath.mk List.empty in
-    let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }" in
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string "type Color { red, green }") in
     match result {
         ParseResult.success _ decl_list =>
             let sd : ScopeData := build_scope_from_decls path decl_list in
@@ -3811,7 +3818,7 @@ def test_parse_type_resolve_inductive : Bool :=
 #[test]
 def test_parse_type_constructor_resolves : Bool :=
     let path : ModulePath := ModulePath.mk List.empty in
-    let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }" in
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string "type Color { red, green }") in
     match result {
         ParseResult.success _ decl_list =>
             let sd : ScopeData := build_scope_from_decls path decl_list in
@@ -3839,7 +3846,7 @@ def test_parse_type_constructor_resolves : Bool :=
 #[test]
 def test_parse_if_body_def_resolves : Bool :=
     let path : ModulePath := ModulePath.mk List.empty in
-    let result : ParseResult (List Decl) := parse_all_decls "def test_bool_true : Bool := if true then true else false" in
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string "def test_bool_true : Bool := if true then true else false") in
     match result {
         ParseResult.success _ decl_list =>
             let sd : ScopeData := build_scope_from_decls path decl_list in
@@ -3867,7 +3874,8 @@ def test_parse_if_body_def_resolves : Bool :=
 #[test]
 def test_parse_multiple_decls_resolve : Bool :=
     let path : ModulePath := ModulePath.mk List.empty in
-    let result : ParseResult (List Decl) := parse_all_decls "def a : Bool := true type T { mk }" in
+    let result : ParseResult Text (List Decl) :=
+        parse_all_decls (Text.of_string "def a : Bool := true type T { mk }") in
     match result {
         ParseResult.success _ decl_list =>
             let sd : ScopeData := build_scope_from_decls path decl_list in
@@ -3895,7 +3903,7 @@ def test_parse_multiple_decls_resolve : Bool :=
 #[test]
 def test_parse_module_builds_scope : Bool :=
     let path : ModulePath := ModulePath.mk List.empty in
-    let result : ParseResult (List Decl) := parse_all_decls "def hello : Bool := true" in
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string "def hello : Bool := true") in
     match result {
         ParseResult.success _ decl_list =>
             let sd : ScopeData := build_scope_from_decls path decl_list in
@@ -3923,7 +3931,8 @@ def test_parse_module_builds_scope : Bool :=
 #[test]
 def test_parse_use_decl_ignored_in_scope : Bool :=
     let path : ModulePath := ModulePath.mk List.empty in
-    let result : ParseResult (List Decl) := parse_all_decls "use prelude def bar : Bool := true" in
+    let result : ParseResult Text (List Decl) :=
+        parse_all_decls (Text.of_string "use prelude def bar : Bool := true") in
     match result {
         ParseResult.success _ decl_list =>
             let sd : ScopeData := build_scope_from_decls path decl_list in
@@ -5198,7 +5207,7 @@ def bare_use_hint (head : String) (owner : Option String) : String :=
 /// and no mote is discovered, so `validate_module_deps` reports the `use`
 /// spellings and nothing else.
 def probe_module_info (source : String) : ModuleInfo :=
-    match try_parse_decls source {
+    match try_parse_decls (Text.of_string source) {
         Option.some decls => ModuleInfo.mk (ModulePath.mk [Identifier.id "probe"]) (Path.unsafe "probe.mo") decls,
         Option.none => ModuleInfo.mk (ModulePath.mk [Identifier.id "probe"]) (Path.unsafe "probe.mo") List.empty
     }
@@ -5284,7 +5293,7 @@ def probe_targets (targets : List (Pair ModulePath String)) (acc : List ModuleIn
         List.cons t rest =>
             match t {
                 Pair.pair path src =>
-                    match try_parse_decls src {
+                    match try_parse_decls (Text.of_string src) {
                         Option.some decls => probe_targets rest (List.cons (ModuleInfo.mk path (Path.unsafe "target.mo") decls) acc),
                         Option.none => Option.none
                     }
@@ -5743,7 +5752,7 @@ def gate_mote_targets (r : Result String LoadedModules) : IO (Result String Load
 /// not parse fails below with a real diagnostic; the gate has nothing
 /// to add there.
 def pre_expansion_parse (env : CfgEnv) (src : String) : Option (List Decl) :=
-    match decls_parser_located_cfg env src {
+    match decls_parser_located_cfg env (Text.of_string src) {
         ParseResult.success _ decls => Option.some decls,
         ParseResult.fail _ => Option.none,
     }
@@ -7556,7 +7565,8 @@ pub def elaborate_loaded_modules (file_path : String) (check_deps : Bool) (verbo
 #[test]
 def test_check_module_with_scope_all_pass : IO Bool := do {
     let path : ModulePath := ModulePath.mk List.empty;
-    let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }\ndef c : Color := red";
+    let result : ParseResult Text (List Decl) :=
+        parse_all_decls (Text.of_string "type Color { red, green }\ndef c : Color := red");
     match result {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
@@ -7582,7 +7592,7 @@ def test_check_module_with_scope_all_pass : IO Bool := do {
 #[test]
 def test_check_module_with_scope_paramed_inductive : IO Bool := do {
     let path : ModulePath := ModulePath.mk List.empty;
-    let result : ParseResult (List Decl) := parse_all_decls "type Box A { mk (a : A) : Box A }";
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string "type Box A { mk (a : A) : Box A }");
     match result {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
@@ -7612,7 +7622,7 @@ def test_check_module_with_scope_paramed_inductive : IO Bool := do {
 /// this trio is named for the checker rather than for either rule.
 def check_diags_of_source (src : String) (module_name : String) : IO (List String) := do {
     let path : ModulePath := ModulePath.mk (List.cons (Identifier.id module_name) List.empty);
-    match parse_all_decls src {
+    match parse_all_decls (Text.of_string src) {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
             let scope : Scope := { module_id := path, scope := sd, parent := Option.none, elaboration_pass := false };
@@ -7652,7 +7662,7 @@ def diags_lack (needle : String) (diags : List String) : Bool :=
 /// dict-value gate has nothing to gate.
 def check_affine_diags_of_source (src : String) (module_name : String) : IO (List String) := do {
     let path : ModulePath := ModulePath.mk (List.cons (Identifier.id module_name) List.empty);
-    match parse_all_decls src {
+    match parse_all_decls (Text.of_string src) {
         ParseResult.success _ decl_list => do {
             let promoted : List Decl := promote_instance_defs decl_list;
             let sd : ScopeData := build_scope_from_decls path promoted;
@@ -7677,7 +7687,7 @@ def check_affine_diags_of_source (src : String) (module_name : String) : IO (Lis
 /// at the call site, which the real pipeline accepts.
 def check_diags_of_source_prepared (src : String) (module_name : String) : IO (List String) := do {
     let path : ModulePath := ModulePath.mk (List.cons (Identifier.id module_name) List.empty);
-    match parse_all_decls src {
+    match parse_all_decls (Text.of_string src) {
         ParseResult.success _ decl_list => do {
             let prepared : List Decl := add_constraint_dict_params_decls (promote_instance_defs decl_list);
             let sd : ScopeData := build_scope_from_decls path prepared;
@@ -8105,7 +8115,7 @@ def test_hole_in_infer_position_accepts_named_callee_lam_arg : IO Bool := do {
 #[test]
 def test_check_module_with_scope_accumulates_failures : IO Bool := do {
     let path : ModulePath := ModulePath.mk List.empty;
-    let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }\ndef good : Color := red\ndef bad : Color := nonexistent_name";
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string "type Color { red, green }\ndef good : Color := red\ndef bad : Color := nonexistent_name");
     match result {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
@@ -8136,7 +8146,7 @@ def test_check_module_with_scope_accumulates_failures : IO Bool := do {
 def test_check_module_with_scope_dot_field_access_resolves : IO Bool := do {
     let path : ModulePath := ModulePath.mk List.empty;
     let src : String := "type Color { red, green }\nstruct Point { x : Color, y : Color }\ndef getx (p : Point) : Color := p.x";
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     match result {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
@@ -8159,7 +8169,7 @@ def test_check_module_with_scope_dot_field_access_resolves : IO Bool := do {
 def test_check_module_with_scope_chained_dot_field_access_resolves : IO Bool := do {
     let path : ModulePath := ModulePath.mk List.empty;
     let src : String := "type Color { red, green }\nstruct Point { x : Color, y : Color }\nstruct Line { from : Point, to : Point }\ndef getx (l : Line) : Color := l.to.x";
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     match result {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
@@ -8182,7 +8192,7 @@ def test_check_module_with_scope_chained_dot_field_access_resolves : IO Bool := 
 def test_check_module_with_scope_dotted_module_path_still_resolves : IO Bool := do {
     let path : ModulePath := ModulePath.mk List.empty;
     let src : String := "type Color { red, green }\ndef c : Color := Color.red";
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     match result {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
@@ -8622,7 +8632,7 @@ def reports_missing_file (result : FileCheckAndCache) : Bool :=
 #[partial]
 def check_synthetic_source (src : String) : IO (List String) := do {
     let path : ModulePath := ModulePath.mk List.empty;
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     match result {
         ParseResult.success _ decl_list => do {
             let infixes := collect_infixes decl_list;
@@ -8643,7 +8653,7 @@ def check_synthetic_source (src : String) : IO (List String) := do {
 #[partial]
 def elaborate_synthetic_source (src : String) : IO String := do {
     let path : ModulePath := ModulePath.mk List.empty;
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     match result {
         ParseResult.success _ decl_list => do {
             let infixes := collect_infixes decl_list;
@@ -8665,7 +8675,7 @@ def elaborate_synthetic_source (src : String) : IO String := do {
 #[partial]
 def recheck_elaborated_source (src : String) : IO (List String) := do {
     let path : ModulePath := ModulePath.mk List.empty;
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     match result {
         ParseResult.success _ decl_list => do {
             let infixes := collect_infixes decl_list;
@@ -8862,7 +8872,7 @@ def test_elaborate_module_decls_rewrites_class_method_call : IO Bool := do {
         "instance Speak Dog { def say (a : Dog) : String := \"woof\" }\n" ++
         "def greet (d : Dog) : String := Speak.say d";
     let path : ModulePath := ModulePath.mk List.empty;
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     match result {
         ParseResult.success _ decl_list => do {
             let infixes := collect_infixes decl_list;
@@ -8897,7 +8907,7 @@ def test_elaborate_zero_arg_class_method_uses_class_declared_default_carrier : I
         "type MyBox A { mk (a : A) }\n" ++
         "instance MakeEmpty MyBox { def empty : MyBox I64 := MyBox.mk 0 }\n" ++
         "def use_it : MyBox I64 := MakeEmpty.empty";
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     return (match result {
         ParseResult.success _ decl_list => do {
             let elaborated := elaborate_parsed_decls decl_list;
@@ -8961,7 +8971,7 @@ def test_elaborate_passes_dicts_by_declaration : IO Bool := do {
         "def use_refs : Id I64 := refs_step (Id.id_mk 1)\n" ++
         "def use_norefs : Id I64 := norefs_step (Id.id_mk 2)\n" ++
         "def use_tag : Id I64 := tag_step (Id.id_mk 3)";
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     return (match result {
         ParseResult.success _ decl_list => do {
             let elaborated := elaborate_parsed_decls decl_list;
@@ -9006,7 +9016,7 @@ def test_elaborate_expect_resolves_zero_arg_constrained_op : IO Bool := do {
         "instance Wrappable Id { def mk (a : I64) : Id I64 := Id.id_mk a }\n" ++
         "def op [Wrappable M] : M I64 := Wrappable.mk 5\n" ++
         "def use_op : Id I64 := let x : Id I64 := op in x";
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     return (match result {
         ParseResult.success _ decl_list => do {
             let elaborated := elaborate_parsed_decls decl_list;
@@ -9036,7 +9046,7 @@ def test_elaborate_forwards_dict_past_a_variable_headed_instance : IO Bool := do
         "class Monad (M : Type -> Type) { def pure (a : A) : M A }\n" ++
         "instance {I : Type} [IndexedMonad M] Monad (M I I) { def pure (a : A) : M I I A := IndexedMonad.ipure a }\n" ++
         "def lift_pure [Monad M] {A : Type} {R : Type} (r : R) : M A := Monad.pure r";
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     return (match result {
         ParseResult.success _ decl_list => do {
             let elaborated := elaborate_parsed_decls decl_list;
@@ -9082,7 +9092,7 @@ def test_elaborate_see_through_constrained_callee : IO Bool := do {
         "instance Bind Id { def bnd (m : Id A) (f : A -> Id A) : Id A := m }\n" ++
         "def step [Bind M] {A : Type} (m : M A) : M A := Bind.bnd m (fn (a : A) => m)\n" ++
         "def through [Bind M] {A : Type} (m : M A) : M A := step m";
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     return (match result {
         ParseResult.success _ decl_list => do {
             let elaborated := elaborate_parsed_decls decl_list;
@@ -9165,7 +9175,7 @@ def test_elaborate_do_at_equal_indices_picks_the_wrapper_instance : IO Bool := d
         "}\n" ++
         "def TI.size [Monad M] : TI M Rw Rw (Pair I64 I64) := TI.ti_mk Term.size\n" ++
         "def prog_do : TI MockM Rw Rw (Pair I64 I64) := do { let sz <- TI.size; return sz }\n";
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     return (match result {
         ParseResult.success _ decl_list => do {
             let path : ModulePath := ModulePath.mk List.empty;
@@ -9232,7 +9242,7 @@ def test_dict_hint_selects_named_instance : IO Bool := do {
         "instance ShowB : Show I64 { def show (a : I64) : String := \"b\" }\n" ++
         "def auto_pick (x : I64) : String := Show.show x\n" ++
         "def hinted_pick (x : I64) : String := Show.show #ShowB x";
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     return (match result {
         ParseResult.success _ decl_list => do {
             let infixes := collect_infixes decl_list;
@@ -9370,7 +9380,7 @@ def test_instance_omitting_defaulted_method_dispatches : IO Bool := do {
         "type Dog { woof }\n" ++
         "instance Speak Dog { def say (a : Dog) : String := \"woof\" }\n" ++
         "def loud (d : Dog) : String := Speak.shout d";
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     return (match result {
         ParseResult.success _ decl_list => do {
             let elaborated := elaborate_parsed_decls decl_list;
@@ -9393,7 +9403,7 @@ def test_return_only_carrier_dispatches : IO Bool := do {
         "instance Decode Cow { def decode (s : String) : Cow := Cow.moo }\n" ++
         "def as_cow (s : String) : Cow := Decode.decode s\n" ++
         "def as_cat (s : String) : Cat := let c : Cat := Decode.decode s in c";
-    let result : ParseResult (List Decl) := parse_all_decls src;
+    let result : ParseResult Text (List Decl) := parse_all_decls (Text.of_string src);
     return (match result {
         ParseResult.success _ decl_list => do {
             let elaborated := elaborate_parsed_decls decl_list;
@@ -10234,7 +10244,7 @@ def test_elaborate_map_class_calls_resolve : IO Bool := do {
 
 def classified_probe (mode : AffineMode) (src : String) : IO CheckDiagnostics := do {
     let path : ModulePath := ModulePath.mk (List.cons (Identifier.id "probe") List.empty);
-    match parse_all_decls src {
+    match parse_all_decls (Text.of_string src) {
         ParseResult.success _ decl_list => do {
             let promoted : List Decl := promote_instance_defs decl_list;
             let sd : ScopeData := build_scope_from_decls path promoted;

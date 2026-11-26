@@ -27,7 +27,7 @@ use lib::module {
     module_info_cache_empty, ranged_file_diagnostics,
 }
 use lib::parser {LocatedDecls, decls_parser_located_with_ranges}
-use parsec::core {fail, success}
+use parsec::core {fail, success, Text}
 use std::list {}
 open IO {println}
 use std::process {exec_cmd, process_id}
@@ -83,7 +83,7 @@ def probe_dir : String := "/tmp/monad_decl_range_" ++ I64.to_string process_id
 // --- The positional contract (Risk #7) ---
 
 /// One range per declaration. THE pin.
-def counts_agree (src : String) : Bool :=
+def counts_agree (src : Text) : Bool :=
     match decls_parser_located_with_ranges src {
         ParseResult.fail _e => true,
         ParseResult.success _rem located =>
@@ -92,15 +92,15 @@ def counts_agree (src : String) : Bool :=
 
 #[test]
 def test_decl_ranges_count_matches_decl_count_on_two_defs : Bool :=
-    counts_agree two_def_source
+    counts_agree (Text.of_string two_def_source)
 
 #[test]
 def test_decl_ranges_count_matches_decl_count_on_four_kinds : Bool :=
-    counts_agree kind_source
+    counts_agree (Text.of_string kind_source)
 
 #[test]
 def test_decl_ranges_count_matches_decl_count_on_a_use_and_open : Bool :=
-    counts_agree "use prelude\nopen IO\ndef z : I64 := 0\n"
+    counts_agree (Text.of_string "use prelude\nopen IO\ndef z : I64 := 0\n")
 
 /// The same pin one level up: the public table's length is the parse's own
 /// declaration count, so nothing is dropped by the zip either.

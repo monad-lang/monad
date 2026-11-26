@@ -6,7 +6,7 @@
 /// exercised through the binary.
 use lang::types {ParseDecl, ParseDeclKind}
 use lang::parser {decls_skip}
-use parsec::core {ParseResult}
+use parsec::core {ParseResult, Text}
 use lib::rules {
     ctor_name_findings, def_name_findings, is_lower_snake, is_upper_camel, single_ctor_type_findings,
     type_name_findings, type_var_findings,
@@ -16,7 +16,7 @@ use lib::rules {
 /// `decls_skip` already answers in (see `driver.mo`'s note on why the
 /// accumulator does not reverse it).
 def kinds_of (src : String) : List ParseDeclKind :=
-    match decls_skip src List.empty {
+    match decls_skip (Text.of_string src) List.empty {
         ParseResult.success _ ds => List.map kind_of ds,
         ParseResult.fail _ => List.empty,
     }

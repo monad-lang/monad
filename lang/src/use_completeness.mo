@@ -53,7 +53,7 @@ use lang::types {minor_bodies,
     use_bare, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename,
 }
 use lib::parser {decls_parser_located}
-use parsec::core {ParseResult}
+use parsec::core {ParseResult, Text}
 use lib::scope {modpath_eq}
 use lib::typecheck::macro_queue {
     DeriveHandlerReg, derive_handler_regs_of_decls, derive_targets_of_args,
@@ -1825,7 +1825,7 @@ def refs_add_bares (names : List NamePath) (refs : Refs) : Refs :=
 // parse the gate itself reads the consumer from.
 
 def probe_parse (src : String) : Option (List Decl) :=
-    match decls_parser_located src {
+    match decls_parser_located (Text.of_string src) {
         ParseResult.success _ ds => Option.some ds,
         ParseResult.fail _ => Option.none,
     }

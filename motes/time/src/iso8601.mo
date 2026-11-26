@@ -14,7 +14,8 @@ use lib::internal {take_n_digits, parse_fraction}
 use lib::date {Date.of}
 use lib::time_of_day {Time.of}
 use lib::error {TimeError.of, TimeError.message}
-use parsec::core {ParseError, ParseResult}
+use parsec::core {ParseError, ParseResult, Text}
+use parsec::input {Input}
 use parsec::combinators {tag}
 open ParseResult {fail, success}
 
@@ -25,27 +26,27 @@ def invalid_offset (message : String) : TimeError :=
     TimeError.of TimeErrorKind.invalid_offset message
 
 /// Consume `expected` exactly, or fail with `invalid_format`.
-def expect_tag (expected : String) (input : String) : Result TimeError String :=
+def expect_tag (expected : String) (input : Text) : Result TimeError Text :=
     match tag expected input {
         success rem _ => ok rem,
         fail _ => err (invalid (String.concat "expected " expected))
     }
 
 /// Consume exactly `n` digits, returning the value and the remainder.
-def take_digits (n : I64) (input : String) (what : String) : Result TimeError (Pair I64 String) :=
+def take_digits (n : I64) (input : Text) (what : String) : Result TimeError (Pair I64 Text) :=
     match take_n_digits n input {
         success rem value => ok (Pair.pair value rem),
         fail _ => err (invalid (String.concat "expected " (String.concat what " digits")))
     }
 
 /// `YYYY-MM-DD`, validating through `Date.of`.
-pub def Date.parse_iso (input : String) : ParseResult Date :=
+pub def Date.parse_iso (input : Text) : ParseResult Text Date :=
     match parse_date_structured input {
         ok p => match p { Pair.pair date rem => success rem date },
         err e => fail (ParseError.custom (TimeError.message e) input)
     }
 
-def parse_date_structured (input : String) : Result TimeError (Pair Date String) :=
+def parse_date_structured (input : Text) : Result TimeError (Pair Date Text) :=
     match take_digits 4 input "year" {
         ok p =>
             match p {
@@ -55,7 +56,7 @@ def parse_date_structured (input : String) : Result TimeError (Pair Date String)
     }
 
 /// The `-MM-DD` tail after a four-digit year.
-def parse_date_body (year : I64) (input : String) : Result TimeError (Pair Date String) :=
+def parse_date_body (year : I64) (input : Text) : Result TimeError (Pair Date Text) :=
     match expect_tag "-" input {
         ok rem1 =>
             match take_digits 2 rem1 "month" {
@@ -84,7 +85,7 @@ def parse_date_body (year : I64) (input : String) : Result TimeError (Pair Date 
     }
 
 /// `HH:MM:SS[.fraction]`, validating through `Time.of`.
-def parse_time_body (input : String) : Result TimeError (Pair Time String) :=
+def parse_time_body (input : Text) : Result TimeError (Pair Time Text) :=
     match take_digits 2 input "hour" {
         ok p1 =>
             match p1 {
@@ -117,41 +118,41 @@ def parse_time_body (input : String) : Result TimeError (Pair Time String) :=
     }
 
 /// The optional fraction after the seconds, then validation.
-def parse_time_finish (hour : I64) (minute : I64) (second : I64) (rem : String) : Result TimeError (Pair Time String) :=
-    if String.slice rem 0 1 == "."
+def parse_time_finish (hour : I64) (minute : I64) (second : I64) (rem : Text) : Result TimeError (Pair Time Text) :=
+    if Input.input_starts_with "." rem
     then parse_time_fraction hour minute second rem
     else make_time hour minute second 0 rem
 
-def parse_time_fraction (hour : I64) (minute : I64) (second : I64) (rem : String) : Result TimeError (Pair Time String) :=
+def parse_time_fraction (hour : I64) (minute : I64) (second : I64) (rem : Text) : Result TimeError (Pair Time Text) :=
     match parse_fraction rem {
         success rem2 nanos => make_time hour minute second nanos rem2,
         fail _ => err (invalid "expected digit after '.'")
     }
 
-def make_time (hour : I64) (minute : I64) (second : I64) (nanos : I64) (rem : String) : Result TimeError (Pair Time String) :=
+def make_time (hour : I64) (minute : I64) (second : I64) (nanos : I64) (rem : Text) : Result TimeError (Pair Time Text) :=
     match Time.of hour minute second nanos {
         ok time => ok (Pair.pair time rem),
         err e => err e
     }
 
 /// `Z` / `±HH:MM` -> offset in minutes east of UTC.
-pub def parse_offset (input : String) : ParseResult I64 :=
+pub def parse_offset (input : Text) : ParseResult Text I64 :=
     match parse_offset_structured input {
         ok p => match p { Pair.pair value rem => success rem value },
         err e => fail (ParseError.custom (TimeError.message e) input)
     }
 
-def parse_offset_structured (input : String) : Result TimeError (Pair I64 String) :=
-    let first := String.slice input 0 1 in
+def parse_offset_structured (input : Text) : Result TimeError (Pair I64 Text) :=
+    let first := Input.input_text 1 input in
     if first == "Z"
-    then ok (Pair.pair 0 (String.drop 1 input))
+    then ok (Pair.pair 0 (Input.input_advance 1 input))
     else if first == "+"
-    then parse_offset_sign 1 (String.drop 1 input)
+    then parse_offset_sign 1 (Input.input_advance 1 input)
     else if first == "-"
-    then parse_offset_sign (-1) (String.drop 1 input)
+    then parse_offset_sign (-1) (Input.input_advance 1 input)
     else err (invalid_offset "expected Z, +HH:MM or -HH:MM")
 
-def parse_offset_sign (sign : I64) (input : String) : Result TimeError (Pair I64 String) :=
+def parse_offset_sign (sign : I64) (input : Text) : Result TimeError (Pair I64 Text) :=
     match take_digits 2 input "offset hour" {
         ok p1 =>
             match p1 {
@@ -176,7 +177,7 @@ def parse_offset_sign (sign : I64) (input : String) : Result TimeError (Pair I64
 
 /// Parse the whole `YYYY-MM-DDTHH:MM:SS[.fraction](Z|±HH:MM)` form, returning
 /// the value and the unconsumed remainder.
-def DateTime.parse_body (s : String) : Result TimeError (Pair DateTime String) :=
+def DateTime.parse_body (s : Text) : Result TimeError (Pair DateTime Text) :=
     match parse_date_structured s {
         ok p1 =>
             match p1 {
@@ -212,11 +213,11 @@ def DateTime.parse_body (s : String) : Result TimeError (Pair DateTime String) :
 /// `Z` and `±HH:MM` are the only accepted suffixes; trailing input is
 /// rejected as `other`.
 pub def DateTime.parse (s : String) : Result TimeError DateTime :=
-    match DateTime.parse_body s {
+    match DateTime.parse_body (Text.of_string s) {
         ok p =>
             match p {
                 Pair.pair dt rem =>
-                    if String.is_empty rem
+                    if Input.at_end rem
                     then ok dt
                     else err (TimeError.of TimeErrorKind.other "unexpected trailing input")
             },

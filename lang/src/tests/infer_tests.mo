@@ -18,6 +18,7 @@ use lib::typecheck::infer {
     type_check_bound_var, type_check_elim, type_check_match_case
 }
 use lib::typecheck::subst {term_shift}
+use parsec::core {Text}
 
 open Term {app, hole, lam, lit, pi, var}
 open DebugName {named, unnamed}
@@ -1691,7 +1692,7 @@ def p_typ : Term := var sentinel (named (id "P"))
 
 #[test]
 def test_a_partial_application_keeps_the_residual_pi : Bool :=
-    match try_parse_decls partial_pi_src {
+    match try_parse_decls (Text.of_string partial_pi_src) {
         Option.none => false,
         Option.some decls =>
             let sc : Scope := scope_with_decls decls in
@@ -2008,7 +2009,7 @@ def fam_source_for_elim_tests : String :=
 def fam_scope_for_elim_tests : Scope :=
     let mod_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "Test") List.empty) in
     let sd : ScopeData :=
-        match try_parse_decls fam_source_for_elim_tests {
+        match try_parse_decls (Text.of_string fam_source_for_elim_tests) {
             Option.some decls => build_scope_from_decls mod_path decls,
             Option.none => build_scope_from_decls mod_path List.empty,
         } in
@@ -2084,7 +2085,7 @@ def my_sigma_mod_path : ModulePath := ModulePath.mk [Identifier.id "my_sigma_r4b
 def my_sigma_scope : Scope :=
     let source : String :=
         "type P { p0 }\ndef Fam (x : P) : Type := P\ntype MySigma (A : Type) (B : A -> Type) { dpair (fst : A) (snd : B fst) }\ndef MySigma.fst {A : Type} {B : A -> Type} (p : MySigma A B) : A := match p { dpair a _ => a }" in
-    let sd : ScopeData := match try_parse_decls source {
+    let sd : ScopeData := match try_parse_decls (Text.of_string source) {
         Option.some decl_list => build_scope_from_decls my_sigma_mod_path decl_list,
         Option.none => build_scope_from_decls my_sigma_mod_path List.empty,
     } in
@@ -2171,7 +2172,7 @@ def my_eq_mod_path : ModulePath := ModulePath.mk [Identifier.id "my_eq_r4c"]
 def my_eq_scope : Scope :=
     let source : String :=
         "type P { p0, p1 }\ntype Marker1 { m1 }\ntype Marker2 { m2 }\ndef Fam (x : P) : Type := match x { p0 => Marker1, p1 => Marker2 }\ntype MyEq (A : Type) (a : A) (b : A) { refl : MyEq A a a }" in
-    let sd : ScopeData := match try_parse_decls source {
+    let sd : ScopeData := match try_parse_decls (Text.of_string source) {
         Option.some decl_list => build_scope_from_decls my_eq_mod_path decl_list,
         Option.none => build_scope_from_decls my_eq_mod_path List.empty,
     } in

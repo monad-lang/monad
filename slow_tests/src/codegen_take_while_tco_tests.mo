@@ -42,6 +42,7 @@ use codegen::test::e2e_harness {compile_source_run_expect}
 def test_take_while_tco_large_scan : IO Bool :=
     let source := r#"open IO {println}
 use parsec::combinators {take_while}
+use parsec::input {Input}
 
 def always_true (s : String) : Bool := I64.beq (String.length s) (String.length s)
 
@@ -61,8 +62,8 @@ def main (args : List String) : IO I64 := do {
     match take_while always_true big {
         ParseResult.success rest consumed =>
             do {
-                println ("rest " ++ I64.to_string (String.length rest) ++ " consumed " ++ I64.to_string (String.length consumed));
-                return (I64.add 100 (String.length rest))
+                println ("rest " ++ I64.to_string (Input.input_len rest) ++ " consumed " ++ I64.to_string (String.length consumed));
+                return (I64.add 100 (Input.input_len rest))
             },
         ParseResult.fail e => do { println "parse failed"; return 1 },
     }

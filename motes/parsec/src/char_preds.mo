@@ -173,7 +173,7 @@ pub def ident_start (c : String) : Bool :=
 /// `if`/`else` chain (see `take_while_byte_at`'s own note on why the
 /// loop must stay self-tail-recursive without an intervening `match`).
 #[partial]
-def byte_at (s : String) (i : I64) : U8 :=
+pub def byte_at (s : String) (i : I64) : U8 :=
     match String.get s i {
         Option.some b => b,
         Option.none => 0u8

@@ -4,7 +4,7 @@
 use gen::tree {Gen.emit, Leaf, Spec, leaf, spec}
 use lang::construct {apps, con, con_app, global, if_, str, var}
 use lang::parser {decls_parser}
-use parsec::core {ParseResult}
+use parsec::core {ParseResult, Text}
 use std::list {}
 
 /// A leaf that answers `Option.some "<key>"` for exactly `key`.
@@ -22,7 +22,7 @@ def spec_of (base : String) : Spec :=
 #[test]
 def test_three_leaves_emit_five_helpers_and_an_entry : Bool :=
     let text := Gen.emit (spec_of "t") [entry_leaf "a", entry_leaf "b", entry_leaf "c"] in
-    match decls_parser text {
+    match decls_parser (Text.of_string text) {
         ParseResult.success _ decls => I64.beq (List.length decls) 6,
         ParseResult.fail _ => false,
     }

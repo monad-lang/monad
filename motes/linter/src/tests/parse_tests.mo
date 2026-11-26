@@ -42,7 +42,7 @@ use lang::parser {decls_skip}
 use lang::parser::whitespace {skip_spaces}
 use lang::parser {skip_docstrings}
 use lang::types {ParseDecl}
-use parsec::core {ParseResult}
+use parsec::core {ParseResult, Text}
 use lib::driver {LintParse, lint_file_parse_decls, lint_parse}
 
 /// The declarations every case is built around: an `open` and a `use`, i.e.
@@ -69,7 +69,7 @@ def parse_rejected (src : String) : Bool :=
 /// was. Used only to keep the fixtures honest about what they exercise.
 /// Not recursive, so no `#[partial]`.
 def bare_decl_count (src : String) : I64 :=
-    match decls_skip src List.empty {
+    match decls_skip (Text.of_string src) List.empty {
         ParseResult.fail _ => -1,
         ParseResult.success _ ds => List.length ds,
     }

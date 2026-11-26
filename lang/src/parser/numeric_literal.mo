@@ -7,7 +7,8 @@
 /// `ParseTerm` and `pt_lit` are the point.
 
 use lang::types {NumSuffix, ParseTerm, flt, num, pt_lit}
-use parsec::core {ParseResult, custom, is_empty}
+use parsec::core {ParseResult, custom, is_empty, Text}
+use parsec::input {Input}
 use parsec::number {
     char_to_digit, hex_number, number, parse_digits, parse_digits_char,
 }
@@ -27,74 +28,74 @@ open ParseResult {fail, success}
 // a `.`) accept only `f32`/`f64`.
 
 #[partial]
-def int_suffix_parser (input : String) : ParseResult NumSuffix :=
+def int_suffix_parser (input : Text) : ParseResult Text NumSuffix :=
     int_suffix_try_i8 (tag "i8" input) input
 
 #[partial]
-def int_suffix_try_i8 (r : ParseResult String) (orig : String) : ParseResult NumSuffix :=
+def int_suffix_try_i8 (r : ParseResult Text String) (orig : Text) : ParseResult Text NumSuffix :=
     match r {
         success rem _ => success rem NumSuffix.i8,
         fail _ => int_suffix_try_i16 (tag "i16" orig) orig
     }
 
 #[partial]
-def int_suffix_try_i16 (r : ParseResult String) (orig : String) : ParseResult NumSuffix :=
+def int_suffix_try_i16 (r : ParseResult Text String) (orig : Text) : ParseResult Text NumSuffix :=
     match r {
         success rem _ => success rem NumSuffix.i16,
         fail _ => int_suffix_try_i32 (tag "i32" orig) orig
     }
 
 #[partial]
-def int_suffix_try_i32 (r : ParseResult String) (orig : String) : ParseResult NumSuffix :=
+def int_suffix_try_i32 (r : ParseResult Text String) (orig : Text) : ParseResult Text NumSuffix :=
     match r {
         success rem _ => success rem NumSuffix.i32,
         fail _ => int_suffix_try_i64 (tag "i64" orig) orig
     }
 
 #[partial]
-def int_suffix_try_i64 (r : ParseResult String) (orig : String) : ParseResult NumSuffix :=
+def int_suffix_try_i64 (r : ParseResult Text String) (orig : Text) : ParseResult Text NumSuffix :=
     match r {
         success rem _ => success rem NumSuffix.i64,
         fail _ => int_suffix_try_u8 (tag "u8" orig) orig
     }
 
 #[partial]
-def int_suffix_try_u8 (r : ParseResult String) (orig : String) : ParseResult NumSuffix :=
+def int_suffix_try_u8 (r : ParseResult Text String) (orig : Text) : ParseResult Text NumSuffix :=
     match r {
         success rem _ => success rem NumSuffix.u8,
         fail _ => int_suffix_try_u16 (tag "u16" orig) orig
     }
 
 #[partial]
-def int_suffix_try_u16 (r : ParseResult String) (orig : String) : ParseResult NumSuffix :=
+def int_suffix_try_u16 (r : ParseResult Text String) (orig : Text) : ParseResult Text NumSuffix :=
     match r {
         success rem _ => success rem NumSuffix.u16,
         fail _ => int_suffix_try_u32 (tag "u32" orig) orig
     }
 
 #[partial]
-def int_suffix_try_u32 (r : ParseResult String) (orig : String) : ParseResult NumSuffix :=
+def int_suffix_try_u32 (r : ParseResult Text String) (orig : Text) : ParseResult Text NumSuffix :=
     match r {
         success rem _ => success rem NumSuffix.u32,
         fail _ => int_suffix_try_u64 (tag "u64" orig) orig
     }
 
 #[partial]
-def int_suffix_try_u64 (r : ParseResult String) (orig : String) : ParseResult NumSuffix :=
+def int_suffix_try_u64 (r : ParseResult Text String) (orig : Text) : ParseResult Text NumSuffix :=
     match r {
         success rem _ => success rem NumSuffix.u64,
         fail _ => int_suffix_try_f32 (tag "f32" orig) orig
     }
 
 #[partial]
-def int_suffix_try_f32 (r : ParseResult String) (orig : String) : ParseResult NumSuffix :=
+def int_suffix_try_f32 (r : ParseResult Text String) (orig : Text) : ParseResult Text NumSuffix :=
     match r {
         success rem _ => success rem NumSuffix.f32,
         fail _ => int_suffix_try_f64 (tag "f64" orig) orig
     }
 
 #[partial]
-def int_suffix_try_f64 (r : ParseResult String) (orig : String) : ParseResult NumSuffix :=
+def int_suffix_try_f64 (r : ParseResult Text String) (orig : Text) : ParseResult Text NumSuffix :=
     match r {
         success rem _ => success rem NumSuffix.f64,
         // No suffix present — defaults to i64, same shape as `vis_parser`
@@ -103,18 +104,18 @@ def int_suffix_try_f64 (r : ParseResult String) (orig : String) : ParseResult Nu
     }
 
 #[partial]
-def float_suffix_parser (input : String) : ParseResult NumSuffix :=
+def float_suffix_parser (input : Text) : ParseResult Text NumSuffix :=
     float_suffix_try_f32 (tag "f32" input) input
 
 #[partial]
-def float_suffix_try_f32 (r : ParseResult String) (orig : String) : ParseResult NumSuffix :=
+def float_suffix_try_f32 (r : ParseResult Text String) (orig : Text) : ParseResult Text NumSuffix :=
     match r {
         success rem _ => success rem NumSuffix.f32,
         fail _ => float_suffix_try_f64 (tag "f64" orig) orig
     }
 
 #[partial]
-def float_suffix_try_f64 (r : ParseResult String) (orig : String) : ParseResult NumSuffix :=
+def float_suffix_try_f64 (r : ParseResult Text String) (orig : Text) : ParseResult Text NumSuffix :=
     match r {
         success rem _ => success rem NumSuffix.f64,
         fail _ => success orig NumSuffix.f64
@@ -311,11 +312,11 @@ def hex_magnitude_fits (negative : Bool) (n : I64) (suffix : NumSuffix) : Bool :
 // operator) never reaches here as anything but a `fail` that lets the
 // caller's operator-parsing fall through correctly.
 #[partial]
-def numeric_literal (input : String) : ParseResult ParseTerm :=
+def numeric_literal (input : Text) : ParseResult Text ParseTerm :=
     numeric_literal_sign (tag "-" input) input
 
 #[partial]
-def numeric_literal_sign (r : ParseResult String) (orig : String) : ParseResult ParseTerm :=
+def numeric_literal_sign (r : ParseResult Text String) (orig : Text) : ParseResult Text ParseTerm :=
     match r {
         success rem _ => numeric_literal_digits rem true,
         fail _ => numeric_literal_digits orig false
@@ -323,18 +324,20 @@ def numeric_literal_sign (r : ParseResult String) (orig : String) : ParseResult 
 
 // Try a `0x`/`0X` hex prefix before falling back to decimal digits.
 #[partial]
-def numeric_literal_digits (input : String) (negative : Bool) : ParseResult ParseTerm :=
+def numeric_literal_digits (input : Text) (negative : Bool) : ParseResult Text ParseTerm :=
     numeric_literal_try_hex_lower (tag "0x" input) input negative
 
 #[partial]
-def numeric_literal_try_hex_lower (r : ParseResult String) (orig : String) (negative : Bool) : ParseResult ParseTerm :=
+def numeric_literal_try_hex_lower (r : ParseResult Text String) (orig : Text) (negative : Bool)
+    : ParseResult Text ParseTerm :=
     match r {
         success rem _ => numeric_literal_hex_digits rem negative,
         fail _ => numeric_literal_try_hex_upper (tag "0X" orig) orig negative
     }
 
 #[partial]
-def numeric_literal_try_hex_upper (r : ParseResult String) (orig : String) (negative : Bool) : ParseResult ParseTerm :=
+def numeric_literal_try_hex_upper (r : ParseResult Text String) (orig : Text) (negative : Bool)
+    : ParseResult Text ParseTerm :=
     match r {
         success rem _ => numeric_literal_hex_digits rem negative,
         fail _ => numeric_literal_decimal_digits orig negative
@@ -344,26 +347,27 @@ def numeric_literal_try_hex_upper (r : ParseResult String) (orig : String) (nega
 // float-suffix/int-suffix machinery below (numeric_literal_digits_done /
 // _try_dot / _frac / etc.).
 #[partial]
-def numeric_literal_decimal_digits (input : String) (negative : Bool) : ParseResult ParseTerm :=
+def numeric_literal_decimal_digits (input : Text) (negative : Bool) : ParseResult Text ParseTerm :=
     numeric_literal_digits_done (number input) negative input
 
 // Hex path -- integers only, no float-dot try (no `0x1.8p3` hex floats).
 #[partial]
-def numeric_literal_hex_digits (input : String) (negative : Bool) : ParseResult ParseTerm :=
+def numeric_literal_hex_digits (input : Text) (negative : Bool) : ParseResult Text ParseTerm :=
     numeric_literal_hex_digits_done (hex_number input) negative input
 
 #[partial]
-def numeric_literal_hex_digits_done (r : ParseResult I64) (negative : Bool) (orig : String) : ParseResult ParseTerm :=
+def numeric_literal_hex_digits_done (r : ParseResult Text I64) (negative : Bool) (orig : Text)
+    : ParseResult Text ParseTerm :=
     match r {
         success rem n => numeric_literal_hex_int_suffix rem n negative orig,
         fail e => fail e
     }
 
 #[partial]
-def numeric_literal_hex_int_suffix (input : String) (n : I64) (negative : Bool) (orig : String) : ParseResult ParseTerm :=
+def numeric_literal_hex_int_suffix (input : Text) (n : I64) (negative : Bool) (orig : Text) : ParseResult Text ParseTerm :=
     match int_suffix_parser input {
         success rem suffix =>
-            let hex_text : String := String.slice orig 0 (I64.sub (String.length orig) (String.length input)) in
+            let hex_text : String := Input.input_text (Text.offset input - Text.offset orig) orig in
             let hex_len : I64 := String.length (strip_leading_zeros hex_text 0) in
             match hex_literal_rejection negative hex_len n suffix {
                 Option.some msg => fail (ParseError.custom msg rem),
@@ -375,7 +379,8 @@ def numeric_literal_hex_int_suffix (input : String) (n : I64) (negative : Bool) 
     }
 
 #[partial]
-def numeric_literal_digits_done (r : ParseResult I64) (negative : Bool) (src : String) : ParseResult ParseTerm :=
+def numeric_literal_digits_done (r : ParseResult Text I64) (negative : Bool) (src : Text)
+    : ParseResult Text ParseTerm :=
     match r {
         success rem n => numeric_literal_try_dot rem n negative src,
         fail e => fail e
@@ -400,21 +405,21 @@ def numeric_literal_digits_done (r : ParseResult I64) (negative : Bool) (src : S
 /// the `-` was consumed a level up (see `numeric_literal_decimal_digits`
 /// and its hex siblings).
 #[partial]
-def numeric_literal_try_dot (input : String) (n : I64) (negative : Bool) (src : String) : ParseResult ParseTerm :=
+def numeric_literal_try_dot (input : Text) (n : I64) (negative : Bool) (src : Text) : ParseResult Text ParseTerm :=
     match tag "." input {
         success rem _ =>
-            let int_len : I64 := I64.sub (String.length src) (String.length input) in
+            let int_len : I64 := Text.offset input - Text.offset src in
             let sign_text : String := if negative then "-" else "" in
-            let int_text : String := String.concat sign_text (strip_underscores (String.slice src 0 int_len) 0 "") in
+            let int_text : String := String.concat sign_text (strip_underscores (Input.input_text int_len src) 0 "") in
             numeric_literal_frac (take_while_byte is_digit_byte rem) int_text,
         fail _ =>
             // Same slicing the dot branch does: the int path needs the
             // source text too (float-suffix routing carries it, and the
             // overflow gate counts its digits — the folded `n` alone
             // cannot tell a wrapped payload from a true one).
-            let int_len : I64 := I64.sub (String.length src) (String.length input) in
+            let int_len : I64 := Text.offset input - Text.offset src in
             let sign_text : String := if negative then "-" else "" in
-            let int_text : String := String.concat sign_text (strip_underscores (String.slice src 0 int_len) 0 "") in
+            let int_text : String := String.concat sign_text (strip_underscores (Input.input_text int_len src) 0 "") in
             numeric_literal_int_suffix input n negative int_text
     }
 
@@ -436,7 +441,7 @@ def strip_underscores (s : String) (i : I64) (acc : String) : String :=
         else strip_underscores s (I64.add i 1) (String.concat acc ch)
 
 #[partial]
-def numeric_literal_frac (r : ParseResult String) (int_text : String) : ParseResult ParseTerm :=
+def numeric_literal_frac (r : ParseResult Text String) (int_text : String) : ParseResult Text ParseTerm :=
     match r {
         success rem frac =>
             let text : String := String.concat (String.concat int_text ".") frac in
@@ -445,14 +450,14 @@ def numeric_literal_frac (r : ParseResult String) (int_text : String) : ParseRes
     }
 
 #[partial]
-def numeric_literal_float_suffix (input : String) (text : String) : ParseResult ParseTerm :=
+def numeric_literal_float_suffix (input : Text) (text : String) : ParseResult Text ParseTerm :=
     match float_suffix_parser input {
         success rem suffix => success rem (pt_lit (ParseLiteral.flt text suffix)),
         fail e => fail e
     }
 
 #[partial]
-def numeric_literal_int_suffix (input : String) (n : I64) (negative : Bool) (int_text : String) : ParseResult ParseTerm :=
+def numeric_literal_int_suffix (input : Text) (n : I64) (negative : Bool) (int_text : String) : ParseResult Text ParseTerm :=
     match int_suffix_parser input {
         success rem suffix => numeric_literal_int_route rem n negative int_text suffix,
         fail e => fail e
@@ -464,7 +469,7 @@ def numeric_literal_int_suffix (input : String) (n : I64) (negative : Bool) (int
 /// source text (sign attached, underscores stripped) is exactly what
 /// `ParseLiteral.flt` carries for the backend to parse.
 #[partial]
-def numeric_literal_int_route (rem : String) (n : I64) (negative : Bool) (int_text : String) (suffix : NumSuffix) : ParseResult ParseTerm :=
+def numeric_literal_int_route (rem : Text) (n : I64) (negative : Bool) (int_text : String) (suffix : NumSuffix) : ParseResult Text ParseTerm :=
     match suffix {
         NumSuffix.f32 => success rem (pt_lit (ParseLiteral.flt int_text NumSuffix.f32)),
         NumSuffix.f64 => success rem (pt_lit (ParseLiteral.flt int_text NumSuffix.f64)),

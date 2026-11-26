@@ -155,7 +155,7 @@ def test_unify_app_different : Bool :=
 // mismatches purely on spelling.
 
 use lib::module {parse_all_decls}
-use parsec::core {fail, success}
+use parsec::core {fail, success, Text}
 
 def conv_path : ModulePath := ModulePath.mk (List.cons (Identifier.id "conv") List.empty)
 
@@ -165,7 +165,7 @@ def conv_scope : Scope :=
     {
         module_id := conv_path,
         scope :=
-            match parse_all_decls src {
+            match parse_all_decls (Text.of_string src) {
                 success _ decl_list => build_scope_from_decls conv_path decl_list,
                 fail _ => build_scope_from_decls conv_path List.empty,
             },
@@ -408,7 +408,7 @@ def probe_first_def_body_loc (ds : List Decl) : Bool := match ds {
 /// `lang/src/parser.mo:4650`).
 #[test]
 def test_probe_def_body_lands_on_a_ctx : Bool :=
-    match decls_parser_located "def f (x : I64) : I64 :=\n    x\n" {
+    match decls_parser_located (Text.of_string "def f (x : I64) : I64 :=\n    x\n") {
         fail _e => false,
         success _rem ds => probe_first_def_body_loc ds,
     }

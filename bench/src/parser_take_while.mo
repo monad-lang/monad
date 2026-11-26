@@ -41,7 +41,7 @@
 /// whole large file in one call used to blow the stack, so this
 /// benchmark does not try to.
 use std::bench {Bench.now, Bench.report_since}
-use parsec::core {ParseResult}
+use parsec::core {ParseResult, Text}
 use parsec::combinators {take_while, take_while_byte}
 use parsec::char_preds {is_ident_char, is_ident_char_byte, is_space, is_space_byte}
 
@@ -62,7 +62,7 @@ def grow_to (s : String) (target : I64) : String :=
 /// principle be skipped, and a benchmark that measures nothing is worse
 /// than one that measures the wrong thing (AGENTS.md item 25).
 #[partial]
-def consumed (r : ParseResult String) : I64 :=
+def consumed (r : ParseResult Text String) : I64 :=
     match r {
         success _ out => String.length out,
         fail _ => 0

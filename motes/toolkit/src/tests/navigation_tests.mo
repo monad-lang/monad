@@ -37,7 +37,7 @@
 /// The `nt_` prefix keeps whole-program scope clean.
 use std::path {Path}
 use std::test {Test.write_fixture}
-use parsec::core {fail, success}
+use parsec::core {fail, success, Text}
 use lang::module {
     DeclRange, ModuleInfo, ModuleInfoCache, RangedFileCheck, decl_range_name,
     check_file_cached_from_source_ranged, module_info_cache_empty, module_info_cache_insert,
@@ -332,7 +332,7 @@ def test_an_unknown_identifier_has_no_target : IO Bool := do {
 /// here too.
 #[test]
 def test_a_def_in_another_module_answers_its_file : IO Bool := do {
-    match parse_all_decls "def far : I64 := 1\n" {
+    match parse_all_decls (Text.of_string "def far : I64 := 1\n") {
         ParseResult.fail _e => do { println "VACUOUS: the fixture did not parse"; return false },
         ParseResult.success _rem decls => do {
             let sd : ScopeData := build_scope_from_decls nt_other_module decls;
@@ -520,7 +520,7 @@ def test_a_struct_hovers_as_its_declaration : IO Bool := do {
 /// the cross-module def test above gives.
 #[test]
 def test_a_struct_in_another_module_renders_and_answers_its_file : IO Bool := do {
-    match parse_all_decls "struct ZzFar { w : I64 }\n" {
+    match parse_all_decls (Text.of_string "struct ZzFar { w : I64 }\n") {
         ParseResult.fail _e => do { println "VACUOUS: the fixture did not parse"; return false },
         ParseResult.success _rem decls => do {
             let sd : ScopeData := build_scope_from_decls nt_other_module decls;
@@ -549,7 +549,7 @@ def test_a_struct_in_another_module_renders_and_answers_its_file : IO Bool := do
 /// hand for the reason the cross-module def test above gives.
 #[test]
 def test_types_and_classes_in_another_module_answer_its_file : IO Bool := do {
-    match parse_all_decls "type ZzFarColor { zz_far_red, zz_far_blue }\nclass ZzFarShow A {\n    def zz_far_show (a : A) : String\n}\n" {
+    match parse_all_decls (Text.of_string "type ZzFarColor { zz_far_red, zz_far_blue }\nclass ZzFarShow A {\n    def zz_far_show (a : A) : String\n}\n") {
         ParseResult.fail _e => do { println "VACUOUS: the fixture did not parse"; return false },
         ParseResult.success _rem decls => do {
             let sd : ScopeData := build_scope_from_decls nt_other_module decls;

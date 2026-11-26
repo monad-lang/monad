@@ -27,7 +27,7 @@
 /// double (the backend owns text -> bits, including f32 rounding).
 use lib::parser::numeric_literal {numeric_literal}
 use lib::types {NumSuffix, ParseLiteral, ParseTerm, ParseTermKind}
-use parsec::core {ParseResult}
+use parsec::core {ParseResult, Text}
 
 def suffix_name (s : NumSuffix) : String :=
     match s {
@@ -38,7 +38,7 @@ def suffix_name (s : NumSuffix) : String :=
 
 /// `true` when `numeric_literal` REJECTS `src` (any fail, including the
 /// range/overflow gates).
-def rejected (src : String) : Bool :=
+def rejected (src : Text) : Bool :=
     match numeric_literal src {
         ParseResult.fail _ => Bool.true,
         ParseResult.success _ _ => Bool.false,
@@ -47,7 +47,7 @@ def rejected (src : String) : Bool :=
 /// The shape a literal parses to: `num <value> <suffix>`,
 /// `flt <text> <suffix>`, or `<rejected>`/`<other>` markers for
 /// mismatched shapes.
-def literal_shape (src : String) : String :=
+def literal_shape (src : Text) : String :=
     match numeric_literal src {
         ParseResult.fail _ => "<rejected>",
         ParseResult.success _ t =>
@@ -68,72 +68,72 @@ def literal_shape (src : String) : String :=
 
 #[test]
 def test_width_boundaries_parse : Bool :=
-    String.beq (literal_shape "100u8") "num 100 u8"
-        && String.beq (literal_shape "127i8") "num 127 i8"
-        && String.beq (literal_shape "-128i8") "num -128 i8"
-        && String.beq (literal_shape "65535u16") "num 65535 u16"
-        && String.beq (literal_shape "4294967295u32") "num 4294967295 u32"
-        && String.beq (literal_shape "0xFFu8") "num 255 u8"
-        && String.beq (literal_shape "0x7Fi8") "num 127 i8"
-        && String.beq (literal_shape "-0x80i8") "num -128 i8"
-        && String.beq (literal_shape "-0x10") "num -16 i64"
-        && String.beq (literal_shape "-9223372036854775808") "num -9223372036854775808 i64"
+    String.beq (literal_shape (Text.of_string "100u8")) "num 100 u8"
+        && String.beq (literal_shape (Text.of_string "127i8")) "num 127 i8"
+        && String.beq (literal_shape (Text.of_string "-128i8")) "num -128 i8"
+        && String.beq (literal_shape (Text.of_string "65535u16")) "num 65535 u16"
+        && String.beq (literal_shape (Text.of_string "4294967295u32")) "num 4294967295 u32"
+        && String.beq (literal_shape (Text.of_string "0xFFu8")) "num 255 u8"
+        && String.beq (literal_shape (Text.of_string "0x7Fi8")) "num 127 i8"
+        && String.beq (literal_shape (Text.of_string "-0x80i8")) "num -128 i8"
+        && String.beq (literal_shape (Text.of_string "-0x10")) "num -16 i64"
+        && String.beq (literal_shape (Text.of_string "-9223372036854775808")) "num -9223372036854775808 i64"
 
 #[test]
 def test_out_of_range_rejected : Bool :=
-    rejected "300u8"
-        && rejected "128i8"
-        && rejected "-129i8"
-        && rejected "65536u16"
-        && rejected "2147483648i32"
-        && rejected "0x100u8"
-        && rejected "0x80i8"
-        && rejected "0x10000u16"
-        && rejected "9223372036854775808"
-        && rejected "9223372036854775808i64"
+    rejected (Text.of_string "300u8")
+        && rejected (Text.of_string "128i8")
+        && rejected (Text.of_string "-129i8")
+        && rejected (Text.of_string "65536u16")
+        && rejected (Text.of_string "2147483648i32")
+        && rejected (Text.of_string "0x100u8")
+        && rejected (Text.of_string "0x80i8")
+        && rejected (Text.of_string "0x10000u16")
+        && rejected (Text.of_string "9223372036854775808")
+        && rejected (Text.of_string "9223372036854775808i64")
         // 2^63 as a bare positive hex or decimal wraps the fold; the
         // gate must not mistake the wrapped payload for a value.
-        && rejected "0x8000000000000000"
+        && rejected (Text.of_string "0x8000000000000000")
         // 17 hex digits cannot fit any width.
-        && rejected "0x1FFFFFFFFFFFFFFFFu64"
+        && rejected (Text.of_string "0x1FFFFFFFFFFFFFFFFu64")
 
 #[test]
 def test_i64_min_hex_boundary : Bool :=
     // -2^63 is writable hex (the fold keeps the exact payload), and
     // the negative-i64 gate accepts exactly it.
-    String.beq (literal_shape "-0x8000000000000000") "num -9223372036854775808 i64"
-        && rejected "-0x8000000000000001"
+    String.beq (literal_shape (Text.of_string "-0x8000000000000000")) "num -9223372036854775808 i64"
+        && rejected (Text.of_string "-0x8000000000000001")
 
 #[test]
 def test_negative_unsigned_rejected : Bool :=
-    rejected "-1u8"
-        && rejected "-1u64"
-        && rejected "-0u8"
-        && rejected "-0x1u8"
-        && rejected "-0xFFu32"
-        && String.beq (literal_shape "-5i32") "num -5 i32"
+    rejected (Text.of_string "-1u8")
+        && rejected (Text.of_string "-1u64")
+        && rejected (Text.of_string "-0u8")
+        && rejected (Text.of_string "-0x1u8")
+        && rejected (Text.of_string "-0xFFu32")
+        && String.beq (literal_shape (Text.of_string "-5i32")) "num -5 i32"
 
 #[test]
 def test_u64_full_range : Bool :=
     // Hex u64 above i64::MAX: the wrapped payload is exactly the
     // bit-reinterpretation the Rust parser computes for the same
     // literal, so it parses on both sides.
-    String.beq (literal_shape "0xFFFFFFFFFFFFFFFFu64") "num -1 u64"
-        && String.beq (literal_shape "0x8000000000000000u64") "num -9223372036854775808 u64"
+    String.beq (literal_shape (Text.of_string "0xFFFFFFFFFFFFFFFFu64")) "num -1 u64"
+        && String.beq (literal_shape (Text.of_string "0x8000000000000000u64")) "num -9223372036854775808 u64"
         // Decimal u64 above i64::MAX: the wrapping fold is already the
         // exact bit pattern, so the decimal and hex spellings of the
         // same value agree (19 digits folded past i64::MAX, then the
         // 20-digit boundary, then u64::MAX itself).
-        && String.beq (literal_shape "9223372036854775808u64") "num -9223372036854775808 u64"
-        && String.beq (literal_shape "18446744073709551615u64") "num -1 u64"
+        && String.beq (literal_shape (Text.of_string "9223372036854775808u64")) "num -9223372036854775808 u64"
+        && String.beq (literal_shape (Text.of_string "18446744073709551615u64")) "num -1 u64"
         // Leading zeros do not fake a digit count: 21 characters, 19
         // true digits, an ordinary in-range value.
-        && String.beq (literal_shape "009223372036854775807u64") "num 9223372036854775807 u64"
+        && String.beq (literal_shape (Text.of_string "009223372036854775807u64")) "num 9223372036854775807 u64"
         // One past u64::MAX, in 19 and 20 digits, still rejects.
-        && rejected "18446744073709551616u64"
-        && rejected "118446744073709551615u64"
+        && rejected (Text.of_string "18446744073709551616u64")
+        && rejected (Text.of_string "118446744073709551615u64")
         // At or below i64::MAX, decimal u64 parses fine.
-        && String.beq (literal_shape "9223372036854775807u64") "num 9223372036854775807 u64"
+        && String.beq (literal_shape (Text.of_string "9223372036854775807u64")) "num 9223372036854775807 u64"
 
 #[test]
 def test_leading_zeros_are_not_significant : Bool :=
@@ -141,26 +141,27 @@ def test_leading_zeros_are_not_significant : Bool :=
     // accept zero padding at any length; the overflow gates bound on the
     // SIGNIFICANT digit count, so a zero-padded literal parses to the
     // same payload as its unpadded spelling at every width.
-    String.beq (literal_shape "00000000000000000042") "num 42 i64"
-        && String.beq (literal_shape "000000000000000000000") "num 0 i64"
-        && String.beq (literal_shape "0000000000000000000255u8") "num 255 u8"
-        && String.beq (literal_shape "-00000000000000000000009223372036854775808") "num -9223372036854775808 i64"
-        && String.beq (literal_shape "0x00000000000000001") "num 1 i64"
-        && String.beq (literal_shape "0x0000FFFFFFFFFFFFFFFFu64") "num -1 u64"
+    String.beq (literal_shape (Text.of_string "00000000000000000042")) "num 42 i64"
+        && String.beq (literal_shape (Text.of_string "000000000000000000000")) "num 0 i64"
+        && String.beq (literal_shape (Text.of_string "0000000000000000000255u8")) "num 255 u8"
+        && String.beq (literal_shape (Text.of_string "-00000000000000000000009223372036854775808"))
+            "num -9223372036854775808 i64"
+        && String.beq (literal_shape (Text.of_string "0x00000000000000001")) "num 1 i64"
+        && String.beq (literal_shape (Text.of_string "0x0000FFFFFFFFFFFFFFFFu64")) "num -1 u64"
         // Padding does not hide a real overflow either.
-        && rejected "0009223372036854775808"
-        && rejected "0x00001FFFFFFFFFFFFFFFFu64"
+        && rejected (Text.of_string "0009223372036854775808")
+        && rejected (Text.of_string "0x00001FFFFFFFFFFFFFFFFu64")
 
 // ─── Integer digits with a float suffix are a FLOAT literal ─────────
 
 #[test]
 def test_int_digits_float_suffix_routes_to_flt : Bool :=
-    String.beq (literal_shape "33f64") "flt 33 f64"
-        && String.beq (literal_shape "33f32") "flt 33 f32"
-        && String.beq (literal_shape "-5f64") "flt -5 f64"
+    String.beq (literal_shape (Text.of_string "33f64")) "flt 33 f64"
+        && String.beq (literal_shape (Text.of_string "33f32")) "flt 33 f32"
+        && String.beq (literal_shape (Text.of_string "-5f64")) "flt -5 f64"
 
 #[test]
 def test_dotted_float_literals_carry_text : Bool :=
-    String.beq (literal_shape "0.5f32") "flt 0.5 f32"
-        && String.beq (literal_shape "0.1f64") "flt 0.1 f64"
-        && String.beq (literal_shape "3.14") "flt 3.14 f64"
+    String.beq (literal_shape (Text.of_string "0.5f32")) "flt 0.5 f32"
+        && String.beq (literal_shape (Text.of_string "0.1f64")) "flt 0.1 f64"
+        && String.beq (literal_shape (Text.of_string "3.14")) "flt 3.14 f64"

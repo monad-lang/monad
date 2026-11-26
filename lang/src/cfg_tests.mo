@@ -6,7 +6,7 @@ use std::list {List.intercalate}
 use lang::types {AttrArg, Decl, Identifier, show_module_path, show_name_path}
 use lang::cfg {CfgEnv, CfgEnv.empty, CfgEnv.for_mote, CfgEnv.keep, CfgPred, CfgPred.eval, CfgPred.parse}
 use lang::parser {decls_parser_located, decls_parser_located_cfg}
-use parsec::core {ParseResult}
+use parsec::core {ParseResult, Text}
 
 def src : String :=
     "#[cfg {feature := \"x\"}]\ndef a : I64 := 1\n\n"
@@ -24,7 +24,7 @@ def label (d : Decl) : String :=
         _ => "?",
     }
 
-def labels (r : ParseResult (List Decl)) : String :=
+def labels (r : ParseResult Text (List Decl)) : String :=
     match r {
         ParseResult.success _ ds => List.intercalate "," (List.map label ds),
         ParseResult.fail _ => "<fail>",
@@ -36,25 +36,25 @@ def env (fs : List String) : CfgEnv :=
 
 #[test]
 def test_cfg_filter_feature_off : Bool :=
-    String.beq (labels (decls_parser_located_cfg CfgEnv.empty src)) "b,c,f"
+    String.beq (labels (decls_parser_located_cfg CfgEnv.empty (Text.of_string src))) "b,c,f"
 
 #[test]
 def test_cfg_filter_feature_on : Bool :=
-    String.beq (labels (decls_parser_located_cfg (env ["x"]) src)) "a,c,d,use std.io,f"
+    String.beq (labels (decls_parser_located_cfg (env ["x"]) (Text.of_string src))) "a,c,d,use std.io,f"
 
 #[test]
 def test_cfg_filter_other_feature : Bool :=
-    String.beq (labels (decls_parser_located_cfg (env ["y"]) src)) "b,c,d,f"
+    String.beq (labels (decls_parser_located_cfg (env ["y"]) (Text.of_string src))) "b,c,d,f"
 
 /// The plain entry point is the feature-off filter.
 #[test]
 def test_cfg_default_entry_point_is_off : Bool :=
-    String.beq (labels (decls_parser_located src)) "b,c,f"
+    String.beq (labels (decls_parser_located (Text.of_string src))) "b,c,f"
 
 /// An attributed `open` parses and survives when its cfg holds.
 #[test]
 def test_cfg_attributed_open : Bool :=
-    String.beq (labels (decls_parser_located_cfg (env ["x"]) "#[cfg {feature := \"x\"}]\nopen IO {println}\ndef g : I64 := 1\n")) "?,g"
+    String.beq (labels (decls_parser_located_cfg (env ["x"]) (Text.of_string "#[cfg {feature := \"x\"}]\nopen IO {println}\ndef g : I64 := 1\n"))) "?,g"
 
 #[test]
 def test_cfg_malformed_keeps : Bool :=
@@ -150,7 +150,7 @@ def test_cfg_double_not_is_not_a_feature : Bool :=
 def test_cfg_not_default_filters_decls : Bool :=
     let src : String := "#[cfg {feature := \"x\"}]\ndef on : I64 := 1\n#[cfg [not {feature := \"x\"}]]\ndef off : I64 := 2\n" in
     let e : CfgEnv := CfgEnv.for_mote "m" table (Option.some "not m/default") in
-    String.beq (labels (decls_parser_located_cfg e src)) "off"
+    String.beq (labels (decls_parser_located_cfg e (Text.of_string src))) "off"
 
 // ─── The off-switch against a REAL `MONAD_FEATURES` ────────────────────
 //

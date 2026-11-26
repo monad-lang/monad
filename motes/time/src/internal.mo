@@ -5,7 +5,8 @@
 ///
 /// Nothing in this file is `pub`; `lib.mo` re-exports only the public API.
 
-use parsec::core {ParseError, ParseResult}
+use parsec::core {ParseError, ParseResult, Text}
+use parsec::input {Input}
 use parsec::combinators {tag}
 open ParseResult {fail, success}
 
@@ -81,30 +82,30 @@ def pow10 (e : I64) : I64 :=
 /// Consume exactly `n` decimal digits. Fails without over-consuming if
 /// fewer than `n` digits are available or a non-digit appears first.
 #[partial]
-def take_n_digits (n : I64) (input : String) : ParseResult I64 :=
+def take_n_digits (n : I64) (input : Text) : ParseResult Text I64 :=
     take_n_digits_go n input 0
 
 #[partial]
-def take_n_digits_go (remaining : I64) (input : String) (acc : I64) : ParseResult I64 :=
+def take_n_digits_go (remaining : I64) (input : Text) (acc : I64) : ParseResult Text I64 :=
     if remaining == 0
     then success input acc
-    else if String.is_empty input
+    else if Input.at_end input
     then fail (ParseError.custom "expected digit" input)
     else
-        let ch := String.slice input 0 1 in
+        let ch := Input.input_text 1 input in
         if is_digit_char ch
-        then take_n_digits_go (remaining - 1) (String.drop 1 input) (acc * 10 + char_to_digit ch)
+        then take_n_digits_go (remaining - 1) (Input.input_advance 1 input) (acc * 10 + char_to_digit ch)
         else fail (ParseError.custom "expected digit" input)
 
 /// Accumulate a run of fractional-second digits. The i-th digit is placed at
 /// `10^(8-i)`; anything past the ninth is consumed but not accumulated, so
 /// any digit count parses and `.123` means 123000000 nanoseconds.
 #[partial]
-def fraction_digits_go (input : String) (index : I64) (acc : I64) : ParseResult I64 :=
-    if String.is_empty input
+def fraction_digits_go (input : Text) (index : I64) (acc : I64) : ParseResult Text I64 :=
+    if Input.at_end input
     then success input acc
     else
-        let ch := String.slice input 0 1 in
+        let ch := Input.input_text 1 input in
         if is_digit_char ch
         then
             let next :=
@@ -112,18 +113,18 @@ def fraction_digits_go (input : String) (index : I64) (acc : I64) : ParseResult 
                 then acc + char_to_digit ch * pow10 (8 - index)
                 else acc
             in
-            fraction_digits_go (String.drop 1 input) (index + 1) next
+            fraction_digits_go (Input.input_advance 1 input) (index + 1) next
         else success input acc
 
 /// `"." digits+` -> nanoseconds. Fails on a bare `.` (no digits), leaving the
 /// caller's remainder intact.
-def parse_fraction (input : String) : ParseResult I64 :=
+def parse_fraction (input : Text) : ParseResult Text I64 :=
     match tag "." input {
         success rem _ =>
-            if String.is_empty rem
+            if Input.at_end rem
             then fail (ParseError.custom "expected digit after '.'" rem)
             else
-                let ch := String.slice rem 0 1 in
+                let ch := Input.input_text 1 rem in
                 if is_digit_char ch
                 then fraction_digits_go rem 0 0
                 else fail (ParseError.custom "expected digit after '.'" rem),

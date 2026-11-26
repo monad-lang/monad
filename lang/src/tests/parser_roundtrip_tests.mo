@@ -12,7 +12,7 @@ use lang::types {
 use lib::module {parse_all_decls}
 use lib::parser {open_parser, use_parser}
 use lib::parser::lower_parse {lower_parse_decl, lower_ctx_bare}
-use parsec::core {ParseResult}
+use parsec::core {ParseResult, Text}
 use lib::pretty {show_decl}
 
 open ParseResult {fail, success}
@@ -75,7 +75,7 @@ def starts_with_binder_names (names : List String) (t : Term) : Bool :=
 /// `B` before the `A` its own domain mentions.
 #[test]
 def test_implicit_clauses_keep_source_order : Bool :=
-    match parse_all_decls "def two {A : Type} {B : A -> Type} (p : I64) : I64 := 1" {
+    match parse_all_decls (Text.of_string "def two {A : Type} {B : A -> Type} (p : I64) : I64 := 1") {
         success _ decls =>
             match parsed_def_typ "two" decls {
                 Option.some typ => starts_with_binder_names ["A", "B"] typ,
@@ -102,7 +102,7 @@ def is_var_named (name : String) (t : Term) : Bool :=
 /// element type.
 #[test]
 def test_implicit_clause_keeps_its_declared_type : Bool :=
-    match parse_all_decls "def keep {A : Type} {a : A} (x : A) : A := x" {
+    match parse_all_decls (Text.of_string "def keep {A : Type} {a : A} (x : A) : A := x") {
         success _ decls =>
             match parsed_def_typ "keep" decls {
                 Option.some typ =>
@@ -116,7 +116,7 @@ def test_implicit_clause_keeps_its_declared_type : Bool :=
     }
 
 #[partial]
-def parse_decl_succeeds (r : ParseResult ParseDecl) : Bool :=
+def parse_decl_succeeds (r : ParseResult Text ParseDecl) : Bool :=
     match r {
         success _ _ => true,
         fail _ => false
@@ -124,22 +124,25 @@ def parse_decl_succeeds (r : ParseResult ParseDecl) : Bool :=
 
 #[test]
 def test_roundtrip_use_glob : Bool :=
-    match use_parser "use init::io {*}" {
-        success _ out => parse_decl_succeeds (use_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
+    match use_parser (Text.of_string "use init::io {*}") {
+        success _ out =>
+            parse_decl_succeeds (use_parser (Text.of_string (show_lowered (lower_parse_decl lower_ctx_bare out)))),
         fail _ => false
     }
 
 #[test]
 def test_roundtrip_use_nested : Bool :=
-    match use_parser "use init::io {file {read}}" {
-        success _ out => parse_decl_succeeds (use_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
+    match use_parser (Text.of_string "use init::io {file {read}}") {
+        success _ out =>
+            parse_decl_succeeds (use_parser (Text.of_string (show_lowered (lower_parse_decl lower_ctx_bare out)))),
         fail _ => false
     }
 
 #[test]
 def test_roundtrip_use_nested_rename : Bool :=
-    match use_parser "use init::io {file as f {read}}" {
-        success _ out => parse_decl_succeeds (use_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
+    match use_parser (Text.of_string "use init::io {file as f {read}}") {
+        success _ out =>
+            parse_decl_succeeds (use_parser (Text.of_string (show_lowered (lower_parse_decl lower_ctx_bare out)))),
         fail _ => false
     }
 
@@ -148,8 +151,9 @@ def test_roundtrip_use_nested_rename : Bool :=
 /// it must survive parse -> print -> re-parse unchanged.
 #[test]
 def test_roundtrip_use_dotted_item : Bool :=
-    match use_parser "use std::list {List.length}" {
-        success _ out => parse_decl_succeeds (use_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
+    match use_parser (Text.of_string "use std::list {List.length}") {
+        success _ out =>
+            parse_decl_succeeds (use_parser (Text.of_string (show_lowered (lower_parse_decl lower_ctx_bare out)))),
         fail _ => false
     }
 
@@ -157,8 +161,9 @@ def test_roundtrip_use_dotted_item : Bool :=
 /// its own parser entry point, so it needs its own round trip.
 #[test]
 def test_roundtrip_use_dotted_item_rename : Bool :=
-    match use_parser "use std::list {List.length as len}" {
-        success _ out => parse_decl_succeeds (use_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
+    match use_parser (Text.of_string "use std::list {List.length as len}") {
+        success _ out =>
+            parse_decl_succeeds (use_parser (Text.of_string (show_lowered (lower_parse_decl lower_ctx_bare out)))),
         fail _ => false
     }
 
@@ -168,23 +173,26 @@ def test_roundtrip_use_dotted_item_rename : Bool :=
 /// `use_brace_item`).
 #[test]
 def test_roundtrip_use_dotted_and_sub_together : Bool :=
-    match use_parser "use init::io {file {read}, String.length}" {
-        success _ out => parse_decl_succeeds (use_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
+    match use_parser (Text.of_string "use init::io {file {read}, String.length}") {
+        success _ out =>
+            parse_decl_succeeds (use_parser (Text.of_string (show_lowered (lower_parse_decl lower_ctx_bare out)))),
         fail _ => false
     }
 
 #[test]
 def test_roundtrip_open_filtered : Bool :=
 
-    match open_parser "open io {println}" {
-        success _ out => parse_decl_succeeds (open_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
+    match open_parser (Text.of_string "open io {println}") {
+        success _ out =>
+            parse_decl_succeeds (open_parser (Text.of_string (show_lowered (lower_parse_decl lower_ctx_bare out)))),
         fail _ => false
     }
 
 #[test]
 def test_roundtrip_scoped_open : Bool :=
-    match open_parser "open io {println} in def main : IO Unit := println \"hi\"" {
-        success _ out => parse_decl_succeeds (open_parser (show_lowered (lower_parse_decl lower_ctx_bare out))),
+    match open_parser (Text.of_string "open io {println} in def main : IO Unit := println \"hi\"") {
+        success _ out =>
+            parse_decl_succeeds (open_parser (Text.of_string (show_lowered (lower_parse_decl lower_ctx_bare out)))),
         fail _ => false
     }
 

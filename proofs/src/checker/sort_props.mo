@@ -19,7 +19,7 @@
 
 use lang::src::types {Term, concrete, hole, i0, id, named, pi, sort, succ, var}
 use lib::checker::harness {accepted, rejected, infers_sort_at}
-use lang::module {try_parse_decls}
+use lang::module {try_parse_decls_str}
 use lang::scope {build_scope_from_decls}
 use lang::typecheck::infer {empty_local_types, empty_locals, type_check}
 use lang::types {
@@ -231,7 +231,7 @@ def interval_kind_source : String :=
 /// fail rather than silently pass against a scope with nothing bound.
 def interval_kind_scope : Scope :=
     let sd : ScopeData :=
-        match try_parse_decls interval_kind_source {
+        match try_parse_decls_str interval_kind_source {
             Option.some decl_list => build_scope_from_decls interval_kind_path decl_list,
             Option.none => build_scope_from_decls interval_kind_path List.empty,
         } in

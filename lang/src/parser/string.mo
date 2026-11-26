@@ -2,8 +2,9 @@
 /// Extracted from parser.mo as part of Phase C
 
 use lib::types {ParseLiteral, ParseTerm, Term, pt_lit}
-use parsec::core {ParseResult, custom, is_empty}
-use parsec::combinators {tag, take_while, utf8_char_width}
+use parsec::core {ParseResult, custom, is_empty, Text}
+use parsec::input {Input}
+use parsec::combinators {tag, take_while, text_char_width, utf8_char_width}
 use parsec::char_preds {is_hex_digit, is_space}
 use parsec::number {char_to_hex_digit}
 
@@ -68,13 +69,13 @@ def escape_replacement (c : String) : Option String :=
 /// this consumes the REST of the run and returns what is left after it --
 /// which is both the literal's remainder and the next run's start.
 #[partial]
-def skip_escaped_whitespace (input : String) : String :=
-    if is_empty input
+def skip_escaped_whitespace (input : Text) : Text :=
+    if Input.at_end input
     then input
     else
-        let width : I64 := utf8_char_width input in
-        if is_space (String.slice input 0 width)
-        then skip_escaped_whitespace (String.drop width input)
+        let width : I64 := text_char_width input in
+        if is_space (Input.input_text width input)
+        then skip_escaped_whitespace (Input.input_advance width input)
         else input
 
 /// `\u{XXXX}` -- the Rust reference's `parse_unicode`, which
@@ -96,7 +97,7 @@ def skip_escaped_whitespace (input : String) : String :=
 /// what both callers already want: `string_body_escape_char` appends a
 /// replacement into the literal's content, and `char_literal_escape`
 /// hands one to `Char.of_bytes`.
-def unicode_escape (input : String) : ParseResult String :=
+def unicode_escape (input : Text) : ParseResult Text String :=
     match tag "{" input {
         success after_brace _ => unicode_escape_digits after_brace 0 0u32,
         fail _ => fail (ParseError.custom "expected `{` in a `\\u{...}` escape" input)
@@ -107,12 +108,12 @@ def unicode_escape (input : String) : ParseResult String :=
 /// six and the following `char('}')` then fails on the digit, which is why
 /// the length test is here at the head rather than at the terminator.
 #[partial]
-def unicode_escape_digits (input : String) (count : I64) (acc : U32) : ParseResult String :=
+def unicode_escape_digits (input : Text) (count : I64) (acc : U32) : ParseResult Text String :=
     if Bool.and (I64.lt count 6) (unicode_escape_hex_at input)
     then
-        let width : I64 := utf8_char_width input in
-        let digit : U32 := I64.to_u32 (char_to_hex_digit (String.slice input 0 width)) in
-        unicode_escape_digits (String.drop width input) (I64.add count 1)
+        let width : I64 := text_char_width input in
+        let digit : U32 := I64.to_u32 (char_to_hex_digit (Input.input_text width input)) in
+        unicode_escape_digits (Input.input_advance width input) (I64.add count 1)
             (U32.add (U32.mul acc 16u32) digit)
     else unicode_escape_close input count acc
 
@@ -121,19 +122,19 @@ def unicode_escape_digits (input : String) (count : I64) (acc : U32) : ParseResu
 /// (`lang/parser/number.mo`) is total, answering 15 for anything it does
 /// not recognise, so it is only ever called behind this predicate.
 #[partial]
-def unicode_escape_hex_at (input : String) : Bool :=
-    if is_empty input
+def unicode_escape_hex_at (input : Text) : Bool :=
+    if Input.at_end input
     then false
     else
-        let width : I64 := utf8_char_width input in
-        is_hex_digit (String.slice input 0 width)
+        let width : I64 := text_char_width input in
+        is_hex_digit (Input.input_text width input)
 
 /// The digits are done: require `}` and at least one digit, then encode.
 /// The `count == 0` test is `take_while_m_n`'s lower bound -- `\u{}` must
 /// not decode as code point 0 (which would be a legal, silent, wrong
 /// answer), it must fail.
 #[partial]
-def unicode_escape_close (input : String) (count : I64) (acc : U32) : ParseResult String :=
+def unicode_escape_close (input : Text) (count : I64) (acc : U32) : ParseResult Text String :=
     if I64.beq count 0
     then fail (ParseError.custom "`\\u{...}` needs 1 to 6 hexadecimal digits" input)
     else
@@ -197,7 +198,7 @@ def utf8_cont (value : U32) : U8 :=
 /// their real characters here (not left as literal backslash-letter
 /// pairs), matching the Rust reference's `Literal::Str` content.
 #[partial]
-def string_body (input : String) : ParseResult String :=
+def string_body (input : Text) : ParseResult Text String :=
     string_body_loop input input ""
 
 /// Steps by `utf8_char_width` rather than a hardcoded 1 byte — a plain
@@ -219,15 +220,15 @@ def string_body (input : String) : ParseResult String :=
 /// dominant per-character cost from O(L^2) (one growing-copy concat
 /// per char) into O(L) + O(escape count).
 #[partial]
-def string_body_loop (run_start : String) (input : String) (acc : String) : ParseResult String :=
-    if is_empty input
+def string_body_loop (run_start : Text) (input : Text) (acc : String) : ParseResult Text String :=
+    if Input.at_end input
     then fail (ParseError.custom "unterminated string literal" input)
     else
-        let width : I64 := utf8_char_width input in
-        string_body_char run_start input (String.slice input 0 width) (String.drop width input) acc
+        let width : I64 := text_char_width input in
+        string_body_char run_start input (Input.input_text width input) (Input.input_advance width input) acc
 
 #[partial]
-def string_body_char (run_start : String) (input : String) (ch : String) (rest : String) (acc : String) : ParseResult String :=
+def string_body_char (run_start : Text) (input : Text) (ch : String) (rest : Text) (acc : String) : ParseResult Text String :=
     if String.beq "\"" ch
     then success rest (String.concat acc (string_body_run_text run_start input))
     else if String.beq "\\" ch
@@ -235,9 +236,9 @@ def string_body_char (run_start : String) (input : String) (ch : String) (rest :
     else string_body_loop run_start rest acc
 
 /// The unescaped run from `run_start` up to (not including) `input`.
-def string_body_run_text (run_start : String) (input : String) : String :=
-    let consumed : I64 := String.length run_start - String.length input in
-    String.slice run_start 0 consumed
+def string_body_run_text (run_start : Text) (input : Text) : String :=
+    let consumed : I64 := Text.offset input - Text.offset run_start in
+    Input.input_text consumed run_start
 
 /// A `\` was just consumed — the next character selects the escape.
 /// Correctly distinguishes `\\"` (escaped backslash, string continues,
@@ -250,19 +251,20 @@ def string_body_run_text (run_start : String) (input : String) : String :=
 /// was consumed — needed to close out the run ending at the `\` (see
 /// `string_body_run_text`) once the escape resolves.
 #[partial]
-def string_body_escape (run_start : String) (before_backslash : String) (input : String) (acc : String) : ParseResult String :=
-    if is_empty input
+def string_body_escape (run_start : Text) (before_backslash : Text) (input : Text) (acc : String) : ParseResult Text String :=
+    if Input.at_end input
     then fail (ParseError.custom "unterminated escape sequence" input)
     else
-        let width : I64 := utf8_char_width input in
-        string_body_escape_char run_start before_backslash (String.slice input 0 width) (String.drop width input) acc
+        let width : I64 := text_char_width input in
+        string_body_escape_char
+            run_start before_backslash (Input.input_text width input) (Input.input_advance width input) acc
 
 /// The two escapes that are not a fixed character map are dispatched here,
 /// before `escape_replacement` is consulted: a whitespace character (line
 /// continuation) and `u` (`\u{XXXX}`). Both need the REST of the input,
 /// which is why they cannot live in that function.
 #[partial]
-def string_body_escape_char (run_start : String) (before_backslash : String) (ch : String) (rest : String) (acc : String) : ParseResult String :=
+def string_body_escape_char (run_start : Text) (before_backslash : Text) (ch : String) (rest : Text) (acc : String) : ParseResult Text String :=
     if is_space ch
     then string_body_escape_append run_start before_backslash (skip_escaped_whitespace rest) "" acc
     else if String.beq "u" ch
@@ -282,13 +284,13 @@ def string_body_escape_char (run_start : String) (before_backslash : String) (ch
 /// resume the ordinary loop from `rest` -- which is also the next run's
 /// start, since the text after an escape begins a fresh run.
 #[partial]
-def string_body_escape_append (run_start : String) (before_backslash : String) (rest : String) (decoded : String) (acc : String) : ParseResult String :=
+def string_body_escape_append (run_start : Text) (before_backslash : Text) (rest : Text) (decoded : String) (acc : String) : ParseResult Text String :=
     let acc2 : String := String.concat (String.concat acc (string_body_run_text run_start before_backslash)) decoded in
     string_body_loop rest rest acc2
 
 /// Parse a string literal and return it as a Term.
 #[partial]
-def string_parse (input : String) : ParseResult ParseTerm :=
+def string_parse (input : Text) : ParseResult Text ParseTerm :=
     match tag "\"" input {
         success rem _ =>
             match string_body rem {
@@ -314,7 +316,7 @@ def string_parse (input : String) : ParseResult ParseTerm :=
 /// through to the identifier parser) when the input does not begin with
 /// `r"` or `r#"`.
 #[partial]
-def raw_string_parse (input : String) : ParseResult ParseTerm :=
+def raw_string_parse (input : Text) : ParseResult Text ParseTerm :=
     match tag "r" input {
         success after_r _ => raw_string_after_r after_r,
         fail e => fail e
@@ -325,7 +327,7 @@ def raw_string_parse (input : String) : ParseResult ParseTerm :=
 /// hashes does not start with `"`, this is not a raw-string opener (e.g.
 /// `r#x`) and we fail so the identifier parser handles the leading `r`.
 #[partial]
-def raw_string_after_r (input : String) : ParseResult ParseTerm :=
+def raw_string_after_r (input : Text) : ParseResult Text ParseTerm :=
     match take_while (fn c => String.beq c "#") input {
         success after_hashes hashes =>
             match tag "\"" after_hashes {
@@ -343,15 +345,15 @@ def raw_string_after_r (input : String) : ParseResult ParseTerm :=
 /// remainder being scanned. Steps by `utf8_char_width` so a multi-byte
 /// character in the body advances correctly instead of landing mid-codepoint.
 #[partial]
-def raw_string_body (n : I64) (orig : String) (input : String) : ParseResult ParseTerm :=
-    if is_empty input
+def raw_string_body (n : I64) (orig : Text) (input : Text) : ParseResult Text ParseTerm :=
+    if Input.at_end input
     then fail (ParseError.custom "unterminated raw string literal" input)
     else
-        let width : I64 := utf8_char_width input in
-        let ch : String := String.slice input 0 width in
+        let width : I64 := text_char_width input in
+        let ch : String := Input.input_text width input in
         if String.beq ch "\""
-        then raw_string_count_hashes n 0 orig input (String.drop width input)
-        else raw_string_body n orig (String.drop width input)
+        then raw_string_count_hashes n 0 orig input (Input.input_advance width input)
+        else raw_string_body n orig (Input.input_advance width input)
 
 /// A `"` was just found at `at_quote` (a suffix of `orig`). Count the trailing
 /// `#` characters, capping at `n`: as soon as `cnt` reaches `n` this is the
@@ -364,18 +366,18 @@ def raw_string_body (n : I64) (orig : String) (input : String) : ParseResult Par
 /// For `n = 0`, `cnt` starts at `0 == n` so the very first call returns the
 /// closer immediately — any `"` closes a zero-hash raw string.
 #[partial]
-def raw_string_count_hashes (n : I64) (cnt : I64) (orig : String) (at_quote : String) (input : String) : ParseResult ParseTerm :=
+def raw_string_count_hashes (n : I64) (cnt : I64) (orig : Text) (at_quote : Text) (input : Text) : ParseResult Text ParseTerm :=
     if I64.beq cnt n
     then
-        let consumed : I64 := String.length orig - String.length at_quote in
-        success input (pt_lit (ParseLiteral.str (String.slice orig 0 consumed)))
+        let consumed : I64 := Text.offset at_quote - Text.offset orig in
+        success input (pt_lit (ParseLiteral.str (Input.input_text consumed orig)))
     else
-        if is_empty input
+        if Input.at_end input
         then fail (ParseError.custom "unterminated raw string literal" input)
         else
-            let ch : String := String.slice input 0 1 in
+            let ch : String := Input.input_text 1 input in
             if String.beq ch "#"
-            then raw_string_count_hashes n (I64.add cnt 1) orig at_quote (String.drop 1 input)
+            then raw_string_count_hashes n (I64.add cnt 1) orig at_quote (Input.input_advance 1 input)
             else raw_string_body n orig input
 
 /// Parse a char literal: `'x'` or `'\n'` (single character, with escape
@@ -383,20 +385,20 @@ def raw_string_count_hashes (n : I64) (cnt : I64) (orig : String) (at_quote : St
 /// `Literal.char`.  `Char` is a stub type (AGENTS.md item 29) — this
 /// gives it a literal form for parsing/parity, not runtime operations.
 #[partial]
-def char_literal (input : String) : ParseResult ParseTerm :=
+def char_literal (input : Text) : ParseResult Text ParseTerm :=
     match tag "'" input {
         success rem _ =>
-            if is_empty rem
+            if Input.at_end rem
             then fail (ParseError.custom "unterminated char literal" rem)
             else
-                let width : I64 := utf8_char_width rem in
-                let ch : String := String.slice rem 0 width in
-                char_literal_after_char ch (String.drop width rem),
+                let width : I64 := text_char_width rem in
+                let ch : String := Input.input_text width rem in
+                char_literal_after_char ch (Input.input_advance width rem),
         fail e => fail e
     }
 
 #[partial]
-def char_literal_after_char (ch : String) (input : String) : ParseResult ParseTerm :=
+def char_literal_after_char (ch : String) (input : Text) : ParseResult Text ParseTerm :=
     if String.beq ch "\\"
     then char_literal_escape input
     else char_literal_close (tag "'" input) ch
@@ -408,13 +410,13 @@ def char_literal_after_char (ch : String) (input : String) : ParseResult ParseTe
 /// literal has no escaped-whitespace branch, so both compilers reject
 /// `'\<newline>'` and agreeing on that is the point.
 #[partial]
-def char_literal_escape (input : String) : ParseResult ParseTerm :=
-    if is_empty input
+def char_literal_escape (input : Text) : ParseResult Text ParseTerm :=
+    if Input.at_end input
     then fail (ParseError.custom "unterminated escape in char literal" input)
     else
-        let width : I64 := utf8_char_width input in
-        let esc : String := String.slice input 0 width in
-        let rest : String := String.drop width input in
+        let width : I64 := text_char_width input in
+        let esc : String := Input.input_text width input in
+        let rest : Text := Input.input_advance width input in
         if String.beq "u" esc
         then
             match unicode_escape rest {
@@ -434,7 +436,7 @@ def char_literal_escape (input : String) : ParseResult ParseTerm :=
 /// already-wired `string_to_list` is needed, and `IrLit.ir_char`
 /// (`lang/core_ir.mo`) takes the result as-is.
 #[partial]
-def char_literal_close (r : ParseResult String) (value : String) : ParseResult ParseTerm :=
+def char_literal_close (r : ParseResult Text String) (value : String) : ParseResult Text ParseTerm :=
     match r {
         success rem _ => success rem (pt_lit (ParseLiteral.char (Char.of_bytes (String.to_list value)))),
         fail e => fail e

@@ -22,7 +22,7 @@ use lib::types {
     id,
 }
 use lib::module {parse_all_decls}
-use parsec::core {fail, success}
+use parsec::core {fail, success, Text}
 use lib::scope {build_scope_from_decls, scope_find_cubical_prim}
 use std::list {}
 
@@ -61,7 +61,7 @@ def cubical_source : String :=
 /// fail rather than silently pass on a scope with nothing in it.
 def scope_of (source : String) : Scope :=
     let sd : ScopeData :=
-        match parse_all_decls source {
+        match parse_all_decls (Text.of_string source) {
             success _ decl_list => build_scope_from_decls synthetic_path decl_list,
             fail _ => build_scope_from_decls synthetic_path List.empty,
         } in
@@ -95,7 +95,7 @@ def test_cubical_decls_parse : Bool :=
     // All sixteen, not "at least one": a parser that stops after the
     // first body-less def (the reference host's does) still hands back
     // a successful non-empty parse.
-    match parse_all_decls cubical_source {
+    match parse_all_decls (Text.of_string cubical_source) {
         success _ decls => I64.beq (List.length decls) 16,
         fail _ => false,
     }

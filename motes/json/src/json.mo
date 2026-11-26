@@ -8,11 +8,12 @@ use std::map {Map, BTreeMap, BTreeMap.to_list, empty}
 use std::list {List.intercalate, Show}
 use init::string {}
 use init::number {}
-use parsec::core {ParseError, ParseResult, is_empty, parse_error_remaining}
+use parsec::core {ParseError, ParseResult, is_empty, parse_error_remaining, Text}
+use parsec::input {Input}
 use parsec::char_preds {is_space}
 use parsec::combinators {
     alt, alt_fold, delimited_by, many0, map_parse, opt, separated_by, tag,
-    take_while, take_while_byte, terminated_by, utf8_char_width,
+    take_while, take_while_byte, terminated_by, text_char_width, utf8_char_width,
 }
 use parsec::number {number, parse_i64}
 
@@ -190,57 +191,57 @@ pub def Json.ParseError.to_string (e : Json.ParseError) : String :=
 // ─── Parser: helpers ───
 
 /// EOF parser - succeeds if input is empty
-def Json.eof (input : String) : ParseResult Unit :=
-    if is_empty input
+def Json.eof (input : Text) : ParseResult Text Unit :=
+    if Input.at_end input
     then success input unit
     else fail (ParseError.custom "expected end of input" input)
 
 /// Optional whitespace
-def Json.ws (input : String) : ParseResult String :=
+def Json.ws (input : Text) : ParseResult Text String :=
     take_while is_space input
 
 /// Comma with optional whitespace on both sides
-def Json.comma (input : String) : ParseResult String :=
+def Json.comma (input : Text) : ParseResult Text String :=
     delimited_by Json.ws (tag ",") Json.ws input
 
 /// Colon with optional whitespace on both sides
-def Json.colon (input : String) : ParseResult String :=
+def Json.colon (input : Text) : ParseResult Text String :=
     delimited_by Json.ws (tag ":") Json.ws input
 
 // ─── Parser: null / bool ───
 
-def parse_null_result (r : ParseResult String) : ParseResult Json :=
+def parse_null_result (r : ParseResult Text String) : ParseResult Text Json :=
     match r {
         success rem _ => success rem null,
         fail e => fail e
     }
 
 /// Parse "null" value
-def Json.parse_null (input : String) : ParseResult Json :=
+def Json.parse_null (input : Text) : ParseResult Text Json :=
     parse_null_result (tag "null" input)
 
-def parse_true_result (r : ParseResult String) : ParseResult Json :=
+def parse_true_result (r : ParseResult Text String) : ParseResult Text Json :=
     match r {
         success rem _ => success rem (bool true),
         fail e => fail e
     }
 
 /// Parse "true"
-def Json.parse_true (input : String) : ParseResult Json :=
+def Json.parse_true (input : Text) : ParseResult Text Json :=
     parse_true_result (tag "true" input)
 
-def parse_false_result (r : ParseResult String) : ParseResult Json :=
+def parse_false_result (r : ParseResult Text String) : ParseResult Text Json :=
     match r {
         success rem _ => success rem (bool false),
         fail e => fail e
     }
 
 /// Parse "false"
-def Json.parse_false (input : String) : ParseResult Json :=
+def Json.parse_false (input : Text) : ParseResult Text Json :=
     parse_false_result (tag "false" input)
 
 /// Parse boolean values (true or false)
-def Json.parse_bool (input : String) : ParseResult Json :=
+def Json.parse_bool (input : Text) : ParseResult Text Json :=
     alt Json.parse_true Json.parse_false input
 
 // ─── Parser: number ───
@@ -361,7 +362,7 @@ def number_from_mantissa (neg : Bool) (mant : List U8) (expv : Option I64) : Opt
         },
     }
 
-def parse_number_token (r : ParseResult String) : ParseResult Json.Number :=
+def parse_number_token (r : ParseResult Text String) : ParseResult Text Json.Number :=
     match r {
         fail e => fail e,
         success rem tok => match number_value_of_token tok {
@@ -371,24 +372,24 @@ def parse_number_token (r : ParseResult String) : ParseResult Json.Number :=
     }
 
 /// Parse a JSON number literal (integer, fraction and exponent).
-def Json.parse_number (input : String) : ParseResult Json.Number :=
+def Json.parse_number (input : Text) : ParseResult Text Json.Number :=
     parse_number_token (take_while_byte is_number_byte input)
 
 /// Signed integer only (kept for callers that require one).
-def parse_integer_negative (r : ParseResult I64) : ParseResult I64 :=
+def parse_integer_negative (r : ParseResult Text I64) : ParseResult Text I64 :=
     match r {
         success rem n => success rem (I64.neg n),
         fail e => fail (ParseError.custom "expected digits after -" (parse_error_remaining e))
     }
 
 #[partial]
-def parse_integer_result (r : ParseResult String) (orig : String) : ParseResult I64 :=
+def parse_integer_result (r : ParseResult Text String) (orig : Text) : ParseResult Text I64 :=
     match r {
         success rem _ => parse_integer_negative (number rem),
         fail _ => number orig
     }
 
-def Json.parse_integer (input : String) : ParseResult I64 :=
+def Json.parse_integer (input : Text) : ParseResult Text I64 :=
     parse_integer_result (tag "-" input) input
 
 // ─── Parser: string ───
@@ -406,14 +407,14 @@ def Json.parse_integer (input : String) : ParseResult I64 :=
 /// That is not an edge case for this repository. The LSP parses whole source files as JSON
 /// string payloads, and this corpus's comments are full of em dashes and curly quotes, so a
 /// one-byte step here silently refused to open a file the user can see is fine.
-def Json.parse_string_char (input : String) : ParseResult String :=
-    if is_empty input
+def Json.parse_string_char (input : Text) : ParseResult Text String :=
+    if Input.at_end input
     then fail (ParseError.custom "expected string character" input)
     else
-        let width : I64 := utf8_char_width input in
-        let ch : String := String.slice input 0 width in
+        let width : I64 := text_char_width input in
+        let ch : String := Input.input_text width input in
         if is_json_string_char ch
-        then success (String.drop width input) ch
+        then success (Input.input_advance width input) ch
         else fail (ParseError.custom "invalid string character" input)
 
 #[partial]
@@ -423,9 +424,9 @@ def is_json_string_char (c : String) : Bool :=
     else true
 
 /// Take exactly 4 characters (used for \uXXXX escapes)
-def Json.take4 (input : String) : ParseResult String :=
-    if I64.gt (String.length input) 3
-    then success (String.drop 4 input) (String.slice input 0 4)
+def Json.take4 (input : Text) : ParseResult Text String :=
+    if I64.gt (Input.input_len input) 3
+    then success (Input.input_advance 4 input) (Input.input_text 4 input)
     else fail (ParseError.custom "expected 4 hex digits" input)
 
 /// One hex digit's value: a comparison chain, because there is no
@@ -486,7 +487,7 @@ def utf8_of_codepoint (cp : I64) : String :=
         byte_of (I64.add 128i64 (I64.sub (I64.div c 64i64) (I64.mul 64i64 (I64.div c 4096i64)))),
         byte_of (I64.add 128i64 (I64.sub c (I64.mul 64i64 (I64.div c 64i64))))]
 
-def parse_escape_u_result (r : ParseResult String) : ParseResult String :=
+def parse_escape_u_result (r : ParseResult Text String) : ParseResult Text String :=
     match r {
         success rem hex => match hex_value hex {
             Option.none => fail (ParseError.custom "invalid \\u escape" rem),
@@ -496,7 +497,7 @@ def parse_escape_u_result (r : ParseResult String) : ParseResult String :=
     }
 
 #[partial]
-def parse_escape_u_body (r : ParseResult String) (orig : String) : ParseResult String :=
+def parse_escape_u_body (r : ParseResult Text String) (orig : Text) : ParseResult Text String :=
     match r {
         success rem _ => parse_escape_u_result (Json.take4 rem),
         fail e => fail e
@@ -504,7 +505,7 @@ def parse_escape_u_body (r : ParseResult String) (orig : String) : ParseResult S
 
 /// Parse a \uXXXX escape into its UTF-8 bytes (so a control byte the
 /// serializer escaped with `\u00XX` round-trips back to that byte).
-def Json.parse_escape_u (input : String) : ParseResult String :=
+def Json.parse_escape_u (input : Text) : ParseResult Text String :=
     parse_escape_u_body (tag "\\u" input) input
 
 def match_escape (s : String) : String :=
@@ -518,13 +519,13 @@ def match_escape (s : String) : String :=
     else if String.beq "\\t" s then "\t"
     else s
 
-def parse_escape_result (r : ParseResult String) : ParseResult String :=
+def parse_escape_result (r : ParseResult Text String) : ParseResult Text String :=
     match r {
         success rem out => success rem (match_escape out),
         fail e => fail e
     }
 
-def parse_named_escape (input : String) : ParseResult String :=
+def parse_named_escape (input : Text) : ParseResult Text String :=
     parse_escape_result (alt_fold
         [tag "\\\"",
             tag "\\\\",
@@ -537,7 +538,7 @@ def parse_named_escape (input : String) : ParseResult String :=
         input)
 
 /// Parse an escape sequence (named escape or \uXXXX passthrough)
-def Json.parse_escape (input : String) : ParseResult String :=
+def Json.parse_escape (input : Text) : ParseResult Text String :=
     alt Json.parse_escape_u parse_named_escape input
 
 /// The character loop of every JSON string, and therefore the single hottest
@@ -555,77 +556,78 @@ def Json.parse_escape (input : String) : ParseResult String :=
 ///   * `String.concat_list` (not `concat_all`) joins the pieces in one
 ///     allocation; `concat_all` is a `String.concat` fold, so it recopies the
 ///     accumulated prefix at every step and is quadratic in the string.
-def Json.parse_string_content (input : String) : ParseResult (List String) :=
+def Json.parse_string_content (input : Text) : ParseResult Text (List String) :=
     many0 (alt Json.parse_escape Json.parse_string_char) input
 
-def parse_string_close (r : ParseResult String) (s : String) : ParseResult Json :=
+def parse_string_close (r : ParseResult Text String) (s : String) : ParseResult Text Json :=
     match r {
         success rem _ => success rem (str s),
         fail e => fail e
     }
 
 #[partial]
-def parse_string_content_result (r : ParseResult (List String)) : ParseResult Json :=
+def parse_string_content_result (r : ParseResult Text (List String)) : ParseResult Text Json :=
     match r {
         success rem chars => parse_string_close (tag "\"" rem) (String.concat_list chars),
         fail e => fail e
     }
 
 #[partial]
-def parse_string_open (r : ParseResult String) : ParseResult Json :=
+def parse_string_open (r : ParseResult Text String) : ParseResult Text Json :=
     match r {
         success rem _ => parse_string_content_result (Json.parse_string_content rem),
         fail e => fail e
     }
 
 /// Parse a JSON string
-def Json.parse_string (input : String) : ParseResult Json :=
+def Json.parse_string (input : Text) : ParseResult Text Json :=
     parse_string_open (tag "\"" input)
 
 // ─── Parser: array / object / value ───
 
-def parse_array_result (r : ParseResult (List Json)) : ParseResult Json :=
+def parse_array_result (r : ParseResult Text (List Json)) : ParseResult Text Json :=
     match r {
         success rem elems => success rem (array elems),
         fail e => fail e
     }
 
 #[partial]
-def Json.parse_array_body (input : String) : ParseResult (List Json) :=
+def Json.parse_array_body (input : Text) : ParseResult Text (List Json) :=
     delimited_by Json.ws (separated_by Json.comma Json.parse_value) Json.ws input
 
 /// Parse a JSON array
 #[partial]
-def Json.parse_array (input : String) : ParseResult Json :=
+def Json.parse_array (input : Text) : ParseResult Text Json :=
     parse_array_result (delimited_by (tag "[") Json.parse_array_body (tag "]") input)
 
 #[partial]
-def parse_object_member_value (r : ParseResult Json) (key : String) : ParseResult (Pair String Json) :=
+def parse_object_member_value (r : ParseResult Text Json) (key : String) : ParseResult Text (Pair String Json) :=
     match r {
         success rem val => success rem (Pair.pair key val),
         fail e => fail e
     }
 
 #[partial]
-def parse_object_member_colon_result (r : ParseResult String) (key : String) : ParseResult (Pair String Json) :=
+def parse_object_member_colon_result (r : ParseResult Text String) (key : String)
+    : ParseResult Text (Pair String Json) :=
     match r {
         success rem _ => parse_object_member_value (Json.parse_value rem) key,
         fail e => fail e
     }
 
 #[partial]
-def parse_object_member_colon (rem : String) (key : String) : ParseResult (Pair String Json) :=
+def parse_object_member_colon (rem : Text) (key : String) : ParseResult Text (Pair String Json) :=
     parse_object_member_colon_result (Json.colon rem) key
 
 #[partial]
-def parse_object_member_key_str (rem : String) (key_json : Json) : ParseResult (Pair String Json) :=
+def parse_object_member_key_str (rem : Text) (key_json : Json) : ParseResult Text (Pair String Json) :=
     match key_json {
         str key => parse_object_member_colon rem key,
         _ => fail (ParseError.custom "expected string key" rem)
     }
 
 #[partial]
-def parse_object_member_key (r : ParseResult Json) : ParseResult (Pair String Json) :=
+def parse_object_member_key (r : ParseResult Text Json) : ParseResult Text (Pair String Json) :=
     match r {
         success rem key_json => parse_object_member_key_str rem key_json,
         fail e => fail e
@@ -633,7 +635,7 @@ def parse_object_member_key (r : ParseResult Json) : ParseResult (Pair String Js
 
 /// Parse an object member ("key" : value)
 #[partial]
-def Json.parse_object_member (input : String) : ParseResult (Pair String Json) :=
+def Json.parse_object_member (input : Text) : ParseResult Text (Pair String Json) :=
     parse_object_member_key (Json.parse_string input)
 
 def pairs_to_map_insert (p : Pair String Json) (acc : BTreeMap String Json) : BTreeMap String Json :=
@@ -647,33 +649,33 @@ def pairs_to_map (pairs : List (Pair String Json)) : BTreeMap String Json :=
         List.cons p rest => pairs_to_map_insert p (pairs_to_map rest)
     }
 
-def parse_object_result (r : ParseResult (List (Pair String Json))) : ParseResult Json :=
+def parse_object_result (r : ParseResult Text (List (Pair String Json))) : ParseResult Text Json :=
     match r {
         success rem members => success rem (object (pairs_to_map members)),
         fail e => fail e
     }
 
 #[partial]
-def Json.parse_object_body (input : String) : ParseResult (List (Pair String Json)) :=
+def Json.parse_object_body (input : Text) : ParseResult Text (List (Pair String Json)) :=
     delimited_by Json.ws (separated_by Json.comma Json.parse_object_member) Json.ws input
 
 /// Parse a JSON object
 #[partial]
-def Json.parse_object (input : String) : ParseResult Json :=
+def Json.parse_object (input : Text) : ParseResult Text Json :=
     parse_object_result (delimited_by (tag "{") Json.parse_object_body (tag "}") input)
 
-def parse_number_value_result (r : ParseResult Json.Number) : ParseResult Json :=
+def parse_number_value_result (r : ParseResult Text Json.Number) : ParseResult Text Json :=
     match r {
         success rem n => success rem (num n),
         fail e => fail e
     }
 
-def Json.parse_number_value (input : String) : ParseResult Json :=
+def Json.parse_number_value (input : Text) : ParseResult Text Json :=
     parse_number_value_result (Json.parse_number input)
 
 /// Parse any JSON value
 #[partial]
-def Json.parse_value (input : String) : ParseResult Json :=
+def Json.parse_value (input : Text) : ParseResult Text Json :=
     alt_fold
         [Json.parse_null,
             Json.parse_bool,
@@ -687,15 +689,15 @@ def Json.parse_value (input : String) : ParseResult Json :=
 
 /// Parse complete JSON document (whitespace-tolerant around the value)
 #[partial]
-def Json.json (input : String) : ParseResult Json :=
+def Json.json (input : Text) : ParseResult Text Json :=
     terminated_by (delimited_by Json.ws Json.parse_value Json.ws) Json.eof input
 
 /// Main parse function
 #[partial]
 pub def Json.parse (s : String) : Result Json.ParseError Json :=
-    match Json.json s {
+    match Json.json (Text.of_string s) {
         success rem val =>
-            if is_empty rem
+            if Input.at_end rem
             then ok val
             else err (Json.ParseError.generic "unexpected trailing input"),
         fail e => err (Json.from_parse_error e)

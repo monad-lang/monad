@@ -26,7 +26,7 @@ use llvm::target {TargetSpec, TargetPlan}
 use runtime {}
 use codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug}
 use codegen::decls {collect_all_decls_from_modules, export_names}
-use lang::module {BatchCheckResult, CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, FileCheckResult, LoadedModules, ModuleInfo, ModuleInfoCache, base_dir_path, bench_step, check_file_cached, check_files_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, ownership_refusal_of_loaded, resolve_runtime_src, try_parse_decls, try_parse_decls_strict}
+use lang::module {BatchCheckResult, CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, FileCheckResult, LoadedModules, ModuleInfo, ModuleInfoCache, base_dir_path, bench_step, check_file_cached, check_files_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, ownership_refusal_of_loaded, resolve_runtime_src, try_parse_decls, try_parse_decls_str, try_parse_decls_strict}
 use lang::mote {
     Mote.dir_above, Mote.discover, Mote.discover_config_target_dir, Mote.target_roots,
     Mote.native_test_roots, Mote.web_only_bin_file,
@@ -1628,7 +1628,7 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
                 match source_read {
                     Option.none => do { return 1 },
                     Option.some source =>
-                    match try_parse_decls source {
+                    match try_parse_decls_str source {
                         Option.some decl_list => do {
                             let source_path : Option String := if debug then Option.some file_path else Option.none;
                             compile_parsed_decls { decl_list := decl_list,

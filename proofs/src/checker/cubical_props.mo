@@ -24,7 +24,7 @@
 // pinned from the scope side in `lang/src/tests/cubical_bind_tests.mo`;
 // if the declaration list ever changes, both copies change with it.
 
-use lang::module {try_parse_decls}
+use lang::module {try_parse_decls_str}
 use lang::scope {build_scope_from_decls}
 use lang::typecheck::cubical {peels_to_bare_interval}
 use lang::typecheck::infer {empty_local_types, empty_locals, equiv_type, type_check}
@@ -88,7 +88,7 @@ def checker_decls_source : String :=
 /// fail rather than silently pass against a scope with nothing bound.
 def cubical_scope : Scope :=
     let sd : ScopeData :=
-        match try_parse_decls checker_decls_source {
+        match try_parse_decls_str checker_decls_source {
             Option.some decl_list => build_scope_from_decls checker_synthetic_path decl_list,
             Option.none => build_scope_from_decls checker_synthetic_path List.empty,
         } in
@@ -112,7 +112,7 @@ def unmarked_scope : Scope :=
                     (String.concat "def imeet (i : I) (j : I) : I\n"
                         "def ijoin (i : I) (j : I) : I")))) in
     let sd : ScopeData :=
-        match try_parse_decls source {
+        match try_parse_decls_str source {
             Option.some decl_list => build_scope_from_decls checker_synthetic_path decl_list,
             Option.none => build_scope_from_decls checker_synthetic_path List.empty,
         } in

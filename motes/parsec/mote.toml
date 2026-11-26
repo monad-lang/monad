@@ -1,5 +1,11 @@
-# A generic parser-combinator library: `ParseResult`/`ParseError`, the
-# combinators over them, character-class predicates, and a numeric scanner.
+# A parser-combinator library generic over its INPUT: `ParseResult S O`
+# threads a cursor `S` (satisfying the `Input` class) plus its output, and the
+# two cursors in the tree are `Text` (a `String` suffix carrying its absolute
+# byte offset) and `Bytes` (a window over a `Shared (Buf U8)`, for binary).
+# Alongside it: `ParseError` (offset-based), the structural combinators (generic
+# over the cursor), the text primitives, character-class predicates, and a
+# numeric scanner. `Parser S A` is the do-notation/instances layer
+# (`Functor`/`Applicative`/`Monad`/`Alternative`/`MonadState`).
 #
 # Extracted from `lang/src/parser/` so that `toml` and `json` -- and anything
 # else that needs to parse text -- can do so without depending on the Monad

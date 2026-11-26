@@ -3,7 +3,7 @@ use lang::types {
     ScopeData, Term, id,
 }
 use lib::module {elaborate_module_decls, locals_with_def_typevars, parse_all_decls}
-use parsec::core {fail, success}
+use parsec::core {fail, success, Text}
 use lib::scope {build_scope_from_decls}
 use lib::typecheck::infer {empty_local_types, empty_locals, type_check}
 
@@ -107,7 +107,7 @@ def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool :=
 /// `init/prelude.mo`, which is exactly the real module loading this
 /// bare, single-file harness doesn't do.
 def typecheck_source (source : String) : Bool :=
-    match parse_all_decls source {
+    match parse_all_decls (Text.of_string source) {
         success _ decl_list =>
             let path := ModulePath.mk (List.cons (Identifier.id "synthetic") List.empty) in
             // Scope FIRST, from the raw (pre-elaboration) decls -- same
