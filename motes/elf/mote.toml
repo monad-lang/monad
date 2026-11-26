@@ -5,11 +5,12 @@
 # binary is the thin I/O shell that reads a file into a `Buf U8`
 # (`IO.read_file_buf`) and prints what the parser found.
 #
-# The binary and the tests are gated on the `buf` feature: they call
-# `Buf.of_list` / `Buf.of_bytebuf` / `IO.read_file_buf`, three natives that
-# are wired in the tree but not yet in a published nightly
-# (`bootstrap/next-features.txt`). The LIBRARY has no native dependency, so
-# `monad check motes/elf` is clean with the feature off.
+# The binary and the tests need the `buf` feature: they call `Buf.of_list` /
+# `Buf.of_bytebuf` / `IO.read_file_buf` (see `std/mote.toml`). Off by
+# default, matching `std/buf`: the two must be enabled together, and until a
+# nightly carries the natives that means `MONAD_FEATURES=std/buf,elf/buf`
+# with a compiler built from this tree. The LIBRARY has no native
+# dependency, so it also compiles with the feature off.
 #
 # `parsec` is a path dependency through the workspace, like `json`'s.
 [mote]
@@ -35,3 +36,7 @@ workspace = true
 
 [dependencies.clap]
 workspace = true
+
+[features]
+default = []
+buf = []

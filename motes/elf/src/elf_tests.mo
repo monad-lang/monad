@@ -59,21 +59,24 @@ def parsed : IO (Result ParseError Elf) := do {
 #[test]
 def test_header_fields : IO Bool := do {
     let r <- parsed;
-    match r {
-        Result.err _ => return false,
-        Result.ok elf =>
-            let h : ElfHeader := elf_header elf in
-            return (I64.beq h.cls 2 && class_known h.cls
-                && endian_known 1
-                && I64.beq h.file_type 2
-                && I64.beq h.machine 62
-                && I64.beq h.entry 0x401000
-                && I64.beq h.phoff 64
-                && I64.beq h.phnum 1
-                && I64.beq h.ehsize 64
-                && I64.beq h.phentsize 56)
-    }
+    return (match r {
+        Result.err _ => false,
+        Result.ok elf => header_fields_ok elf
+    })
 }
+
+#[cfg {feature := "buf"}]
+def header_fields_ok (elf : Elf) : Bool :=
+    let h : ElfHeader := elf_header elf in
+    I64.beq h.cls 2 && class_known h.cls
+        && endian_known 1
+        && I64.beq h.file_type 2
+        && I64.beq h.machine 62
+        && I64.beq h.entry 0x401000
+        && I64.beq h.phoff 64
+        && I64.beq h.phnum 1
+        && I64.beq h.ehsize 64
+        && I64.beq h.phentsize 56
 
 /// `Elf` is affine, so its header comes out through a field pattern (one
 /// use of the record, one binder) rather than a projection.
@@ -87,10 +90,10 @@ def elf_header (elf : Elf) : ElfHeader :=
 #[test]
 def test_program_header_fields : IO Bool := do {
     let r <- parsed;
-    match r {
-        Result.err _ => return false,
-        Result.ok elf => return (first_ph_is_load elf)
-    }
+    return (match r {
+        Result.err _ => false,
+        Result.ok elf => first_ph_is_load elf
+    })
 }
 
 #[cfg {feature := "buf"}]
@@ -116,10 +119,10 @@ def ph_matches (phs : List ProgramHeader) : Bool :=
 def test_truncated_file_fails : IO Bool := do {
     let buf <- Buf.of_list [0x7Fu8, 0x45u8, 0x4Cu8, 0x46u8];
     let bytes : Bytes := Bytes.of_buf (Shared.of buf);
-    match parse bytes {
-        Result.err _ => return true,
-        Result.ok _ => return false
-    }
+    return (match parse bytes {
+        Result.err _ => true,
+        Result.ok _ => false
+    })
 }
 
 /// A non-ELF file is rejected at offset 0.
@@ -128,8 +131,8 @@ def test_truncated_file_fails : IO Bool := do {
 def test_bad_magic_fails : IO Bool := do {
     let buf <- Buf.of_list [1u8, 2u8, 3u8, 4u8];
     let bytes : Bytes := Bytes.of_buf (Shared.of buf);
-    match parse bytes {
-        Result.err e => return (I64.beq (ParseError.error_offset e) 0),
-        Result.ok _ => return false
-    }
+    return (match parse bytes {
+        Result.err e => I64.beq (ParseError.error_offset e) 0,
+        Result.ok _ => false
+    })
 }

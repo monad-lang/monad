@@ -14,3 +14,15 @@ workspace = true
 
 [dependencies.sys]
 workspace = true
+
+# The byte-view / whole-file-buffer natives (`Buf.of_list`, `Buf.of_bytebuf`,
+# `IO.read_file_buf`) behind parsec's binary input path. NOT default yet: a
+# published nightly cannot codegen a call to them, and the Rust host's
+# directory loader panics on `std.buf` when the feature is on by manifest
+# default (it resolves the import but not the module). Enable with
+# `MONAD_FEATURES=std/buf` against a compiler built from this tree; make it
+# default (and delete `bootstrap/next-features.txt`'s entry) once a nightly
+# carries the natives.
+[features]
+default = []
+buf = []
