@@ -8,3 +8,10 @@
 # One feature per line as `mote/feature` (`std/sys`), `#` starts a comment.
 # EMPTY when nothing is pending -- rung 2 is then a plain fixpoint turn.
 # CI runs `bootstrap-next` only while this file has at least one entry.
+# parsec's binary-input path: `Buf.of_list` / `Buf.of_bytebuf` /
+# `IO.read_file_buf` are wired in this tree (both backends) but not in a
+# published nightly. The library and grammar are ungated; the tests and
+# `elfinfo` are behind this feature, and `bootstrap-next` rung 2 exercises
+# them.
+std/buf
+elf/buf

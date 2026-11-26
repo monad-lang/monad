@@ -555,6 +555,8 @@ pub fn exec_native(
     "buf_new_f32" => buf_new(args, natives, BufElem::F32),
     "buf_new_i32" => buf_new(args, natives, BufElem::I32),
     "buf_new_u8" => buf_new(args, natives, BufElem::U8),
+    "buf_of_list" => buf_of_list(args, natives),
+    "buf_of_bytebuf" => buf_of_bytebuf(args, natives),
     "buf_len" => buf_len(args),
     "buf_elem_kind" => buf_elem_kind(args),
     "buf_get_i64" => buf_get(args, BufElem::I64),
@@ -2019,6 +2021,42 @@ fn buf_new(args: &[Value], natives: &NativeTable, kind: BufElem) -> Result<Value
     bytes: vec![0u8; len],
   });
   raw_io_wrap(natives, handle_value(id))
+}
+
+/// `buf_of_list : List U8 -> RawIO (Buf U8)` -- `bytebuf_of_list`'s walk,
+/// registered as a `BufObj` of the u8 element kind.
+fn buf_of_list(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError(
+      "buf_of_list needs 1 arg".into(),
+    ));
+  }
+  let bytes = byte_list_bytes(&args[0], natives)?;
+  let id = crate::runtime::global::register(InterpretedBuf {
+    kind: BufElem::U8,
+    bytes,
+  });
+  raw_io_wrap(natives, handle_value(id))
+}
+
+/// `buf_of_bytebuf : ByteBuf -> RawIO (Buf U8)` -- interpreted the two
+/// surfaces hold different values (a `Vec<u8>` and an `InterpretedBuf`), so
+/// this COPIES; compiled they are the same `BufObj` and it is a cast.
+fn buf_of_bytebuf(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError(
+      "buf_of_bytebuf needs 1 arg".into(),
+    ));
+  }
+  let id = extract_handle_id(&args[0])?;
+  let bytes = crate::runtime::global::with::<Vec<u8>, _>(id, |v| v.clone()).ok_or_else(|| {
+    CoreEvalError::NativeArgError(format!("buf_of_bytebuf: no byte buffer for handle {id}"))
+  })?;
+  let new_id = crate::runtime::global::register(InterpretedBuf {
+    kind: BufElem::U8,
+    bytes,
+  });
+  raw_io_wrap(natives, handle_value(new_id))
 }
 
 /// `buf_len : Buf E -> I64` -- the ELEMENT count (not bytes).

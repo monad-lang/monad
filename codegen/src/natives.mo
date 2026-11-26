@@ -765,6 +765,8 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "buf_new_f32" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_new_f32")
             else if String.beq target "buf_new_i32" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_new_i32")
             else if String.beq target "buf_new_u8" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_new_u8")
+            else if String.beq target "buf_of_list" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_of_list")
+            else if String.beq target "buf_of_bytebuf" then Option.some (NativeWrapKind.raw_io_passthrough "monad_buf_of_bytebuf")
             else if String.beq target "buf_len" then Option.some (NativeWrapKind.passthrough "monad_buf_len")
             else if String.beq target "buf_elem_kind" then Option.some (NativeWrapKind.passthrough "monad_buf_elem_kind")
             else if String.beq target "buf_get_i64" then Option.some (NativeWrapKind.passthrough "monad_buf_get_i64")
@@ -1083,6 +1085,10 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     let d170 := mk_decl "monad_buf_new_f32" ["i64"] "i64" in
     let d171 := mk_decl "monad_buf_new_i32" ["i64"] "i64" in
     let d172 := mk_decl "monad_buf_new_u8" ["i64"] "i64" in
+    // `Buf.of_list` / `Buf.of_bytebuf` (buf, or list) -> the same word: a
+    // `ByteBuf` and a `Buf U8` share one heap kind.
+    let d189 := mk_decl "monad_buf_of_list" ["i64"] "i64" in
+    let d190 := mk_decl "monad_buf_of_bytebuf" ["i64"] "i64" in
     // `buf_len`, `buf_elem_kind`, `buf_data_ptr` (buf) -> i64.
     let d173 := mk_decl "monad_buf_len" ["i64"] "i64" in
     let d174 := mk_decl "monad_buf_elem_kind" ["i64"] "i64" in
@@ -1273,7 +1279,7 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
         d142, d143, d144, d145, d146, d147, d148, d149,
         d168, d169, d170, d171, d172, d173, d174, d175,
         d176, d177, d178, d179, d180, d181, d182, d183,
-        d184, d185, d186, d187, d188] ++ (if ownership_on then [d166, d167] else List.empty)
+        d184, d185, d186, d187, d188, d189, d190] ++ (if ownership_on then [d166, d167] else List.empty)
 
 /// The native target's declaration list -- the historical name, kept for
 /// every existing caller and test.

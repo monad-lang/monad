@@ -11,6 +11,8 @@
 // fine self-hosted but fails "module not found: path" under `cargo
 // run`. Qualified works identically on both sides.
 use lib::path {Path}
+#[cfg {feature := "buf"}]
+use std::buf {Buf}
 use sys::sys {Stat, Stat.is_dir, Stat.size, Sys.getenv, Sys.list_dir, Sys.stat}
 use sys::errno {SysError}
 use lib::bytebuf {
@@ -97,6 +99,72 @@ def IO.written (r : Result StreamError I64) : Result StreamError Unit :=
 pub def IO.read_file (path : Path) : IO (Result StreamError String) := do {
     let opened <- FdStream.open_file path FdStream.read_mode;
     IO.read_opened opened
+}
+
+/// The whole file at `path` as a flat `Buf U8` -- what a binary parser reads
+/// (`parsec::input.Bytes`). Chunks are gathered into one buffer exactly as
+/// `IO.read_file` does, then converted once; a single-chunk file converts
+/// without the gather.
+///
+/// Gated on the `buf` feature: `Buf.of_bytebuf` is a new native, so the
+/// compiler-source surface cannot call it until a nightly carries it
+/// (`bootstrap/next-features.txt`).
+#[cfg {feature := "buf"}]
+pub def IO.read_file_buf (path : Path) : IO (Result StreamError (Buf U8)) := do {
+    let opened <- FdStream.open_file path FdStream.read_mode;
+    IO.read_buf_opened opened
+}
+
+#[cfg {feature := "buf"}]
+def IO.read_buf_opened (opened : Result StreamError FdStream) : IO (Result StreamError (Buf U8)) :=
+    match opened {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok s => IO.read_buf_all (Shared.of s)
+    }
+
+#[cfg {feature := "buf"}]
+def IO.read_buf_all (s : Shared FdStream) : IO (Result StreamError (Buf U8)) := do {
+    let chunks <- IO.read_chunks s List.empty;
+    let _ <- Stream.close (Shared.get s);
+    IO.read_buf_joined chunks
+}
+
+#[cfg {feature := "buf"}]
+def IO.read_buf_joined (chunks : Result StreamError (List ByteBuf)) : IO (Result StreamError (Buf U8)) :=
+    match chunks {
+        Result.err e => IO.pure (Result.err e),
+        Result.ok bufs => IO.read_buf_chunks bufs
+    }
+
+#[cfg {feature := "buf"}]
+def IO.read_buf_chunks (bufs : List ByteBuf) : IO (Result StreamError (Buf U8)) :=
+    match bufs {
+        List.empty => IO.read_buf_empty,
+        List.cons one rest =>
+            match rest {
+                List.empty => IO.read_buf_one one,
+                List.cons _ _ => IO.read_buf_gathered (List.cons one rest)
+            }
+    }
+
+#[cfg {feature := "buf"}]
+def IO.read_buf_empty : IO (Result StreamError (Buf U8)) := do {
+    let b <- Buf.of_list List.empty;
+    return (Result.ok b)
+}
+
+#[cfg {feature := "buf"}]
+def IO.read_buf_one (b : ByteBuf) : IO (Result StreamError (Buf U8)) := do {
+    let flat <- Buf.of_bytebuf b;
+    return (Result.ok flat)
+}
+
+#[cfg {feature := "buf"}]
+def IO.read_buf_gathered (bufs : List ByteBuf) : IO (Result StreamError (Buf U8)) := do {
+    let dst <- ByteBuf.alloc (IO.total_length (Shared.of bufs));
+    let dst2 <- IO.copy_chunks dst 0 bufs;
+    let flat <- Buf.of_bytebuf dst2;
+    return (Result.ok flat)
 }
 
 /// The whole file at `path` as raw bytes; a missing file is `not_found`.

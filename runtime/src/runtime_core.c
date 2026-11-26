@@ -1889,6 +1889,16 @@ static rt_word monad_buf_new_f32_impl(int64_t n) { return buf_alloc_of(n, MONAD_
 static rt_word monad_buf_new_i32_impl(int64_t n) { return buf_alloc_of(n, MONAD_ELEM_I32); }
 static rt_word monad_buf_new_u8_impl(int64_t n)  { return buf_alloc_of(n, MONAD_ELEM_U8); }
 
+/* `Buf.of_list` -- `bytebuf_of_list`'s construction. `ByteBuf` and `Buf U8`
+   are the SAME `BufObj` (one heap kind, two Monad surfaces), so the object
+   the byte buffer constructor builds already IS a `Buf U8`. */
+static rt_word monad_buf_of_list_impl(rt_word list) { return monad_bytebuf_of_list_impl(list); }
+
+/* `Buf.of_bytebuf` -- a kind-preserving CAST, not a copy: one heap kind,
+   two surfaces. The `ByteBuf` handle is affine (consumed by the call), so
+   no second owner can observe the aliasing. */
+static rt_word monad_buf_of_bytebuf_impl(rt_word b) { return b; }
+
 /* Does `buf` hold `idx` as an element of `want_kind`? The single place
    the three checks live, so no accessor can forget one. A buffer of the
    WRONG element kind is rejected rather than reinterpreted: reading an
@@ -2042,6 +2052,8 @@ rt_word monad_buf_new_f64(int64_t n) { return monad_buf_new_f64_impl(n); }
 rt_word monad_buf_new_f32(int64_t n) { return monad_buf_new_f32_impl(n); }
 rt_word monad_buf_new_i32(int64_t n) { return monad_buf_new_i32_impl(n); }
 rt_word monad_buf_new_u8(int64_t n)  { return monad_buf_new_u8_impl(n); }
+rt_word monad_buf_of_list(rt_word list) { return monad_buf_of_list_impl(list); }
+rt_word monad_buf_of_bytebuf(rt_word b) { return monad_buf_of_bytebuf_impl(b); }
 int64_t monad_buf_len(int64_t b) { return monad_buf_len_impl(b); }
 int64_t monad_buf_elem_kind(int64_t b) { return monad_buf_elem_kind_impl(b); }
 int64_t monad_buf_get_i64(int64_t b, int64_t i) { return monad_buf_get_i64_impl(b, i); }

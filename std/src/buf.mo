@@ -52,6 +52,8 @@
 /// Values are opaque like `ByteBuf` and `FdStream`: never pattern-match,
 /// compare or print one.
 
+use std::bytebuf {ByteBuf}
+
 /// A flat buffer of `len` elements, each of the kind its constructor
 /// chose. Built only by this module's `new_*` natives: the witness is
 /// unreferenceable (`#[opaque]`), so there is no way to forge one.
@@ -81,6 +83,27 @@ priv def buf_new_i32_raw (n : I64) : RawIO (Buf I32)
 
 #[native "buf_new_u8"]
 priv def buf_new_u8_raw (n : I64) : RawIO (Buf U8)
+
+#[cfg {feature := "buf"}]
+#[native "buf_of_list"]
+priv def buf_of_list_raw (xs : List U8) : RawIO (Buf U8)
+
+/// Copy a `List U8` into a fresh buffer -- the ergonomic constructor, and what
+/// the parser tests build binary input with (`ByteBuf` cannot be filled from
+/// Monad: `Buf.set_u8` consumes the buffer, so a loop can never write twice).
+#[cfg {feature := "buf"}]
+pub def Buf.of_list (xs : List U8) : IO (Buf U8) := IO.mk (buf_of_list_raw xs)
+
+#[cfg {feature := "buf"}]
+#[native "buf_of_bytebuf"]
+priv def buf_of_bytebuf_raw (b : ByteBuf) : RawIO (Buf U8)
+
+/// The `ByteBuf` an I/O read produced, as the `Buf U8` a binary parser reads
+/// (`parsec::input.Bytes`). Compiled it is a kind-preserving cast -- one heap
+/// kind, two surfaces -- and the `ByteBuf` handle is affine (consumed), so no
+/// second owner can observe the aliasing; interpreted it copies.
+#[cfg {feature := "buf"}]
+pub def Buf.of_bytebuf (b : ByteBuf) : IO (Buf U8) := IO.mk (buf_of_bytebuf_raw b)
 
 /// `n` zeroed `I64` elements.
 pub def Buf.new_i64 (n : I64) : IO (Buf I64) := IO.mk (buf_new_i64_raw n)
