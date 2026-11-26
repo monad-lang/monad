@@ -1,0 +1,37 @@
+# ELF parsing -- the first real consumer of `parsec`'s BINARY input.
+#
+# The library (`src/elf.mo`) reads a `Bytes` cursor (`parsec::input`), so it
+# is pure and needs nothing from `std` but the buffer TYPE; the `elfinfo`
+# binary is the thin I/O shell that reads a file into a `Buf U8`
+# (`IO.read_file_buf`) and prints what the parser found.
+#
+# The binary and the tests are gated on the `buf` feature: they call
+# `Buf.of_list` / `Buf.of_bytebuf` / `IO.read_file_buf`, three natives that
+# are wired in the tree but not yet in a published nightly
+# (`bootstrap/next-features.txt`). The LIBRARY has no native dependency, so
+# `monad check motes/elf` is clean with the feature off.
+#
+# `parsec` is a path dependency through the workspace, like `json`'s.
+[mote]
+name = "elf"
+version = "0.1.0"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"
+
+[[bin]]
+name = "elfinfo"
+path = "src/main.mo"
+
+[dependencies.init]
+workspace = true
+
+[dependencies.std]
+workspace = true
+
+[dependencies.parsec]
+workspace = true
+
+[dependencies.clap]
+workspace = true
