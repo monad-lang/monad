@@ -21,6 +21,7 @@ use lang::module {
     rewrite_lib_aliases_of, show_parse_error, try_parse_decls_strict_diag,
 }
 use lang::mote {Mote.affine_mode_of_path}
+use parsec::core {Text}
 use std::list {List.any}
 use lib::run {
     EvalFailure, EvalOptions, EvalStage, EvalTarget,
@@ -107,7 +108,7 @@ def classify_code (s : EvalSession) (source : String) (file_path : String)
     (decl_count : I64) (next_expr : I64) (text : String) : Pair EvalSession EvalInput :=
     let candidate : String := append_line source text
     in
-    match try_parse_decls_strict_diag candidate {
+    match try_parse_decls_strict_diag (Text.of_string candidate) {
         Result.ok decls =>
             let count : I64 := List.length decls
             in
@@ -131,7 +132,7 @@ def classify_expression (s : EvalSession) (source : String) (file_path : String)
     in
     let candidate : String := append_line source (expr_line name text)
     in
-    match try_parse_decls_strict_diag candidate {
+    match try_parse_decls_strict_diag (Text.of_string candidate) {
         Result.ok decls =>
             let s2 : EvalSession := { s with next_expr := I64.add next_expr 1 }
             in
@@ -160,7 +161,7 @@ def classify_type (s : EvalSession) (source : String) (file_path : String)
         in
         let candidate : String := append_line source (expr_line name expr_text)
         in
-        match try_parse_decls_strict_diag candidate {
+        match try_parse_decls_strict_diag (Text.of_string candidate) {
             Result.ok decls =>
                 let s2 : EvalSession := { s with next_expr := I64.add next_expr 1 }
                 in

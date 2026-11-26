@@ -81,6 +81,7 @@ use lang::scope {
 use std::list {List.intercalate}
 use std::log {fail_line}
 use std::stream {StreamError, StreamError.is_not_found}
+use parsec::core {Text}
 
 // ─── Discovery ──────────────────────────────────────────────────────
 
@@ -607,7 +608,7 @@ pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) (result_path 
         let prefix_ : String := display_prefix_of target_mi.path;
         let specs : List TestSpec := classify_test_defs prefix_ test_defs;
         let driver_source := synthesize_test_driver_source specs (Path.to_string target_mi.file_path) result_path;
-        match try_parse_decls driver_source {
+        match try_parse_decls (Text.of_string driver_source) {
             Option.some driver_decls =>
                 compile_test_driver_with loaded driver_decls (List.length specs) triple,
             Option.none => do {

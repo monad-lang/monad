@@ -15,6 +15,7 @@ use lib::emit {
 use lib::symbols {
     bare_npath, module_path_to_str, name_path_to_str, symbol_identifier,
 }
+use parsec::core {Text}
 use parsec::number {parse_i64}
 use lib::validate {
     report_elab_stats, validate_no_colliding_def_symbols,
@@ -197,7 +198,7 @@ def test_rename_user_main_keeps_decl_count : Bool :=
 /// unparseable source turns that into an unrelated internal error.
 #[test]
 def test_synthesize_test_driver_source_no_tests_still_parses : Bool :=
-    match try_parse_decls (synthesize_test_driver_source List.empty "m.mo" test_result_path) {
+    match try_parse_decls (Text.of_string (synthesize_test_driver_source List.empty "m.mo" test_result_path)) {
         Option.some decl_list => decl_list_has_exactly_one_main decl_list,
         Option.none => false,
     }
@@ -211,7 +212,7 @@ def test_synthesize_test_driver_source_parses_and_names_main : Bool :=
     // and the `__pad2`/`__fmt_dur` helpers the driver source also declares).
     let specs : List TestSpec := List.cons (bool_spec "test_a") (List.cons (bool_spec "test_b") List.empty) in
     let source : String := synthesize_test_driver_source specs "m.mo" test_result_path in
-    match try_parse_decls source {
+    match try_parse_decls (Text.of_string source) {
         Option.some decl_list => decl_list_has_exactly_one_main decl_list,
         Option.none => false,
     }
@@ -222,7 +223,7 @@ def test_synthesize_test_driver_source_parses_and_names_main : Bool :=
 #[test]
 def test_synthesize_test_driver_source_mixed_shapes_parse : Bool :=
     let specs : List TestSpec := List.cons (bool_spec "t_pure") (List.cons (io_spec "t_io") List.empty) in
-    match try_parse_decls (synthesize_test_driver_source specs "m.mo" test_result_path) {
+    match try_parse_decls (Text.of_string (synthesize_test_driver_source specs "m.mo" test_result_path)) {
         Option.some decl_list => decl_list_has_exactly_one_main decl_list,
         Option.none => false,
     }
@@ -438,7 +439,7 @@ def test_driver_source_result_test_matches_the_constructor : Bool :=
     // The constructor match must survive the REAL parser too: a
     // `Result` driver whose source fails to parse is reported as a
     // mystery internal error, not as a run of tests.
-    && match try_parse_decls src {
+    && match try_parse_decls (Text.of_string src) {
         Option.some decl_list => decl_list_has_exactly_one_main decl_list,
         Option.none => false,
     }

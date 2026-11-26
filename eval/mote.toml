@@ -23,6 +23,11 @@ workspace = true
 [dependencies.lang]
 workspace = true
 
+# `session.mo` parses REPL input through `lang::module`'s String-facing
+# entry points, which wrap a `parsec` `Text` cursor.
+[dependencies.parsec]
+workspace = true
+
 # The reachability and validation stages shared with the build pipeline.
 [dependencies.codegen]
 workspace = true
