@@ -37,11 +37,11 @@
 /// old dotted-path copy predates the qualified-names split, when
 /// name paths and module paths shared one rendering and one type.
 use lang::types {
-    Attribute, Binder, Class, ClassDef, Con, DebugName, Decl, Def, DoStmt, Identifier,
+    Attribute, Binder, Class, ClassDef, DebugName, Decl, Def, DoStmt, Identifier,
     InductConstructor, Inductive, Instance, Literal, MatchCase, ModulePath,
-    NamePath, NameRef, Native, Param, ParseClass, ParseClassDef, ParseCon,
+    NamePath, NameRef, Param, ParseClass, ParseClassDef,
     ParseDecl, ParseDeclKind, ParseDef, ParseInductConstructor, ParseInductive,
-    ParseInstance, ParseLiteral, ParseMatchCase, ParseNative, ParseParam,
+    ParseInstance, ParseLiteral, ParseMatchCase, ParseParam,
     ParseStruct, ParseStructField, ParseStructLitField, ParseTerm, ParseTermKind,
     QualifiedName, Struct, StructField, StructLitField, Term, binder_anon, binder_binder,
     binder_named,
@@ -472,8 +472,6 @@ def collect_kind_rems (k : ParseTermKind) (acc : List I64) : List I64 := match k
     // A hint marker has no children and no position of its own -- it is
     // metadata for the enclosing application, not an instruction.
     ParseTermKind.dict_hint _ => acc,
-    ParseTermKind.con _ => acc,
-    ParseTermKind.ntv _ => acc,
     // A level carries no `rem`: it is not a ParseTerm child.
     ParseTermKind.sort _ => acc,
     ParseTermKind.hole => acc,
@@ -542,8 +540,6 @@ def kind_wants_loc (k : ParseTermKind) : Bool := match k {
     ParseTermKind.var_macro _ => true,
     ParseTermKind.lit _ => true,
     ParseTermKind.app _ _ => true,
-    ParseTermKind.con _ => true,
-    ParseTermKind.ntv _ => true,
     ParseTermKind.do_ _ => true,
     ParseTermKind.lam _ _ _ => false,
     ParseTermKind.forall _ _ _ => false,
@@ -729,8 +725,6 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
                 Option.none => Term.app (lower_parse_term_bare ctx f) (lower_parse_term ctx a),
             },
         ParseTermKind.lit l => Term.lit (lower_parse_literal ctx l),
-        ParseTermKind.ntv n => Term.ntv (lower_parse_native ctx n),
-        ParseTermKind.con c => Term.con (lower_parse_con ctx c),
         // Every level the grammar produces -- `Prop`/`Type`/`Sort n` in
         // source, and the implicit-parameter and lambda defaults it
         // hardcodes -- lowers through here. A `ParseTermKind.sort` is
@@ -807,13 +801,6 @@ def lower_parse_opt (ctx : ParseLowerCtx) (t : Option ParseTerm) : Option Term :
         Option.none => Option.none,
     }
 
-#[partial]
-def lower_parse_opts (ctx : ParseLowerCtx) (ts : List (Option ParseTerm)) : List (Option Term) :=
-    match ts {
-        List.empty => List.empty,
-        List.cons x rest => List.cons (lower_parse_opt ctx x) (lower_parse_opts ctx rest),
-    }
-
 /// Struct-LITERAL fields (`{ x := 1 }`). Distinct from
 /// `lower_parse_struct_decl_fields` below, which handles a struct's
 /// DECLARED fields (`x : T := default`) -- the two were briefly given the
@@ -826,20 +813,6 @@ def lower_parse_struct_lit_fields (ctx : ParseLowerCtx) (fs : List ParseStructLi
         List.cons f rest =>
             List.cons (StructLitField.mk f.name (lower_parse_term ctx f.value))
                 (lower_parse_struct_lit_fields ctx rest),
-    }
-
-#[partial]
-def lower_parse_con (ctx : ParseLowerCtx) (c : ParseCon) : Con :=
-    match c {
-        ParseCon.mk name typ_name num_args args =>
-            Con.mk name typ_name num_args (lower_parse_opts ctx args),
-    }
-
-#[partial]
-def lower_parse_native (ctx : ParseLowerCtx) (n : ParseNative) : Native :=
-    match n {
-        ParseNative.mk name num_args args =>
-            Native.mk name num_args (lower_parse_opts ctx args),
     }
 
 // --- The declaration half -------------------------------------------

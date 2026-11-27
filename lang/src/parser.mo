@@ -9395,15 +9395,13 @@ def test_t_lambda_identity : Bool :=
                         ParseTermKind.var _ => false, ParseTermKind.lam _ _ _ => false,
                         ParseTermKind.forall _ _ _ => false, ParseTermKind.pi _ _ _ => false,
                         ParseTermKind.app _ _ => false, ParseTermKind.lit _ => false,
-                        ParseTermKind.ntv _ => false, ParseTermKind.con _ => false,
                         ParseTermKind.sort _ => false,
                         ParseTermKind.var_macro _ => false, ParseTermKind.quote_ _ => false,
                         ParseTermKind.do_ _ => false, ParseTermKind.dict_hint _ => false
                     },
                 ParseTermKind.var _ => false, ParseTermKind.forall _ _ _ => false,
                 ParseTermKind.pi _ _ _ => false, ParseTermKind.app _ _ => false,
-                ParseTermKind.lit _ => false, ParseTermKind.ntv _ => false,
-                ParseTermKind.con _ => false,
+                ParseTermKind.lit _ => false,
                 ParseTermKind.sort _ => false, ParseTermKind.hole => false,
                 ParseTermKind.var_macro _ => false, ParseTermKind.quote_ _ => false,
                 ParseTermKind.do_ _ => false, ParseTermKind.dict_hint _ => false

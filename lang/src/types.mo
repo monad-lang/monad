@@ -1695,6 +1695,14 @@ pub type ParseTermKind {
     /// doc comment): macro names resolve in a separate namespace.
     var_macro (name : NameRef),
     lam (name : Identifier) (typ : ParseTerm) (body : ParseTerm),
+    // `forall` is spelled here to mirror the old `Term`; no syntax produces
+    // it (there is no `forall` keyword in the grammar), and `Term.forall`
+    // itself is gone -- R2b folded it into `Term.pi` -- but this parse-tree
+    // variant stays because deleting it would mean touching the lowering
+    // arm for no gain. `ntv`/`con` were the same kind of dead mirror and
+    // were deleted in S3: natives arrive through an attribute rather than
+    // a term, and constructor applications are ordinary `app`s of a `var`
+    // until the type checker resolves them.
     forall (name : Identifier) (typ : ParseTerm) (body : ParseTerm),
     /// `arg_name` is `some` for a written dependent arrow
     /// (`(n : T) -> body`, which binds `n` over `body`) AND, since R2a',
@@ -1713,19 +1721,6 @@ pub type ParseTermKind {
     pi (arg_name : Option Identifier) (arg : ParseTerm) (ret : ParseTerm),
     app (fun : ParseTerm) (arg : ParseTerm),
     lit (value : ParseLiteral),
-    // `forall`, `ntv` and `con` were spelled here to mirror the old
-    // `Term`; no syntax produces one: there is no `forall` keyword in the
-    // grammar,
-    // natives arrive through an attribute rather than a term, and the
-    // parser has never built a `Term.con` (constructor applications are
-    // ordinary `app`s of a `var` until the type checker resolves them).
-    // `Term.forall` itself is gone -- R2b folded it into `Term.pi` -- but
-    // this parse-tree variant stays because deleting it would mean
-    // touching the lowering arms for no gain. They carry no `pt_*` smart
-    // constructor for that reason -- only the lowering arms and
-    // exhaustive matches name them.
-    ntv (native : ParseNative),
-    con (c : ParseCon),
     /// A sort, as a `SortLevel` -- which covers a concrete numeral exactly as
     /// well as a level VARIABLE or a computed `max`/`succ`. The sole sort
     /// spelling: a sibling `type_ (universe: I64)` used to carry the concrete
@@ -1775,19 +1770,6 @@ type ParseLiteral {
 pub struct ParseStructLitField {
     name : Identifier,
     value : ParseTerm,
-}
-
-pub struct ParseCon {
-    name : Identifier,
-    typ_name : NamePath,
-    num_args : I64,
-    args : List (Option ParseTerm),
-}
-
-pub struct ParseNative {
-    native_name : Identifier,
-    num_args : I64,
-    args : List (Option ParseTerm),
 }
 
 // The universe level of a sort. `Prop`/`Type`/`Sort n` are `concrete n`; a
