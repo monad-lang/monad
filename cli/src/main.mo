@@ -24,7 +24,9 @@ use llvm::ir {LLVMModule, emit_module}
 use llvm::link {link_ir, mkdir_parent}
 use llvm::target {TargetSpec, TargetPlan}
 use runtime {}
-use codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug}
+use codegen::emit {CompiledProgram, compile_db_module_with_debug, compile_loaded_program, plan_loaded_kernels}
+use codegen::kernel::detect {KernelDiagnostic}
+use codegen::kernel::plan {KernelPlan}
 use codegen::decls {collect_all_decls_from_modules, export_names}
 use lang::module {BatchCheckResult, CheckDiagnostics, ElaboratedAndCache, collect_link_libs, collect_link_pkgs, get_loaded_all, ElaboratedModules, FileCheckAndCache, FileCheckResult, LoadedModules, ModuleInfo, ModuleInfoCache, base_dir_path, bench_step, check_file_cached, check_files_cached, check_module_with_scope_path, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, ownership_refusal_of_loaded, resolve_runtime_src, try_parse_decls, try_parse_decls_str, try_parse_decls_strict}
 use lang::mote {
@@ -58,7 +60,7 @@ use build::test_cache {
 }
 use std::list {List.contains_by}
 use std::map {}
-use lang::pretty {show_decls}
+use lang::pretty {show_decls, show_term}
 use fmt::fmt {Fmt.default_config, Fmt.format_source}
 use fmt::diff {Diff.unified}
 use codegen::errors {CodegenError}
@@ -155,13 +157,14 @@ def default_output_dir : Path := Path.path ("/tmp/monad_out_" ++ I64.to_string p
 /// is enough here (the `--verbose` compile pipeline prints the precise
 /// stage names too).
 #[partial]
-def link_compiled_module (mod_result : Result CodegenError LLVMModule) (link_libs : List String) (link_pkgs : List String) (export_syms : List String) (base_dir : String) (output_dir : Path) (output_name : Path) (ir : Option Path) (verbose : Bool) (target : TargetSpec) : IO I64 :=
+def link_compiled_module (mod_result : Result CodegenError CompiledProgram) (link_libs : List String) (link_pkgs : List String) (export_syms : List String) (base_dir : String) (output_dir : Path) (output_name : Path) (ir : Option Path) (verbose : Bool) (target : TargetSpec) : IO I64 :=
     match mod_result {
         Result.err e => do {
             println ("FAILED at stage: compile_loaded_modules_to_ir (" ++ CodegenError.render e ++ ")");
             return 1
         },
-        Result.ok mod_ => do {
+        Result.ok prog => do {
+            let mod_ : LLVMModule := prog.module_;
             // `emit_module` -- rendering the whole `LLVMModule` to `.ll` text --
             // was the largest untimed span in the pipeline: it sits between
             // `compile_loaded_modules_to_ir`'s own total and `link_ir`'s first
@@ -178,6 +181,7 @@ def link_compiled_module (mod_result : Result CodegenError LLVMModule) (link_lib
                 output_dir := output_dir, output_name := output_name,
                 link_libs := link_libs, link_pkgs := link_pkgs,
                 export_syms := export_syms,
+                extra_objects := prog.kernel_objects,
                 compiler_commit := build_commit,
                 verbose := verbose, spec := target }
         },
@@ -207,6 +211,7 @@ def compile_parsed_decls (decl_list : List Decl) (base_dir : String) (output_dir
         output_dir := output_dir, output_name := output_name,
         link_libs := List.empty, link_pkgs := List.empty,
         export_syms := List.empty,
+        extra_objects := List.empty,
         compiler_commit := build_commit,
         verbose := verbose, spec := target }
 }
@@ -1596,7 +1601,10 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
                         // the `Loaded N modules` count it prints on entry) is the one
                         // place that progress is reported -- a count printed here too
                         // would duplicate it two calls later.
-                        let mod_result <- compile_loaded_modules_to_ir_with_debug loaded verbose source_path target.triple;
+                        // Each ready `#[kernel]` is compiled through MLIR beside the
+                        // other artifacts and linked in (`codegen/src/kernel/build.mo`).
+                        let kernel_dir : Path := Path.join output_dir (Path.path "kernels");
+                        let mod_result <- compile_loaded_program loaded verbose source_path target.triple (Option.some kernel_dir);
                         // `[link] libs` from every mote in the dependency closure --
                         // a package-level build property, read from the manifests
                         // rather than from any `#[extern "c"]` attribute.
@@ -2939,6 +2947,7 @@ def Build.test_tail_build (f : String) (loaded : LoadedModules) (out_dir : Strin
                 output_name := (Path.path name),
                 link_libs := link_libs, link_pkgs := link_pkgs,
                 export_syms := List.empty,
+                extra_objects := List.empty,
                 compiler_commit := build_commit,
                 verbose := verbose, spec := native };
             if not (link_result == 0) then do { return (TestFileOutcome.fail_outcome "compilation failed") }
@@ -3357,6 +3366,7 @@ def Command.dispatch (cmd : Command) : IO I64 :=
         // each other.
         Command.lint { files, workspace, quiet, deny, allow, list_rules, verbose } =>
             run_lint files workspace quiet deny allow list_rules verbose,
+        Command.kernels file verbose => run_kernels file verbose,
         Command.print_targets => run_print_targets,
         Command.lsp => run_lsp,
         Command.version => do {
@@ -3368,6 +3378,57 @@ def Command.dispatch (cmd : Command) : IO I64 :=
             return 0
         }
     }
+
+/// `monad kernels`: one line per `#[kernel]` -- its MLIR signature, C ABI
+/// and verdict -- then each diagnostic that keeps it an ordinary function.
+/// Diagnostic only: nothing is compiled, and a kernel that is not ready is
+/// not an error (exit 0); a program that fails to load is (exit 1).
+#[partial]
+def run_kernels (path : String) (verbose : Bool) : IO I64 := do {
+    let resolved <- resolve_build_input path "" "kernels";
+    match resolved {
+        Result.err msg => do { println msg; return 1 },
+        Result.ok input => do {
+            let res <- load_file_modules input.src verbose;
+            match res {
+                Result.err e => do { println ("error: " ++ e); return 1 },
+                Result.ok loaded => do {
+                    let plans <- plan_loaded_kernels loaded verbose;
+                    match plans {
+                        Result.err e => do { println ("error: " ++ CodegenError.render e); return 1 },
+                        Result.ok ps => do { print_kernel_plans verbose ps; return 0 },
+                    }
+                },
+            }
+        },
+    }
+}
+
+#[partial]
+def print_kernel_plans (verbose : Bool) (plans : List KernelPlan) : IO Unit := match plans {
+    List.empty => IO.pure Unit.unit,
+    List.cons p rest => do {
+        println (KernelPlan.describe p);
+        print_kernel_diagnostics p.diagnostics;
+        print_kernel_detail verbose p;
+        print_kernel_plans verbose rest
+    },
+}
+
+/// `-v`: the extracted body `scalar.mo` lowered, and the `.mlir` it produced.
+#[partial]
+def print_kernel_detail (verbose : Bool) (p : KernelPlan) : IO Unit :=
+    if verbose then println (String.concat_all ["    body: ", show_term p.body, "\n", p.text])
+    else IO.pure Unit.unit
+
+#[partial]
+def print_kernel_diagnostics (diags : List KernelDiagnostic) : IO Unit := match diags {
+    List.empty => IO.pure Unit.unit,
+    List.cons d rest => do {
+        println ("    " ++ KernelDiagnostic.render d);
+        print_kernel_diagnostics rest
+    },
+}
 
 /// The message a subcommand prints when the binary was built without the
 /// feature that implements it. One def so the two gated arms cannot word it

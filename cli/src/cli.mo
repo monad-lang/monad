@@ -129,6 +129,10 @@ pub type Command {
         (#[pos {help := "mote directories to document (default: the enclosing mote)"}] motes : List String)
         (#[opt {short := "o", value_name := "DIR", help := "the output root (default: target/docs)"}] output : Option String)
         (#[arg {short := "", help := "include package-private declarations too"}] include_private : Bool),
+    /// List each `#[kernel]`: its MLIR signature, C ABI, and whether it compiles as one.
+    kernels
+        (#[pos {help := "a .mo source file or a mote directory"}] file : String)
+        (#[arg {short := "v", help := "print each module as it loads"}] verbose : Bool),
     /// List the triples `--target` accepts and what this llc can build for.
     print_targets,
     /// Speak the Language Server Protocol on stdin/stdout.

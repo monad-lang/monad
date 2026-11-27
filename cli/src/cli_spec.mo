@@ -122,6 +122,7 @@ pub def Command.debug_of (cmd : Command) : Bool :=
         Command.fetch _ _ => false,
         Command.update _ _ => false,
         Command.doc _ _ _ => false,
+        Command.kernels _ _ => false,
         Command.print_targets => false,
         Command.lsp => false,
         Command.version => false,

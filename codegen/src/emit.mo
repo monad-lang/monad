@@ -62,9 +62,13 @@ use lib::ctx {
     ctx_bind_local_drop, ctx_enter_branch, ctx_leave_branch, ctx_with_ownership,
     ctx_lookup_arity, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag, ctx_lookup_local,
     ctx_lookup_type_level, ctx_reset_locals, ctx_restore_locals, dbg_loc_of_location,
-    ctx_find_inductive, ctx_with_inductives, empty_ctx, fresh_label, fresh_temp, lookup_binding,
+    ctx_find_inductive, ctx_with_inductives, ctx_with_kernels, empty_ctx, fresh_label, fresh_temp, lookup_binding,
     resolve_call_name
 }
+use lib::kernel::build {CompiledKernel, compile_kernels}
+use lib::kernel::host {KernelAbi, KernelAbiParam}
+use lib::kernel::plan {KernelPlan, plan_kernels}
+use lib::kernel::mono {id_text}
 use lib::ownership {
     DropBinding, DropPlan, OwnershipMode, OwnershipTables, alloc_fn_for_ctor,
     bare_name_string, classify_program, drop_fn_for_type, drop_plan_empty, drop_plan_for,
@@ -5370,20 +5374,132 @@ def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
         let fn_name := def_symbol_name name in
         let params := collect_db_params term_ in
         let llvm_params := build_llvm_params_db params in
-        // `#[extern "c" ...]` takes precedence over `#[native ...]` -- a
-        // def with both would be unambiguous (the C ABI is the one the
-        // user explicitly named), and checking extern first keeps the
-        // dispatch symmetric: native and extern are both "no body, real
-        // wrapper" branches, and extern is the newer / more specific one.
-        match extern_attr_info def_ params {
-            Option.some ext => compile_extern_def_wrapper_ir c fn_name llvm_params ext,
-            Option.none =>
-                match native_runtime_fn_name attrs {
-                    Option.some wrap_kind => compile_native_def_wrapper_ir c fn_name llvm_params wrap_kind params,
-                    Option.none => compile_db_def_ir_body c fn_name typ term_ params llvm_params,
+        // A `#[kernel]` the driver compiled through MLIR (`c.kernels`) gets
+        // its host stub; one it did not compile falls through to its body.
+        match str_map_lookup fn_name c.kernels {
+            Option.some abi => compile_kernel_def_ir c fn_name typ term_ params llvm_params abi,
+            Option.none => compile_db_def_ir_plain c def_ fn_name typ term_ attrs params llvm_params,
+        },
+}
+
+#[partial]
+def compile_db_def_ir_plain (c : CodegenCtx) (def_ : Def) (fn_name : String) (typ : Term) (term_ : Term) (attrs : List Attribute) (params : List Param) (llvm_params : List ParamPair) : DefResult :=
+    // `#[extern "c" ...]` takes precedence over `#[native ...]` -- a
+    // def with both would be unambiguous (the C ABI is the one the
+    // user explicitly named), and checking extern first keeps the
+    // dispatch symmetric: native and extern are both "no body, real
+    // wrapper" branches, and extern is the newer / more specific one.
+    match extern_attr_info def_ params {
+        Option.some ext => compile_extern_def_wrapper_ir c fn_name llvm_params ext,
+        Option.none =>
+            match native_runtime_fn_name attrs {
+                Option.some wrap_kind => compile_native_def_wrapper_ir c fn_name llvm_params wrap_kind params,
+                Option.none => compile_db_def_ir_body c fn_name typ term_ params llvm_params,
+            },
+    }
+
+/// A `#[kernel]` whose MLIR object the link supplies: the ordinary body
+/// under `<name>__ref` (the differential oracle), plus the host stub
+/// every Monad call site reaches (`ctx_with_kernels` routed it).
+#[partial]
+def compile_kernel_def_ir (c : CodegenCtx) (fn_name : String) (typ : Term) (term_ : Term) (params : List Param) (llvm_params : List ParamPair) (abi : KernelAbi) : DefResult :=
+    let ref_ : DefResult := compile_db_def_ir_body c (String.concat fn_name "__ref") typ term_ params llvm_params in
+    let stub : DefResult := compile_kernel_stub_ir ref_.ctx fn_name params llvm_params abi in
+    { ctx := stub.ctx, funcs := List.append ref_.funcs stub.funcs,
+        globals := List.append ref_.globals stub.globals,
+        externs := List.append ref_.externs stub.externs }
+
+/// `define i64 @monad_extern_<k>(i64 ...)`: casts each boxed argument to
+/// the kernel's bare-pointer C ABI and calls `@<k>`. A `Buf` becomes its
+/// payload address (`monad_buf_data_ptr`); a parameter the ABI omits (a
+/// folded `dim_`) is not passed. A `void` kernel returns `Unit`.
+#[partial]
+def compile_kernel_stub_ir (c : CodegenCtx) (fn_name : String) (params : List Param) (llvm_params : List ParamPair) (abi : KernelAbi) : DefResult :=
+    let ret_ty : LLVMType := match abi.ret {
+        Option.none => LLVMType.void,
+        Option.some r => kernel_c_llvm_type r.c_type,
+    } in
+    match kernel_stub_args c params abi.params 0 {
+        { ctx := ctx1, instrs := arg_instrs, vals := call_args } =>
+            let call_val := LLVMValue.call fn_name ret_ty call_args false in
+            match kernel_stub_return ctx1 call_val ret_ty {
+                { ctx := ctx2, instrs := ret_instrs, val := ret_val } =>
+                    let body := List.append arg_instrs (List.append ret_instrs [LLVMInstruction.ret ret_val]) in
+                    let stub := LLVMFunction.mk (String.concat "monad_extern_" fn_name) llvm_params LLVMType.i64_
+                        [LLVMBasicBlock.mk "entry" body] Option.none in
+                    let decl : ExternInfo := ExternInfo.mk fn_name (List.map (fn (p : KernelAbiParam) => kernel_c_llvm_type p.c_type) abi.params) ret_ty false in
+                    { ctx := ctx2, funcs := [stub], globals := List.empty, externs := [decl] }
+            },
+    }
+
+/// The call arguments, in parameter order. ABI entries are the def's
+/// parameters minus the folded dims, in the same order, so a parameter
+/// is passed exactly when its name heads the remaining ABI list.
+#[partial]
+def kernel_stub_args (c : CodegenCtx) (params : List Param) (abi : List KernelAbiParam) (idx : I64) : CtxInstrsVals := match params {
+    List.empty => CtxInstrsVals.mk c List.empty List.empty,
+    List.cons p rest => match abi {
+        List.empty => CtxInstrsVals.mk c List.empty List.empty,
+        List.cons a abi_rest =>
+            if String.beq (id_text (param_name_db p)) a.name then
+                match kernel_stub_arg c (LLVMValue.parm_ idx) a.c_type {
+                    { ctx := ctx1, instrs := here, val := v } =>
+                        match kernel_stub_args ctx1 rest abi_rest (idx + 1) {
+                            { ctx := ctx2, instrs := later, vals := vs } =>
+                                CtxInstrsVals.mk ctx2 (List.append here later) (List.cons v vs)
+                        },
+                }
+            else kernel_stub_args c rest abi (idx + 1),
+    },
+}
+
+/// One argument: a `Buf`'s payload address as `i8*`, or a scalar cast the
+/// way an `#[extern "c"]` parameter of that width is.
+#[partial]
+def kernel_stub_arg (c : CodegenCtx) (param_val : LLVMValue) (c_type : String) : CtxInstrsVal :=
+    if String.beq c_type "ptr" then
+        match fresh_temp c {
+            CtxStrPair.mk ctx1 t =>
+                let get := LLVMInstruction.assign t (LLVMValue.call "monad_buf_data_ptr" LLVMType.i64_ [param_val] false) in
+                match emit_extern_param_cast ctx1 (LLVMValue.var_ t) LLVMType.i64_ (LLVMType.ptr LLVMType.i8_) {
+                    { ctx := ctx2, instrs := casts, val := v } => CtxInstrsVal.mk ctx2 (List.cons get casts) v
+                },
+        }
+    else
+        let true_ty : LLVMType := kernel_c_llvm_type c_type in
+        if llvm_type_eq true_ty LLVMType.i64_ then CtxInstrsVal.mk c List.empty param_val
+        else emit_extern_param_cast c param_val LLVMType.i64_ true_ty
+
+#[partial]
+def kernel_stub_return (c : CodegenCtx) (call_val : LLVMValue) (ret_ty : LLVMType) : CtxInstrsVal := match ret_ty {
+    LLVMType.void =>
+        match fresh_temp c {
+            CtxStrPair.mk ctx1 t =>
+                CtxInstrsVal.mk ctx1
+                    [LLVMInstruction.call_void call_val,
+                        LLVMInstruction.assign t (LLVMValue.alloc_constructor 0 List.empty)]
+                    (LLVMValue.var_ t)
+        },
+    _ =>
+        match fresh_temp c {
+            CtxStrPair.mk ctx1 t =>
+                match emit_extern_return_cast ctx1 (LLVMValue.var_ t) ret_ty {
+                    { ctx := ctx2, instrs := casts, val := v } =>
+                        CtxInstrsVal.mk ctx2 (List.cons (LLVMInstruction.assign t call_val) casts) v
                 },
         },
 }
+
+/// `KernelAbiParam.c_type` (`host.mo`'s spelling) as an LLVM type.
+#[partial]
+def kernel_c_llvm_type (c_type : String) : LLVMType :=
+    if String.beq c_type "f32" then LLVMType.f32_
+    else if String.beq c_type "f64" then LLVMType.f64_
+    else if String.beq c_type "i32" then LLVMType.i32_
+    else if String.beq c_type "i8" then LLVMType.i8_
+    else if String.beq c_type "i1" then LLVMType.i1_
+    else if String.beq c_type "ptr" then LLVMType.ptr LLVMType.i8_
+    else LLVMType.i64_
 
 /// The def's OWN `!DISubprogram` location, from the position recorded on
 /// its body's outermost term.
@@ -5625,7 +5741,7 @@ def compile_db_module (decl_list : List Decl) : LLVMModule :=
 /// `llvm/src/target.mo`.
 #[partial]
 pub def compile_db_module_with_debug (decl_list : List Decl) (source_path : Option String) (debug_files : List (Pair String String)) (triple : String) : LLVMModule :=
-    compile_db_module_ownership decl_list Option.none source_path debug_files triple
+    compile_db_module_ownership decl_list Option.none List.empty source_path debug_files triple
 
 /// `compile_db_module_with_debug` with a whole-program ownership verdict.
 /// The default build passes `ownership_tables_empty` through the sibling
@@ -5633,10 +5749,17 @@ pub def compile_db_module_with_debug (decl_list : List Decl) (source_path : Opti
 /// drop emission happens on the default path.
 #[partial]
 pub def compile_db_module_with_ownership (decl_list : List Decl) (tables : OwnershipTables) (source_path : Option String) (debug_files : List (Pair String String)) (triple : String) : LLVMModule :=
-    compile_db_module_ownership decl_list (Option.some tables) source_path debug_files triple
+    compile_db_module_ownership decl_list (Option.some tables) List.empty source_path debug_files triple
+
+/// `compile_db_module_with_debug` for a program whose listed `#[kernel]`
+/// defs were compiled through MLIR: each gets its host stub, and the link
+/// must supply the kernel objects (`ctx_with_kernels`).
+#[partial]
+pub def compile_db_module_with_kernels (decl_list : List Decl) (kernels : List (Pair String KernelAbi)) (source_path : Option String) (debug_files : List (Pair String String)) (triple : String) : LLVMModule :=
+    compile_db_module_ownership decl_list Option.none kernels source_path debug_files triple
 
 #[partial]
-def compile_db_module_ownership (decl_list : List Decl) (tables : Option OwnershipTables) (source_path : Option String) (debug_files : List (Pair String String)) (triple : String) : LLVMModule :=
+def compile_db_module_ownership (decl_list : List Decl) (tables : Option OwnershipTables) (kernels : List (Pair String KernelAbi)) (source_path : Option String) (debug_files : List (Pair String String)) (triple : String) : LLVMModule :=
     let defs := extract_defs decl_list in
     let inds := extract_inductives decl_list in
     let structs := extract_structs decl_list in
@@ -5651,7 +5774,7 @@ def compile_db_module_ownership (decl_list : List Decl) (tables : Option Ownersh
     let arities := build_arity_table defs in
     let extern_wrappers := build_extern_wrapper_table defs in
     let type_levels := build_type_level_table inds structs in
-    let plain_ctx : CodegenCtx := ctx_with_inductives (empty_ctx arities ctor_tags ctor_arities extern_wrappers type_levels) (elim_inductives decl_list) in
+    let plain_ctx : CodegenCtx := ctx_with_kernels (ctx_with_inductives (empty_ctx arities ctor_tags ctor_arities extern_wrappers type_levels) (elim_inductives decl_list)) kernels in
     let base_ctx : CodegenCtx := match tables {
         Option.none => plain_ctx,
         Option.some t => ctx_with_ownership plain_ctx t,
@@ -6682,6 +6805,51 @@ pub def compile_input_of_modules (target_mp : ModulePath) (qualified_mods : List
 /// passes no `-mtriple`.
 #[partial]
 pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : Bool) (source_path : Option String) (triple : String) : IO (Result CodegenError LLVMModule) := do {
+    let r <- compile_loaded_program loaded verbose source_path triple Option.none;
+    return (match r {
+        Result.ok prog => Result.ok prog.module_,
+        Result.err e => Result.err e,
+    })
+}
+
+/// Every `#[kernel]` in a loaded program, planned over the same elaborated
+/// decls the build compiles (`compile_input_of_modules`), without compiling
+/// anything: what `monad kernels` prints.
+#[partial]
+pub def plan_loaded_kernels (loaded : LoadedModules) (verbose : Bool) : IO (Result CodegenError (List KernelPlan)) := do {
+    let aliased_mods := resolve_open_aliases_in_modules (get_loaded_all loaded);
+    let qualify_result <- qualify_modules verbose aliased_mods;
+    match qualify_result {
+        Result.err e => return (Result.err e),
+        Result.ok qualified_mods => do {
+            let target_mp : ModulePath := match get_loaded_main loaded { ModuleInfo.mk mp_ _ _ => mp_ };
+            let input : CompileInput <- compile_input_of_modules target_mp qualified_mods verbose;
+            return (Result.ok (plan_kernels input.decls))
+        },
+    }
+}
+
+/// A compiled program: its module, and the `#[kernel]` objects the link
+/// must take beside it (empty unless kernels were compiled).
+pub struct CompiledProgram {
+    module_ : LLVMModule,
+    kernel_objects : List Path,
+}
+
+#[partial]
+def program_of (closed : Result CodegenError LLVMModule) (objects : List Path) : Result CodegenError CompiledProgram :=
+    match closed {
+        Result.ok m =>
+            let prog : CompiledProgram := { module_ := m, kernel_objects := objects } in
+            Result.ok prog,
+        Result.err e => Result.err e,
+    }
+
+/// `compile_loaded_modules_to_ir_with_debug`, compiling each ready
+/// `#[kernel]` through MLIR into `kernel_dir` first (`kernel/build.mo`).
+/// `none` skips kernel planning entirely: every kernel is its ordinary body.
+#[partial]
+pub def compile_loaded_program (loaded : LoadedModules) (verbose : Bool) (source_path : Option String) (triple : String) (kernel_dir : Option Path) : IO (Result CodegenError CompiledProgram) := do {
     let total_start : I64 <- Bench.now;
 
     let all_mods := get_loaded_all loaded;
@@ -6867,10 +7035,14 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                                         // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
                                         stage verbose "emit LLVM IR";
                                         let t_llvm : I64 <- Bench.now;
-                                        let mod_raw : LLVMModule := match ownership {
-                                            Option.none => compile_db_module_with_debug reachable_decls source_path debug_files triple,
-                                            Option.some tables => compile_db_module_with_ownership reachable_decls tables source_path debug_files triple,
+                                        let kernels : List CompiledKernel <- match kernel_dir {
+                                            Option.none => IO.pure List.empty,
+                                            Option.some dir => compile_kernels (plan_kernels reachable_decls) dir,
                                         };
+                                        let mod_raw : LLVMModule :=
+                                            compile_db_module_ownership reachable_decls ownership
+                                                (List.map (fn (k : CompiledKernel) => CompiledKernel.entry k) kernels)
+                                                source_path debug_files triple;
                                         // The thunks the `--export=` flags name (web only, the
                                         // same condition the roots used above).
                                         let shim_pairs : List (Pair String String) :=
@@ -6921,7 +7093,8 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                                             Bench.report_since "compile_loaded_modules_to_ir total" total_start;
                                             return unit
                                         } else return unit;
-                                        return closed
+                                        let objects : List Path := List.map (fn (k : CompiledKernel) => k.object) kernels;
+                                        return (program_of closed objects)
                                     },
                                 },
                             },

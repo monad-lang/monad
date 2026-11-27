@@ -44,6 +44,7 @@ members = [
   "motes/demo",
   "motes/example",
   "motes/ffi_example",
+  "motes/kernel_example",
   "motes/fmt",
   "motes/http",
   "motes/json",

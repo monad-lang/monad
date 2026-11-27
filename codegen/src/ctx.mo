@@ -24,6 +24,7 @@ use lib::symbols {def_symbol_name, extract_base_name, symbol_identifier}
 use lang::name_text {unqualify_def_name}
 use lang::types {id_eq}
 use std::map {HashMap}
+use lib::kernel::host {KernelAbi}
 
 pub struct LocalBinding {
     name : Identifier,
@@ -101,6 +102,11 @@ pub struct CodegenCtx {
     /// The program's inductives, for compiling a `Term.elim`
     /// (`elim_inductive_table`).
     inductives : HashMap String Inductive,
+    /// Each `#[kernel]` def whose MLIR object the link will supply, keyed
+    /// by `def_symbol_name`, with its C ABI. Empty unless the driver
+    /// compiled the kernels first (`ctx_with_kernels`); a kernel absent
+    /// here compiles as its ordinary body.
+    kernels : HashMap String KernelAbi,
 }
 
 pub struct CtxStrPair {
@@ -150,7 +156,22 @@ def resolve_call_name (c : CodegenCtx) (llvm_name : String) : String :=
 /// correct only for genuinely 0-arity defs).
 #[partial]
 def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (ctor_arities : HashMap String I64) (extern_wrappers : HashMap String String) (type_levels : HashMap String I64) : CodegenCtx :=
-    { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, current_loc := Option.none, extern_wrappers := extern_wrappers, type_levels := type_levels, ownership := Option.none, drop_plan := Option.none, branch_depth := 0, drops := List.empty, inductives := str_map_empty }
+    { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, current_loc := Option.none, extern_wrappers := extern_wrappers, type_levels := type_levels, ownership := Option.none, drop_plan := Option.none, branch_depth := 0, drops := List.empty, inductives := str_map_empty, kernels := str_map_empty }
+
+/// Route each listed kernel to its host stub: calls reach
+/// `monad_extern_<name>` (the table extern wrappers use), and
+/// `compile_db_def_ir` emits the stub plus the `<name>__ref` body.
+#[partial]
+def ctx_with_kernels (c : CodegenCtx) (kernels : List (Pair String KernelAbi)) : CodegenCtx := match kernels {
+    List.empty => c,
+    List.cons entry rest => match entry {
+        Pair.pair name abi =>
+            ctx_with_kernels
+                { c with kernels := str_map_insert name abi c.kernels,
+                    extern_wrappers := str_map_insert name (String.concat "monad_extern_" name) c.extern_wrappers }
+                rest,
+    },
+}
 
 /// Turn ownership on for a module compile. The caller
 /// (`compile_loaded_modules_to_ir_with_debug`) computes the tables once for

@@ -38,6 +38,7 @@ The parser is the `clap` mote's `#[derive Cli]`, so:
 | [`fetch`](#fetch) | Resolve git dependencies into the cache and write `mote.lock` |
 | [`update`](#update) | Re-resolve every git pin, then write `mote.lock` |
 | [`doc`](#doc) | Generate an API reference for the named motes from their sources |
+| [`kernels`](#kernels) | List each `#[kernel]`: its MLIR signature, C ABI, and whether it compiles as one |
 | [`print-targets`](#print-targets) | List the triples `--target` accepts and what this llc can build for |
 | [`lsp`](#lsp) | Speak the Language Server Protocol on stdin/stdout |
 | [`version`](#version) | Print the git commit this binary was built from |
@@ -344,6 +345,18 @@ With no mote named, the enclosing mote (`.`) is documented, the same default
 `monad doc` is the compiler's spelling of the same generator the standalone
 `docgen` binary runs (`motes/docgen`); the site build uses it too, and
 [The Standard Library](./stdlib.md) links to its output.
+
+## kernels
+
+```text
+monad kernels <file-or-mote> [-v]
+```
+
+One line per `#[kernel]` def: its MLIR signature, its C ABI, and `ok` when
+`build` will compile it through MLIR. A kernel that is not ready is listed
+with the diagnostics that keep it an ordinary function; that is not an
+error, and `build` still compiles it, as its plain body. Nothing is
+compiled.
 
 ## print-targets
 

@@ -404,6 +404,10 @@ pub def mkdir_parent (p : Path) : IO I64 :=
 /// libs live, resolved to `-L` flags by `pkg_config_link_flags` rather
 /// than left to the environment.
 ///
+/// `extra_objects` are linked beside the program's own object: the
+/// `#[kernel]` objects `codegen/src/kernel/build.mo` compiled. Empty for
+/// a program with none.
+///
 /// `compiler_commit` is the revision of the COMPILER doing the linking
 /// (`cli/src/main.mo`'s `build_commit` native, the same string `monad
 /// version` prints), which is what gets stamped into the linked program
@@ -418,19 +422,19 @@ pub def mkdir_parent (p : Path) : IO I64 :=
 /// where the "compile_file total minus compile_loaded_modules_to_ir total"
 /// remainder actually goes, before guessing at a fix.
 #[partial]
-pub def link_ir (runtime_c : String) (ir_text : String) (ir_path : Path) (output_dir : Path) (output_name : Path) (link_libs : List String) (link_pkgs : List String) (export_syms : List String) (compiler_commit : String) (verbose : Bool) (spec : TargetSpec) : IO I64 := do {
+pub def link_ir (runtime_c : String) (ir_text : String) (ir_path : Path) (output_dir : Path) (output_name : Path) (link_libs : List String) (link_pkgs : List String) (export_syms : List String) (extra_objects : List Path) (compiler_commit : String) (verbose : Bool) (spec : TargetSpec) : IO I64 := do {
     let plan <- TargetPlan.resolve spec;
     match plan {
         Result.err e => do {
             fail_line e;
             return 1
         },
-        Result.ok p => link_ir_plan runtime_c ir_text ir_path output_dir output_name link_libs link_pkgs export_syms compiler_commit verbose spec p,
+        Result.ok p => link_ir_plan runtime_c ir_text ir_path output_dir output_name link_libs link_pkgs export_syms extra_objects compiler_commit verbose spec p,
     }
 }
 
 #[partial]
-def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (output_dir : Path) (output_name : Path) (link_libs : List String) (link_pkgs : List String) (export_syms : List String) (compiler_commit : String) (verbose : Bool) (spec : TargetSpec) (plan : TargetPlan) : IO I64 {
+def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (output_dir : Path) (output_name : Path) (link_libs : List String) (link_pkgs : List String) (export_syms : List String) (extra_objects : List Path) (compiler_commit : String) (verbose : Bool) (spec : TargetSpec) (plan : TargetPlan) : IO I64 {
     // `Path.join` here is THE fix for the mangled-double-slash bug this
     // whole `Path` type exists to prevent: if `output_name` is already
     // absolute, it replaces `output_dir` outright instead of naively
@@ -551,7 +555,7 @@ def link_ir_plan (runtime_c : String) (ir_text : String) (ir_path : Path) (outpu
                         else List.empty;
                     let link_flags : List String :=
                         List.append export_flags (List.append pkg_flags (List.append dash_l (verbose_argv verbose)));
-                    let result <- link_objects_for plan [obj_path, runtime_obj] target link_flags;
+                    let result <- link_objects_for plan (List.append [obj_path, runtime_obj] extra_objects) target link_flags;
                     if verbose then do {
                         Bench.report_since "link_ir: clang link" t_link;
                         return unit

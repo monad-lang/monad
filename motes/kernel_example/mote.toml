@@ -1,0 +1,8 @@
+# The `#[kernel]` fixture: a kernel compiled through MLIR
+# (`codegen/src/kernel/`) and linked into an ordinary Monad program, whose
+# reference body (`<kernel>__ref`) is linked beside it so the two can be
+# compared number for number (plans/bootstrapping/mlir-codegen.md, Phase 2).
+[mote]
+name = "kernel_example"
+version = "0.1.0"
+edition = "2026"

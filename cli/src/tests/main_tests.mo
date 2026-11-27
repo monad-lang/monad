@@ -386,6 +386,14 @@ def test_print_targets : Bool :=
         _ => false,
     }
 
+/// `monad kernels <path>` decodes to the kernels command with its path.
+#[test]
+def test_kernels : Bool :=
+    match Command.from_args ["kernels", "motes/kernel_example"] {
+        Command.kernels file verbose => String.beq file "motes/kernel_example" && Bool.not verbose,
+        _ => false,
+    }
+
 /// `monad doc <mote>... --output DIR` decodes to the doc command with its
 /// motes, output and private flag; `--include-private` is the flag spelling.
 #[test]
