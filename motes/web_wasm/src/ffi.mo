@@ -173,10 +173,14 @@ def dom_attr_raw (n : Node) (name : String) : RawIO String
 def dom_focus_raw (selector : String) : RawIO Unit
 
 /// Bind a media stream to a `<video>`/`<audio>` node as its `srcObject`, so
-/// the element plays it. This is the boundary's ONE object-property write,
-/// and it is deliberately not general: it takes a typed `MediaStream` and a
-/// `Node`, never a property name, so it cannot set an arbitrary JS property
-/// the way a `set_prop(name, value)` primitive would.
+/// the element plays it.
+///
+/// One of the boundary's few property writes, and deliberately not general:
+/// it takes a typed `MediaStream` and a `Node`, never a property name, so it
+/// cannot set an arbitrary JS property the way a `set_prop(name, value)`
+/// primitive would. `media_element.mo`'s volume/muted/loop setters are the
+/// other family, and each is likewise typed on its own property -- there is
+/// no primitive that reaches a property name the caller chooses.
 #[extern "c" {link_name := "web_dom_set_src_object"}]
 def dom_set_src_object_raw (n : Node) (stream : MediaStream) : RawIO I64
 
