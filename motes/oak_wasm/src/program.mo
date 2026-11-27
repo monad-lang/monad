@@ -736,7 +736,8 @@ pub def Runtime.mount {S : Type} {Msg : Type} {E : Type}
             let table := List.append handlers (Runtime.collect_sub_handlers subs);
             let state : Ref (RuntimeState S Msg) <-
                 Ref.new (RuntimeState.st root tree model List.empty false table subs
-                    List.empty List.empty List.empty List.empty Option.none List.empty);
+                    List.empty List.empty List.empty List.empty Option.none List.empty
+                    List.empty);
             let _ <- Keep.save state;
             // Subscriptions install AFTER the state exists: a WebSocket
             // subscription registers its socket through the state slot.
@@ -950,7 +951,8 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
     let live_peers := Runtime.state_peers before;
     let drained : RuntimeState S Msg :=
         RuntimeState.st root last model List.empty false handlers subs timers List.empty
-            List.empty live_sockets (Runtime.audio_of before) (Runtime.sounds_of before);
+            List.empty live_sockets (Runtime.audio_of before) (Runtime.sounds_of before)
+            live_peers;
     let _ <- Ref.set state drained;
     let folded <- Runtime.run_batch prog host model queue;
     match folded {
@@ -974,7 +976,8 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
                         RuntimeState.st root last model List.empty false table next_subs
                             batch_timers batch_focus batch_paint
                             (Runtime.state_sockets after_batch)
-                            (Runtime.audio_of after_batch) (Runtime.sounds_of after_batch);
+                            (Runtime.audio_of after_batch) (Runtime.sounds_of after_batch)
+                            (Runtime.state_peers after_batch);
                     let _ <- Ref.set state staged;
                     let patches := Patch.diff last tree;
                     let _ <- Patch.apply root patches;
@@ -993,7 +996,8 @@ def Runtime.drain {S : Type} {Msg : Type} {E : Type}
                         RuntimeState.st root tree next_model pending quit table next_subs
                             (Runtime.timers_of after_paint) List.empty List.empty
                             (Runtime.state_sockets after_paint)
-                            (Runtime.audio_of after_paint) (Runtime.sounds_of after_paint);
+                            (Runtime.audio_of after_paint) (Runtime.sounds_of after_paint)
+                            (Runtime.state_peers after_paint);
                     let _ <- Ref.set state next;
                     return unit
                 },
