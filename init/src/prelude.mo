@@ -557,6 +557,20 @@ pub def Nat.mul (a b : Nat) : Nat :=
         succ n => Nat.add b (Nat.mul n b)
     }
 
+/// The smaller of two `Nat`s. Structural in BOTH arguments, so it reduces
+/// on a literal index chain -- `Nat.min 2 3` is `Nat.succ (Nat.succ
+/// Nat.zero)`, which is what lets a `Slice` bound written two ways unify
+/// (`Slice.min`-shaped signatures such as `split_at`). `Nat.sub` saturates
+/// at `zero`, which is the other half of that arithmetic.
+pub def Nat.min (a b : Nat) : Nat :=
+    match a {
+        zero => Nat.zero,
+        succ n => match b {
+            zero => Nat.zero,
+            succ m => Nat.succ (Nat.min n m)
+        }
+    }
+
 pub def Nat.eq (a b : Nat) : Bool :=
     match a {
         zero => match b {

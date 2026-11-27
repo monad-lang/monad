@@ -790,10 +790,15 @@ pub instance ToString F64 {
     def to_string (a : F64) : String := F64.to_string a
 }
 
-def nat_to_i64 (n : Nat) : I64 :=
+/// A `Nat` as its `I64` payload -- O(n) over the unary representation, the
+/// same walk `Nat.of_i64` takes in reverse. This is the bridge a
+/// type-level index crosses to reach a runtime primitive: `Slice`'s
+/// operations take an `I64` offset and convert a `Nat` index here.
+#[partial]
+pub def Nat.to_i64 (n : Nat) : I64 :=
     match n {
         zero => 0,
-        succ m => I64.add 1 (nat_to_i64 m)
+        succ m => I64.add 1 (Nat.to_i64 m)
     }
 
 /// Build a `Nat` from an `I64` payload, the elaboration rewrite target
@@ -821,7 +826,7 @@ def nat_of_i64_walk (n : I64) : Nat :=
         false => Nat.succ (nat_of_i64_walk (I64.sub n 1))
     }
 
-pub def Nat.to_string (n : Nat) : String := I64.to_string (nat_to_i64 n)
+pub def Nat.to_string (n : Nat) : String := I64.to_string (Nat.to_i64 n)
 
 pub instance ToString Nat {
     def to_string (n : Nat) : String := Nat.to_string n
