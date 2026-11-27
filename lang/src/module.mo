@@ -2741,8 +2741,8 @@ pub def def_body_diagnostics (df : Def) (scope : Scope) (locals : LocalScope) (p
             // the `Nat.of_i64` the retag emits for term positions, and
             // `whnf` is type-blind -- so retag the declared type before it is
             // used as the body's expectation (`def f (s : Slice 3 I64)`).
-            let checked_typ : Term := retag_nat_index_literals scope typ in
-            let checked_body : Term := retag_leading_lam_domains scope body in
+            let checked_typ : Term := retag_nat_index_literals typ in
+            let checked_body : Term := retag_leading_lam_domains body in
             let locals_ : LocalScope := locals_with_def_typevars checked_typ body scope locals in
             list_append
                 (declared_type_diagnostics (show_name_path name) checked_typ scope locals_ path)
@@ -2833,7 +2833,7 @@ def elaborate_def_with_scope ({ name, typ, term := body, constraints, attrs, vis
         // The signature's literal indices are retagged for the BODY check
         // only; the stored `typ` stays as written so codegen's copy of it is
         // unchanged (see `def_body_diagnostics`).
-        let checked_typ : Term := retag_nat_index_literals scope typ in
+        let checked_typ : Term := retag_nat_index_literals typ in
         let locals_ : LocalScope := locals_with_def_typevars checked_typ body scope locals in
         let body_scope : Scope := scope_for_elab_body scope in
         // Plain `type_check` here, NOT `body_signature_diagnostics`: this is
@@ -2847,7 +2847,7 @@ def elaborate_def_with_scope ({ name, typ, term := body, constraints, attrs, vis
         // signature check belongs on `check`'s path, which reports it;
         // every def that reaches here has already been through
         // `check_def_with_scope`.
-        let checked_body : Term := retag_leading_lam_domains scope body in
+        let checked_body : Term := retag_leading_lam_domains body in
         match type_check checked_body checked_typ body_scope empty_local_types locals_ {
             Result.ok tt => Result.ok (Def.mk name typ (close_named_vars List.empty tt.term) constraints attrs vis params),
             Result.err e => Result.err (render_type_error (show_name_path name) Option.none e),
