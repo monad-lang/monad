@@ -452,6 +452,15 @@ def test_inline_leaves_an_unknown_reference_alone : Bool :=
     in
     String.beq (var_text (inline_term defs 10 (ref "n"))) "n"
 
+/// A body-less `#[native]` is not unfolded: its term is a hole, and inlining
+/// it turned a real kernel's `I64.lt a b` into a `hole` that `scalar.mo`
+/// could not lower. The call must survive by name.
+#[test]
+def test_inline_leaves_a_native_call_alone : Bool :=
+    let defs : HashMap String Term := table_of [native_def "I64.lt" "i64_lt"]
+    in
+    String.beq (var_text (inline_term defs 10 (ref "I64.lt"))) "I64.lt"
+
 /// The budget stops the inliner rather than letting it loop, and the leftover
 /// is REPORTED -- this is what makes the bound honest instead of silent.
 #[test]

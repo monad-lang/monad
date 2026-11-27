@@ -50,8 +50,10 @@
 /// what arrives here is the variable case, and the table below is written
 /// from the observed spellings (the plan's cost item 8).
 use lang::types {
-    DebugName, Identifier, Literal, MatchCase, Native, NumSuffix, Term, term_peel,
+    DebugName, Elim, Identifier, Literal, MatchCase, Minor, Native, NumSuffix, Term, show_name_path,
+    term_peel,
 }
+use lang::name_text {string_matches_bare, unqualify_def_name}
 use lib::kernel::detect {KernelDiagnostic}
 use lib::kernel::mono {KernelExtract, id_text}
 use lib::kernel::shape {KernelShape, ParamShape}
@@ -244,7 +246,7 @@ def emit_term (st : EmitState) (t : Term) : EmitState :=
         Term.lit l => emit_literal st l,
         Term.app f a => emit_spine st (spine_head (Term.app f a)) (spine_args (Term.app f a) List.empty),
         Term.lam _b _typ _body => report st "closure" "lambda",
-        Term.elim _e => report st "unsupported" "elim that never desugared",
+        Term.elim e => emit_elim st e,
         Term.con _c => report st "alloc" "constructor application",
         Term.ctx _loc inner => emit_term st inner,
         Term.hole => report st "unsupported" "hole",
@@ -320,6 +322,42 @@ def int_type_of_suffix (suffix : NumSuffix) : MlirType := match suffix {
     NumSuffix.f64 => MlirType.f64,
 }
 
+/// An `if` reaches the compile path as an eliminator over `Bool` (the
+/// LLVM backend lowers `Term.elim` directly; nothing desugars it first), so
+/// a `Bool` elim with both minors is an `scf.if`. Any other elim -- a
+/// `match` on a user inductive -- has no scalar lowering.
+#[partial]
+def emit_elim (st : EmitState) (e : Elim) : EmitState :=
+    match bool_minors e {
+        Option.some branches => match branches { Pair.pair a b => emit_if st e.scrutinee a b },
+        Option.none => report st "unsupported" (String.concat "elim over " (show_name_path e.inductive)),
+    }
+
+/// `true` then `false`: `Bool`'s declaration order, which is minor order.
+#[partial]
+def bool_minors (e : Elim) : Option (Pair Term Term) :=
+    if Bool.not (string_matches_bare (show_name_path e.inductive) "Bool") then Option.none
+    else match minor_bodies_exact e.minors {
+        List.cons t rest => match rest {
+            List.cons f more => if List.is_empty more then Option.some (Pair.pair t f) else Option.none,
+            List.empty => Option.none,
+        },
+        List.empty => Option.none,
+    }
+
+/// Every minor's body, or `[]` if any minor is `impossible`.
+#[partial]
+def minor_bodies_exact (ms : List Minor) : List Term := match ms {
+    List.empty => List.empty,
+    List.cons m rest => match m {
+        Minor.case body => match minor_bodies_exact rest {
+            List.empty => if List.is_empty rest then [body] else List.empty,
+            List.cons b bs => List.cons body (List.cons b bs),
+        },
+        Minor.impossible => List.empty,
+    },
+}
+
 /// `if c then a else b` -> a result-carrying `scf.if`.
 ///
 /// Both arms are emitted into states of their own so their ops do not
@@ -348,18 +386,23 @@ def emit_if_arms (st : EmitState) (cond : MlirValue) (a : Term) (b : Term) : Emi
     let st_b : EmitState := emit_term (arm_state st_a) b in
     let f : Pair String EmitState := fresh st_b in
     match f {
-        Pair.pair n st2 => emit_if_join st2 st_a st_b n cond,
+        Pair.pair n st2 => emit_if_join st st2 st_a st_b n cond,
     }
 
-/// Join the two emitted arms into the `scf.if`.
+/// Join the two emitted arms into the `scf.if`, appended to `pre` -- the
+/// state BEFORE the arms, whose ops hold the condition. `st2` (the else arm's
+/// state, advanced by the `scf.if`'s own name) supplies only the name supply
+/// and the diagnostics: building on it instead dropped the condition's ops
+/// and printed the else arm above the `scf.if`, which `mlir-opt` rejects
+/// (`redefinition of SSA value`).
 #[partial]
-def emit_if_join (st2 : EmitState) (st_a : EmitState) (st_b : EmitState) (n : String) (cond : MlirValue) : EmitState :=
+def emit_if_join (pre : EmitState) (st2 : EmitState) (st_a : EmitState) (st_b : EmitState) (n : String) (cond : MlirValue) : EmitState :=
     let arm_ty : MlirType := st_a.result_ty in
     let tys : List MlirType := List.cons arm_ty List.empty in
     let then_block : MlirBlock := MlirBlock.entry "" (arm_ops st_a arm_ty) in
     let else_ops : List MlirOp := arm_ops st_b arm_ty in
     let op : MlirOp := if_result n cond tys (List.cons then_block List.empty) else_ops "" in
-    with_result (emit (merge_arms st2 st_a st_b) op) (val_of n) arm_ty
+    with_result (emit (merge_arms pre st2) op) (val_of n) arm_ty
 
 /// A fresh emission state for an arm: the ops restart, the names continue,
 /// and the bindings carry over (an arm may read an outer parameter).
@@ -379,11 +422,13 @@ def arm_ops (st : EmitState) (ty : MlirType) : List MlirOp :=
 /// A bare `scf.yield`, spelled here rather than imported under two names.
 def yield_void_ (loc : String) : MlirOp := MlirOp.stmt "scf.yield" loc
 
-/// The state after both arms: the pre-arm ops and diagnostics kept, the arms'
-/// own ops dropped (they are inside the region now), the supply advanced.
+/// The state after both arms: `pre`'s ops (the arms' own ops are inside the
+/// region now), with the name supply and diagnostics `after` accumulated --
+/// each arm starts from the previous state, so `after` already holds `pre`'s
+/// diagnostics and both arms'.
 #[partial]
-def merge_arms (st : EmitState) (a : EmitState) (b : EmitState) : EmitState :=
-    { st with diagnostics := List.append st.diagnostics (List.append a.diagnostics b.diagnostics) }
+def merge_arms (pre : EmitState) (after : EmitState) : EmitState :=
+    { pre with names := after.names, diagnostics := after.diagnostics }
 
 /// `match scrut { ... }` -> an `scf.if` for a two-arm `Bool` match, or a
 /// diagnostic.
@@ -430,7 +475,7 @@ def emit_match_arms (st : EmitState) (first : MatchCase) (second : MatchCase) (s
     let st_a : EmitState := emit_case (arm_state st) first in
     let st_b : EmitState := emit_case (arm_state st_a) second in
     match fresh st_b {
-        Pair.pair n st2 => emit_if_join st2 st_a st_b n sv,
+        Pair.pair n st2 => emit_if_join st st2 st_a st_b n sv,
     }
 
 /// One `match` arm: emit the body. A nullary `Bool` arm binds no fields, so
@@ -468,8 +513,10 @@ def spine_args (t : Term) (acc : List Term) : List Term := match term_peel t {
 /// The head's name, or `""` when it is not a name.
 #[partial]
 def head_name (t : Term) : String := match term_peel t {
+    // The compile path module-qualifies every def (`init.number::I64.lt`);
+    // the families below are spelled without the module.
     Term.var _idx dbg => match dbg {
-        DebugName.named id => id_text id,
+        DebugName.named id => unqualify_def_name (id_text id),
         DebugName.unnamed => "",
     },
     Term.ntv n => match n {
@@ -552,32 +599,33 @@ def emit_binop_op (st : EmitState) (name : String) (a : MlirValue) (b : MlirValu
 
 // ─── the native name families ────────────────────────────────────────
 //
-// Two spellings of the same operation, both MEASURED (see the header and the
-// plan's cost item 8): the `#[native i64_add]` name, and the class-method
-// reference the elaborator leaves for `+`. `mono.mo` folds the
+// Three spellings of each operation, all MEASURED: the `#[native i64_add]`
+// name, the class-method reference the elaborator leaves for `+`, and the
+// native def's own name (`I64.mul`, what `Mul I64`'s method reduces to once
+// `mono.mo` projects it out of the dictionary). `mono.mo` folds the
 // literal-literal case before this module sees it, so the variable case is
 // what arrives -- and an unknown native is a diagnostic rather than a
 // silent no-op.
 
 #[partial]
 def is_add_name (name : String) : Bool :=
-    String.beq name "i64_add" || String.beq name "HAdd.add" || String.beq name "Add.add"
+    String.beq name "i64_add" || String.beq name "HAdd.add" || String.beq name "Add.add" || String.beq name "I64.add"
 
 #[partial]
 def is_sub_name (name : String) : Bool :=
-    String.beq name "i64_sub" || String.beq name "HSub.sub" || String.beq name "Sub.sub"
+    String.beq name "i64_sub" || String.beq name "HSub.sub" || String.beq name "Sub.sub" || String.beq name "I64.sub"
 
 #[partial]
 def is_mul_name (name : String) : Bool :=
-    String.beq name "i64_mul" || String.beq name "HMul.mul" || String.beq name "Mul.mul"
+    String.beq name "i64_mul" || String.beq name "HMul.mul" || String.beq name "Mul.mul" || String.beq name "I64.mul"
 
 #[partial]
 def is_div_name (name : String) : Bool :=
-    String.beq name "i64_div" || String.beq name "HDiv.div" || String.beq name "Div.div"
+    String.beq name "i64_div" || String.beq name "HDiv.div" || String.beq name "Div.div" || String.beq name "I64.div"
 
 #[partial]
 def is_rem_name (name : String) : Bool :=
-    String.beq name "i64_rem" || String.beq name "HMod.mod" || String.beq name "Mod.mod"
+    String.beq name "i64_rem" || String.beq name "HMod.mod" || String.beq name "Mod.mod" || String.beq name "I64.rem"
 
 #[partial]
 def is_lt_name (name : String) : Bool :=
@@ -589,4 +637,4 @@ def is_gt_name (name : String) : Bool :=
 
 #[partial]
 def is_eq_name (name : String) : Bool :=
-    String.beq name "i64_eq" || String.beq name "I64.eq"
+    String.beq name "i64_eq" || String.beq name "I64.eq" || String.beq name "I64.beq"

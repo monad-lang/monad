@@ -234,11 +234,8 @@ def test_a_constructor_is_reported : Bool :=
     let some : Term := Term.con (Con.mk (Identifier.id "some") (bare_npath "Option") 1 List.empty) in
     reports_exactly "alloc" (emit_body some)
 
-/// A `Term.elim` that never desugared is reported rather than emitted. This is
-/// the shape a kernel read through `elaborate_loaded_modules` (rather than
-/// `compile_input_of_modules`) carries for an `if` -- the plan's cost item 8 --
-/// so the diagnostic is the honest answer for a term the desugarer never
-/// reached.
+/// An elim with no scalar lowering -- here a `Bool` elim missing a minor --
+/// is reported rather than emitted.
 #[test]
 def test_an_undesugared_elim_is_reported : Bool :=
     let e : Elim :=
@@ -246,6 +243,17 @@ def test_an_undesugared_elim_is_reported : Bool :=
             (case_minors (List.cons (ref "n") List.empty)) (ref "n")
     in
     reports_exactly "unsupported" (emit_body (Term.elim e))
+
+/// A two-minor `Bool` elim is what a real `if` reaches the compile path as
+/// (the LLVM backend lowers `Term.elim` directly), so it emits an `scf.if`.
+#[test]
+def test_a_bool_elim_is_an_scf_if : Bool :=
+    let e : Elim :=
+        Elim.mk (bare_npath "Bool") List.empty List.empty List.empty Term.hole
+            (case_minors [int_lit 1, int_lit 2]) (app2 (ref "I64.lt") (ref "n") (int_lit 0))
+    in
+    let b : KernelBody := emit_body (Term.elim e) in
+    KernelBody.ready b && has_text b "scf.if"
 
 /// A hole is reported. A body-less native reaches the emitter as `Term.hole`,
 /// and emitting nothing for it would silently produce a function returning an
@@ -280,6 +288,29 @@ def test_the_arm_ops_are_inside_the_region : Bool :=
         emit_body (Term.lit (Literal.if_ (app2 (ref "i64_lt") (ref "n") (int_lit 1)) (int_lit 0) (ref "n")))
     in
     I64.beq (count_occurrences (body_text b) "arith.constant 0 : i64") 1
+
+/// The condition's ops precede the `scf.if` and an arm's ops stay inside it.
+/// Found by `mlir-opt` on the first real kernel: the join kept the ELSE arm's
+/// ops in place of the condition's, so the `cmpi` vanished and `%t5` was
+/// defined twice. The test above cannot see that -- its else arm is a bare
+/// `n` with no ops of its own.
+#[test]
+def test_the_condition_precedes_the_if_and_the_else_ops_stay_inside : Bool :=
+    let b : KernelBody :=
+        emit_body (Term.lit (Literal.if_ (app2 (ref "i64_lt") (ref "n") (int_lit 1)) (int_lit 0)
+            (app2 (ref "i64_add") (ref "n") (ref "n"))))
+    in
+    let text : String := body_text b in
+    match String.index_of text "arith.cmpi" {
+        Option.none => false,
+        Option.some cmp => match String.index_of text "scf.if" {
+            Option.none => false,
+            Option.some sif => match String.index_of text "arith.addi" {
+                Option.none => false,
+                Option.some add => KernelBody.ready b && I64.lt cmp sif && I64.lt sif add,
+            },
+        },
+    }
 
 /// A three-arm `match` is reported rather than lowered. Only the two-arm `Bool`
 /// shape is emittable today -- a wider one needs a constructor tag the kernel

@@ -86,11 +86,14 @@
 /// fileset. Keeping this file free of `mlir` keeps that change as small as the
 /// plan says it can be.
 use lang::types {
-    Binder, Con, Cubical, DebugName, Decl, Def, Elim, Identifier, Literal, MatchCase,
-    Native, NumSuffix, StructLitField, Term, binder_is_explicit, binder_name, map_minors, term_peel,
+    Attribute, Binder, Con, Cubical, DebugName, Decl, Def, Elim, Identifier, Literal, MatchCase,
+    Minor, NamePath, Native, NumSuffix, StructLitField, Term, binder_is_explicit, binder_name, map_minors,
+    show_name_path, term_peel,
 }
+use lang::name_text {unqualify_def_name}
 use lang::typecheck::subst {beta_reduce, term_subst, term_shift}
-use lib::decls {def_body_term, def_name_str, def_param_chain_body, extract_defs}
+use lib::attrs {find_attr_args}
+use lib::decls {def_attrs, def_body_term, def_name_str, def_param_chain_body, extract_defs}
 use lib::kernel::detect {KernelDiagnostic, value_children}
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::map {HashMap}
@@ -377,12 +380,55 @@ def step_spine (defs : HashMap String Term) (hd : Term) (args : List Term) : Opt
                 List.cons a rest => Option.some (reapply (beta_reduce body a) rest),
             },
         Term.ntv _n => fold_native_spine (term_peel hd) args,
+        Term.elim e => reapply_spine (iota_elim e) args,
         Term.lit l => match match_redex_literal l {
             Option.some fired => Option.some (reapply fired args),
             Option.none => reapply_spine (unfold_def defs (term_peel hd)) args,
         },
         _ => reapply_spine (unfold_def defs (term_peel hd)) args,
     }
+
+/// Iota for a ONE-constructor eliminator -- a struct or class-dictionary
+/// projection, which is what `a * x` elaborates to
+/// (`elim {__Dict_Mul_I64.mk Mul_I64_mul} a x`) -- over that constructor's
+/// application: the minor (one binder per field) applied to the fields.
+/// Anything else is stuck, so an elim over an ordinary call never fires.
+#[partial]
+def iota_elim (e : Elim) : Option Term := match e.minors {
+    List.cons m more => match m {
+        Minor.case minor =>
+            if Bool.not (List.is_empty more) then Option.none
+            else match constructor_head_of e.scrutinee {
+                Option.some p => match p {
+                    Pair.pair _ctor fields =>
+                        if is_ctor_of e.inductive e.scrutinee then Option.some (reapply minor fields)
+                        else Option.none,
+                },
+                Option.none => Option.none,
+            },
+        Minor.impossible => Option.none,
+    },
+    List.empty => Option.none,
+}
+
+/// Is `t`'s head a constructor of `ind`? A `Term.con` says so itself; a free
+/// reference must be spelled `<ind>.<ctor>` (the elaborator's
+/// `__Dict_prelude::Mul_I64.mk`), compared on `ind`'s last `::` segment
+/// because the reference may carry a module prefix the inductive does not.
+#[partial]
+def is_ctor_of (ind : NamePath) (t : Term) : Bool := match spine_head_of t {
+    Term.con _c => true,
+    Term.var idx dbg =>
+        I64.lt idx 0 && String.contains (debug_name_text dbg)
+            (String.concat (unqualify_def_name (show_name_path ind)) "."),
+    _ => false,
+}
+
+#[partial]
+def debug_name_text (d : DebugName) : String := match d {
+    DebugName.named id => id_text id,
+    DebugName.unnamed => "",
+}
 
 /// Re-apply `args` to an `Option`-wrapped step result, propagating `none`.
 #[partial]
@@ -712,7 +758,24 @@ pub def build_def_table (decl_list : List Decl) : HashMap String Term :=
 #[partial]
 def build_def_table_go (defs : List Def) (acc : HashMap String Term) : HashMap String Term := match defs {
     List.empty => acc,
-    List.cons d rest => build_def_table_go rest (str_map_insert (def_name_str d) (def_body_term d) acc),
+    List.cons d rest =>
+        if has_no_body d then build_def_table_go rest acc
+        else build_def_table_go rest (str_map_insert (def_name_str d) (def_body_term d) acc),
+}
+
+/// A `#[native]`/`#[extern]` def's term is its parameter chain over a `hole`:
+/// unfolding one would replace the call `scalar.mo` lowers by name
+/// (`I64.lt a b`) with that hole. They stay out of the table, so a call to
+/// one is left as a call.
+#[partial]
+def has_no_body (d : Def) : Bool :=
+    let attrs : List Attribute := def_attrs d in
+    has_attr "native" attrs || has_attr "extern" attrs
+
+#[partial]
+def has_attr (name : String) (attrs : List Attribute) : Bool := match find_attr_args name attrs {
+    Option.some _ => true,
+    Option.none => false,
 }
 
 /// Unfold every reachable top-level reference in `t`, up to `budget`
