@@ -2096,6 +2096,17 @@ pub fn resolve_module_file(path: &ModulePath, search_paths: &SearchPaths) -> Opt
       let p = path.to_mote_file_path();
       if p.exists() { Some(p) } else { None }
     })
+    // A `<mote>.<module>` path for a module the AMBIENT set does not carry
+    // (`init.view`, `std.ref`) resolves against the checkout this crate was
+    // built from -- the same `<mote>/src/<module>.mo` layout the
+    // self-hosted compiler reads. The two attempts above are CWD-relative,
+    // and a host test (or any program run from another directory) has no
+    // reason to be sitting in the checkout root, so `use init::view {...}`
+    // was "module not found" no matter what the file said.
+    .or_else(|| {
+      let p = crate::repo_root().join(path.to_mote_file_path());
+      if p.exists() { Some(p) } else { None }
+    })
 }
 
 /// The mote a file belongs to: walk up for its `mote.toml` and read the
