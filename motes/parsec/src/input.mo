@@ -190,13 +190,19 @@ def bytes_clamp (s : Bytes) (n : I64) : I64 :=
 /// Count leading bytes matching `pred`, indexing the buffer. `Buf.get_u8` is
 /// bounds-checked and answers 0 out of range, so the loop needs no separate
 /// end test beyond `limit`.
+///
+/// `limit` is an ABSOLUTE index and `n` is the count, so a cursor whose `pos`
+/// is not 0 answers a COUNT -- the same contract as `scan_text_go` (and what
+/// every caller, `bytes_while` included, assumes). Returning the index here
+/// made a bounded span report its start offset as the run length, so a scan
+/// over a string table turned every name into the rest of the table.
 #[partial]
-def scan_bytes_go (pred : U8 -> Bool) (b : Shared (Buf U8)) (i : I64) (limit : I64) : I64 :=
+def scan_bytes_go (pred : U8 -> Bool) (b : Shared (Buf U8)) (i : I64) (limit : I64) (n : I64) : I64 :=
     if not (I64.lt i limit)
-    then i
+    then n
     else if pred (Buf.get_u8 b i)
-    then scan_bytes_go pred b (i + 1) limit
-    else i
+    then scan_bytes_go pred b (i + 1) limit (n + 1)
+    else n
 
 /// The `[from, to)` bytes of the buffer as a cons list, reversed-accumulated
 /// so the loop is self-tail-recursive.
@@ -227,7 +233,7 @@ pub instance Input Bytes {
         let m : I64 := bytes_clamp s n in
         let r : Bytes := { b := s.b, pos := s.pos, end := s.pos + m } in r
     def input_scan (pred : U8 -> Bool) (s : Bytes) : I64 :=
-        scan_bytes_go pred s.b s.pos (s.end - s.pos)
+        scan_bytes_go pred s.b s.pos (s.pos + bytes_remaining s) 0
     def input_text (n : I64) (s : Bytes) : String := Bytes.text s n
     def input_starts_with (lit : String) (s : Bytes) : Bool :=
         String.beq (Bytes.text s (String.length lit)) lit
