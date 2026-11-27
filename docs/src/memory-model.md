@@ -92,8 +92,14 @@ or refcount traffic. The v1 handles are:
 - `Slot Empty A` / `Slot Full A` — a linear handle whose *state is in the type*;
   `take` moves the value out and returns an empty slot, `fill` moves one in, and
   a full slot must be taken before it can be freed.
+- `Slice n A` — a linear handle over `n` contiguous elements, with the length
+  in the type. `of_list` takes the length as a `Nat` value that is also the
+  result's index (a list of another length is `Result.err`, never a lie in the
+  type), and `split_at` gives two handles over one backing array with disjoint
+  ranges, typed by the split point. Element access is bounds-checked and a
+  miss returns the handle, so a slice is never lost to an error.
 
-Neither handle has a `Copy` or `Clone` instance. Every mutating operation
+None of the handles has a `Copy` or `Clone` instance. Every mutating operation
 consumes the handle, and `get`/`set`/`take`/`fill` return the new one, so a
 use-after-free or double-free would require duplicating a handle — which the
 affine rule rejects. The operations are *pure*: the native mutates only the
@@ -170,8 +176,11 @@ def render (model : Model) : IO String :=
 - `MONAD_OWNERSHIP=1` frees only monomorphic, non-`Copy`, non-nullary
   constructors, and only for unused binders. Generic containers, closures and
   anything reachable from `Ref`/`Array`/`Shared` are region values and leak.
-- Regions are designed, not implemented. `Cell.free` and `Slot.free` currently
-  poison their block rather than freeing it.
+- Regions are designed, not implemented. `Cell.free`, `Slot.free` and
+  `Slice.free` currently poison their block rather than freeing it.
+- `Slice`'s index is a runtime-checked contract, not yet a static proof: every
+  element access carries a bounds check, and the planned `Fits i n` proof
+  (discharged at the call) is what removes it.
 - A `Shared` handle that escapes its referent is not rejected yet; lifetime
   typing is open.
 - Closure captures are counted but a capturing closure is not made linear.

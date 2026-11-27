@@ -663,7 +663,13 @@ exchange two handles' payloads, and
 `init/src/linked.mo` builds a mutable linked list whose nodes are `Slot`s —
 `Linked.reverse` and `Linked.swap_adjacent` relink in place by refilling
 each node's own handle, which is "pointer swapping" with no address in
-sight. A type that *contains* a linear handle must itself be `#[linear]`
+sight. `Slice n A` is the contiguous one: the element count is in the type,
+`Slice.of_list` takes that count as a value and checks the list against it,
+`Slice.split_at` types its halves by the split point it used, and an
+out-of-range `get`/`set` returns the handle in `Result.err` rather than
+losing the slice — a failed operation never leaks a linear value.
+
+A type that *contains* a linear handle must itself be `#[linear]`
 (`Link` is): the P11 rule does not look through a user inductive, so the
 marker is what keeps `Shared.of` of such a type untypable.
 
