@@ -249,6 +249,16 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "slot_fill" then Option.some (NativeWrapKind.passthrough "monad_slot_fill")
             else if String.beq target "slot_peek" then Option.some (NativeWrapKind.passthrough "monad_slot_peek")
             else if String.beq target "slot_free" then Option.some (NativeWrapKind.passthrough "monad_slot_free")
+            // `init/src/view.mo`'s indexed `Slice`: pure for the same
+            // reason `Cell`/`Slot` are -- every write is confined to the
+            // handle the native consumes and returns. The failing
+            // operations return `Result.err` carrying that same handle.
+            else if String.beq target "slice_of_list" then Option.some (NativeWrapKind.passthrough "monad_slice_of_list")
+            else if String.beq target "slice_length" then Option.some (NativeWrapKind.passthrough "monad_slice_length")
+            else if String.beq target "slice_get" then Option.some (NativeWrapKind.passthrough "monad_slice_get")
+            else if String.beq target "slice_set" then Option.some (NativeWrapKind.passthrough "monad_slice_set")
+            else if String.beq target "slice_split" then Option.some (NativeWrapKind.passthrough "monad_slice_split")
+            else if String.beq target "slice_free" then Option.some (NativeWrapKind.passthrough "monad_slice_free")
             // `String.hash`'s `#[native string_hash]` -- pure `U64`
             // result, same shape as `string_length`. `IO.file_exists`/
             // `is_dir` (`std/io.mo`, `#[native "X_native"]` on the
@@ -1128,6 +1138,15 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     let d163 := mk_decl "monad_slot_fill" ["i64", "i64"] "i64" in
     let d164 := mk_decl "monad_slot_peek" ["i64"] "i64" in
     let d165 := mk_decl "monad_slot_free" ["i64"] "i64" in
+    // `init/src/view.mo`'s indexed `Slice`: the handle, the list, the
+    // offset and every result are one i64 word. `split` returns a built
+    // `Pair` of two handles; `get` a `Pair` of an element and the handle.
+    let d200 := mk_decl "monad_slice_of_list" ["i64", "i64"] "i64" in
+    let d201 := mk_decl "monad_slice_length" ["i64"] "i64" in
+    let d202 := mk_decl "monad_slice_get" ["i64", "i64"] "i64" in
+    let d203 := mk_decl "monad_slice_set" ["i64", "i64", "i64"] "i64" in
+    let d204 := mk_decl "monad_slice_split" ["i64", "i64"] "i64" in
+    let d205 := mk_decl "monad_slice_free" ["i64"] "i64" in
     // `monad_view_payload` (runtime_core.c) -- the fused do-bind's read
     // half. Emitted DIRECTLY by `try_compile_view_bind_db`
     // (`codegen/src/emit.mo`), never reached through a native
@@ -1273,6 +1292,7 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
         d104, d105, d106, d107, d108, d109, d110, d111, d112, d113, d114, d115, d116,
         d117, d118, d119, d120, d121, d122, d123, d124, d150,
         d160, d161, d162, d163, d164, d165,
+        d200, d201, d202, d203, d204, d205,
         d125, d126, d127, d128, d129, d130, d131, d132, d132a, d132b, d132c,
         d132d, d132e, d132f, d132g, d132h, d133,
         d134, d135, d136, d137, d138, d139, d140, d141,

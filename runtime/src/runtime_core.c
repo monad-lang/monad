@@ -78,6 +78,18 @@ int64_t monad_export_leave(int64_t result) { return result; }
    `MONAD_CELL_TAG`. Like every handle it has no Constructor slot, so
    `monad_get_tag` names it. */
 #define MONAD_SLOT_TAG 24
+/* A `Slice` (`init/src/view.mo`): an opaque linear handle over `n`
+   contiguous elements of a shared backing array. 25 is the next free slot
+   after `MONAD_SLOT_TAG`. Like every handle it has no Constructor slot, so
+   `monad_get_tag` names it. */
+#define MONAD_SLICE_TAG 25
+/* The three builtin tags a Slice operation builds in C: `Result.ok`/
+   `Result.err` (10/11) and `List.cons` (6, what `slice_of_list` walks).
+   Fixed in `builtin_ctor_tags`, which is what lets C allocate them; see
+   `MONAD_PAIR_TAG` below for the same reasoning. */
+#define MONAD_RESULT_OK_TAG 10
+#define MONAD_RESULT_ERR_TAG 11
+#define MONAD_LIST_CONS_TAG 6
 /* `Pair.pair`'s builtin tag (`lang/src/codegen/ctors.mo`'s
    `builtin_ctor_tags`). `monad_view_get` builds the pair in C because a
    Cell handle and its payload must travel as one value; a fixed tag is
@@ -429,7 +441,7 @@ static int64_t monad_get_tag_impl(rt_word ptr) {
     if (header->tag == MONAD_FIBER_TAG || header->tag == MONAD_SCOPE_TAG
         || header->tag == MONAD_BUF_TAG || header->tag == MONAD_REF_TAG
         || header->tag == MONAD_CHANNEL_TAG || header->tag == MONAD_CELL_TAG
-        || header->tag == MONAD_SLOT_TAG) {
+        || header->tag == MONAD_SLOT_TAG || header->tag == MONAD_SLICE_TAG) {
         return header->tag;
     }
     return ((Constructor*)RT_PTR(ptr))->tag;
@@ -829,6 +841,133 @@ static rt_word slot_free_impl(rt_word handle) {
     s->header.tag = 0;
     s->payload = 0;
     s->full = 0;
+    return 0;
+}
+
+/* ── Slice (init/src/view.mo) ────────────────────────────────────────────
+   A linear handle over `n` CONTIGUOUS elements of a backing array, with the
+   length in the type. Every constructor keeps the runtime length equal to
+   the index: `slice_of_list` refuses a list whose count differs from the
+   `n` it is given (the same value binder that indexes its result), and
+   `slice_split` types its halves by the split point it actually used.
+
+   `root` is an Array-shaped Constructor (tag 16) allocated SCANNED, so
+   Boehm retains the elements through every handle over it -- including a
+   handle that outlives the slice it was split from. It is always the block
+   head; `offset`/`length` select this handle's range. Split siblings share
+   `root` with DISJOINT ranges, so no element is reachable through two live
+   handles at once -- that is the aliasing guarantee the linear type buys.
+
+   Every operation that can fail returns `Result.err` carrying the SAME
+   handle, so a linear slice is never lost to a bounds error. `slice_free`
+   POISONS the handle rather than freeing (the backing array is
+   Boehm-owned; see `view_free_impl`), and `slice_split` poisons the handle
+   it consumes, so neither can be used twice. */
+typedef struct {
+    Header header;
+    rt_word root;
+    int64_t offset;
+    int64_t length;
+} SliceObj;
+
+static SliceObj* slice_of(rt_word handle) {
+    SliceObj* s = (SliceObj*)RT_PTR(handle);
+    if (!s || s->header.tag != MONAD_SLICE_TAG) return NULL;
+    return s;
+}
+
+static rt_word slice_result(int64_t tag, rt_word v) {
+    Constructor* c = (Constructor*)alloc_constructor_impl(tag, 1);
+    if (!c) return 0;
+    c->fields[0] = RT_FIELD(v);
+    return RT_WORD(c);
+}
+
+static rt_word slice_make(rt_word root, int64_t offset, int64_t length) {
+    SliceObj* s = (SliceObj*)RT_PTR(monad_region_alloc((rt_size)sizeof(SliceObj)));
+    if (!s) return 0;
+    s->header.tag = MONAD_SLICE_TAG;
+    s->root = root;
+    s->offset = offset;
+    s->length = length;
+    return RT_WORD(s);
+}
+
+/* Count, validate, then copy: a mismatch is reported with the ACTUAL
+   length and allocates nothing. The empty slice is the shared nullary
+   `Array` block (tag 16, zero fields), which is never written. */
+static rt_word slice_of_list_impl(rt_word list, int64_t n) {
+    int64_t len = 0;
+    for (rt_word cur = list; cur && monad_get_tag_impl(cur) == MONAD_LIST_CONS_TAG;
+         cur = monad_get_field_impl(cur, 1)) {
+        len++;
+    }
+    if (n < 0 || len != n) return slice_result(MONAD_RESULT_ERR_TAG, RT_WORD(len));
+    rt_word root = alloc_constructor_impl(MONAD_ARRAY_TAG, n);
+    if (!root) return 0;
+    int64_t i = 0;
+    for (rt_word cur = list; cur && monad_get_tag_impl(cur) == MONAD_LIST_CONS_TAG;
+         cur = monad_get_field_impl(cur, 1)) {
+        monad_set_field_impl(root, i, monad_get_field_impl(cur, 0));
+        i++;
+    }
+    return slice_result(MONAD_RESULT_OK_TAG, slice_make(root, 0, n));
+}
+
+static rt_word slice_length_impl(rt_word handle) {
+    SliceObj* s = slice_of(handle);
+    if (!s) return 0;
+    Constructor* pair = (Constructor*)alloc_constructor_impl(MONAD_PAIR_TAG, 2);
+    if (!pair) return 0;
+    pair->fields[0] = RT_FIELD(s->length);
+    pair->fields[1] = RT_FIELD(handle);
+    return RT_WORD(pair);
+}
+
+static rt_word slice_get_impl(rt_word handle, int64_t i) {
+    SliceObj* s = slice_of(handle);
+    if (!s || i < 0 || i >= s->length) return slice_result(MONAD_RESULT_ERR_TAG, handle);
+    Constructor* pair = (Constructor*)alloc_constructor_impl(MONAD_PAIR_TAG, 2);
+    if (!pair) return 0;
+    pair->fields[0] = monad_get_field_impl(s->root, s->offset + i);
+    pair->fields[1] = RT_FIELD(handle);
+    return slice_result(MONAD_RESULT_OK_TAG, RT_WORD(pair));
+}
+
+static rt_word slice_set_impl(rt_word handle, int64_t i, rt_word v) {
+    SliceObj* s = slice_of(handle);
+    if (!s || i < 0 || i >= s->length) return slice_result(MONAD_RESULT_ERR_TAG, handle);
+    monad_set_field_impl(s->root, s->offset + i, RT_FIELD(v));
+    return slice_result(MONAD_RESULT_OK_TAG, handle);
+}
+
+/* `k == length` is legal: the left half is the whole slice and the right
+   half is empty. The consumed handle is poisoned, and both halves are
+   fresh handles over the same `root` with disjoint ranges. */
+static rt_word slice_split_impl(rt_word handle, int64_t k) {
+    SliceObj* s = slice_of(handle);
+    if (!s || k < 0 || k > s->length) return slice_result(MONAD_RESULT_ERR_TAG, handle);
+    rt_word left = slice_make(s->root, s->offset, k);
+    rt_word right = slice_make(s->root, s->offset + k, s->length - k);
+    if (!left || !right) return 0;
+    Constructor* pair = (Constructor*)alloc_constructor_impl(MONAD_PAIR_TAG, 2);
+    if (!pair) return 0;
+    pair->fields[0] = RT_FIELD(left);
+    pair->fields[1] = RT_FIELD(right);
+    s->header.tag = 0;
+    s->root = 0;
+    s->offset = 0;
+    s->length = 0;
+    return slice_result(MONAD_RESULT_OK_TAG, RT_WORD(pair));
+}
+
+static rt_word slice_free_impl(rt_word handle) {
+    SliceObj* s = slice_of(handle);
+    if (!s) return 0;
+    s->header.tag = 0;
+    s->root = 0;
+    s->offset = 0;
+    s->length = 0;
     return 0;
 }
 
@@ -1817,6 +1956,13 @@ rt_word monad_slot_take(rt_word handle) { return slot_take_impl(handle); }
 rt_word monad_slot_fill(rt_word handle, rt_word v) { return slot_fill_impl(handle, v); }
 rt_word monad_slot_peek(rt_word handle) { return slot_peek_impl(handle); }
 rt_word monad_slot_free(rt_word handle) { return slot_free_impl(handle); }
+
+rt_word monad_slice_of_list(rt_word list, int64_t n) { return slice_of_list_impl(list, n); }
+rt_word monad_slice_length(rt_word handle) { return slice_length_impl(handle); }
+rt_word monad_slice_get(rt_word handle, int64_t i) { return slice_get_impl(handle, i); }
+rt_word monad_slice_set(rt_word handle, int64_t i, rt_word v) { return slice_set_impl(handle, i, v); }
+rt_word monad_slice_split(rt_word handle, int64_t i) { return slice_split_impl(handle, i); }
+rt_word monad_slice_free(rt_word handle) { return slice_free_impl(handle); }
 
 int64_t monad_string_length(rt_str s) { return monad_string_length_impl(RT_STR(s)); }
 int64_t monad_string_has_index(rt_str s, int64_t i) { return monad_string_has_index_impl(RT_STR(s), i); }

@@ -220,6 +220,15 @@ const PURE_NATIVES: &[&str] = &[
   "slot_fill",
   "slot_peek",
   "slot_free",
+  // The indexed `Slice` accessors, on the same rule: every write is
+  // confined to the handle the native consumes and returns, and a
+  // failing operation hands that same handle back in `Result.err`.
+  "slice_of_list",
+  "slice_length",
+  "slice_get",
+  "slice_set",
+  "slice_split",
+  "slice_free",
 ];
 
 /// Explicitly excluded (for documentation/grep-ability, not consulted by
@@ -441,6 +450,12 @@ pub fn exec_native(
     "slot_fill" => slot_fill(args, natives),
     "slot_peek" => slot_peek(args, natives),
     "slot_free" => slot_free(args, natives),
+    "slice_of_list" => slice_of_list(args, natives),
+    "slice_length" => slice_length(args, natives),
+    "slice_get" => slice_get(args, natives),
+    "slice_set" => slice_set(args, natives),
+    "slice_split" => slice_split(args, natives),
+    "slice_free" => slice_free(args, natives),
     "string_get" => string_get(args, natives),
     "string_get_char" => string_get_char(args, natives),
     "string_to_list" => string_to_list(args, natives),
@@ -2722,6 +2737,242 @@ fn slot_free(args: &[Value], _natives: &NativeTable) -> Result<Value, CoreEvalEr
   let slot = reg
     .get_mut(idx)
     .ok_or_else(|| CoreEvalError::NativeArgError(format!("slot_free: no such Slot {handle}")))?;
+  *slot = None;
+  drop(reg);
+  Ok(unit_value())
+}
+
+// ── Slice (init/src/view.mo) ───────────────────────────────────────────
+//
+// The indexed contiguous view. Same registry-as-type-system discipline as
+// `Cell`/`Slot`: the host does not enforce linearity, so an unknown or
+// freed handle is a native error rather than a stale read. Split siblings
+// share ONE backing `Arc<Vec<Value>>` with disjoint ranges -- the compiled
+// backend's `SliceObj`-shares-`root` shape. A `set` goes through
+// `Arc::make_mut`, so a write copies only if a sibling still holds the
+// buffer; because the ranges are disjoint, that copy is never observable
+// through the other handle.
+
+struct SliceState {
+  root: std::sync::Arc<Vec<Value>>,
+  offset: usize,
+  length: usize,
+}
+
+static SLICES: std::sync::LazyLock<std::sync::Mutex<Vec<Option<SliceState>>>> =
+  std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
+const SLICE_HANDLE_BASE: u64 = (1 << 40) + (1 << 38);
+
+fn slices() -> Result<std::sync::MutexGuard<'static, Vec<Option<SliceState>>>, CoreEvalError> {
+  SLICES
+    .lock()
+    .map_err(|_| CoreEvalError::NativeArgError("slice registry poisoned".into()))
+}
+
+fn slice_index(handle: u64, name: &str) -> Result<usize, CoreEvalError> {
+  if handle < SLICE_HANDLE_BASE {
+    return Err(CoreEvalError::NativeArgError(format!(
+      "{name}: not a Slice handle {handle}"
+    )));
+  }
+  usize::try_from(handle - SLICE_HANDLE_BASE)
+    .map_err(|_| CoreEvalError::NativeArgError(format!("{name}: no such Slice {handle}")))
+}
+
+fn slice_handle(state: SliceState) -> Result<Value, CoreEvalError> {
+  let mut reg = slices()?;
+  reg.push(Some(state));
+  let id = (reg.len() - 1) as u64;
+  drop(reg);
+  Ok(handle_value(SLICE_HANDLE_BASE + id))
+}
+
+/// The elements of a `List A`, in order.
+fn list_elements(v: &Value, natives: &NativeTable) -> Result<Vec<Value>, CoreEvalError> {
+  let cons = require_ctor(natives.well_known.list_cons, "List.cons")?;
+  let mut out = Vec::new();
+  let mut cur = v;
+  loop {
+    match cur {
+      Value::Con { tag, args } if *tag == cons.tag => {
+        let head = args
+          .first()
+          .cloned()
+          .ok_or_else(|| CoreEvalError::NativeArgError("list: cons without a head".into()))?;
+        out.push(head);
+        cur = args
+          .get(1)
+          .ok_or_else(|| CoreEvalError::NativeArgError("list: cons without a tail".into()))?;
+      }
+      // Any other constructor is the empty list (`List.empty`).
+      _ => return Ok(out),
+    }
+  }
+}
+
+fn make_result_err(natives: &NativeTable, payload: Value) -> Result<Value, CoreEvalError> {
+  let err = require_ctor(natives.well_known.result_err, "Result.err")?;
+  Ok(Value::Con {
+    tag: err.tag,
+    args: std::sync::Arc::new(vec![payload].into()),
+  })
+}
+
+fn make_pair(natives: &NativeTable, first: Value, second: Value) -> Result<Value, CoreEvalError> {
+  let pair = require_ctor(natives.well_known.pair_pair, "Pair.pair")?;
+  Ok(Value::Con {
+    tag: pair.tag,
+    args: std::sync::Arc::new(vec![first, second].into()),
+  })
+}
+
+/// `slice_of_list (xs : List A) (n : I64) : Result I64 (Slice n A)`.
+/// A mismatched count is `Result.err (actual length)`.
+fn slice_of_list(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "slice_of_list needs 2 args".into(),
+    ));
+  }
+  let n = extract_int(&args[1])?;
+  let elems = list_elements(&args[0], natives)?;
+  let actual = elems.len() as i64;
+  if n < 0 || actual != n {
+    return make_result_err(natives, Value::Lit(IrLit::Num(actual, NumSuffix::I64)));
+  }
+  let handle = slice_handle(SliceState {
+    root: std::sync::Arc::new(elems),
+    offset: 0,
+    length: n as usize,
+  })?;
+  make_result_ok(natives, handle)
+}
+
+/// `slice_length (s : Slice n A) : Pair I64 (Slice n A)`.
+fn slice_length(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let handle = extract_handle_id(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("slice_length needs 1 arg".into()))?,
+  )?;
+  let idx = slice_index(handle, "slice_length")?;
+  let reg = slices()?;
+  let state = reg.get(idx).and_then(|slot| slot.as_ref()).ok_or_else(|| {
+    CoreEvalError::NativeArgError(format!("slice_length: no such Slice {handle}"))
+  })?;
+  let len = state.length as i64;
+  drop(reg);
+  make_pair(
+    natives,
+    Value::Lit(IrLit::Num(len, NumSuffix::I64)),
+    handle_value(handle),
+  )
+}
+
+/// `slice_get (s : Slice n A) (i : I64) : Result (Slice n A) (Pair A (Slice n A))`.
+fn slice_get(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "slice_get needs 2 args".into(),
+    ));
+  }
+  let handle = extract_handle_id(&args[0])?;
+  let i = extract_int(&args[1])?;
+  let idx = slice_index(handle, "slice_get")?;
+  let reg = slices()?;
+  let state = reg
+    .get(idx)
+    .and_then(|slot| slot.as_ref())
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("slice_get: no such Slice {handle}")))?;
+  if i < 0 || i as usize >= state.length {
+    drop(reg);
+    return make_result_err(natives, handle_value(handle));
+  }
+  let elem = state.root[state.offset + i as usize].clone();
+  drop(reg);
+  let pair = make_pair(natives, elem, handle_value(handle))?;
+  make_result_ok(natives, pair)
+}
+
+/// `slice_set (s : Slice n A) (i : I64) (a : A) : Result (Slice n A) (Slice n A)`.
+fn slice_set(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 3 {
+    return Err(CoreEvalError::NativeArgError(
+      "slice_set needs 3 args".into(),
+    ));
+  }
+  let handle = extract_handle_id(&args[0])?;
+  let i = extract_int(&args[1])?;
+  let idx = slice_index(handle, "slice_set")?;
+  let mut reg = slices()?;
+  let state = reg
+    .get_mut(idx)
+    .and_then(|slot| slot.as_mut())
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("slice_set: no such Slice {handle}")))?;
+  if i < 0 || i as usize >= state.length {
+    drop(reg);
+    return make_result_err(natives, handle_value(handle));
+  }
+  std::sync::Arc::make_mut(&mut state.root)[state.offset + i as usize] = args[2].clone();
+  drop(reg);
+  make_result_ok(natives, handle_value(handle))
+}
+
+/// `slice_split (s : Slice n A) (k : Nat) (ix : I64) : Result ...`.
+/// The consumed handle is cleared and two fresh handles are registered
+/// over the same backing store.
+fn slice_split(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 3 {
+    return Err(CoreEvalError::NativeArgError(
+      "slice_split needs 3 args".into(),
+    ));
+  }
+  let handle = extract_handle_id(&args[0])?;
+  let k = extract_int(&args[2])?;
+  let idx = slice_index(handle, "slice_split")?;
+  let (root, offset, length) = {
+    let reg = slices()?;
+    let state = reg.get(idx).and_then(|slot| slot.as_ref()).ok_or_else(|| {
+      CoreEvalError::NativeArgError(format!("slice_split: no such Slice {handle}"))
+    })?;
+    (state.root.clone(), state.offset, state.length)
+  };
+  if k < 0 || k as usize > length {
+    return make_result_err(natives, handle_value(handle));
+  }
+  let left = SliceState {
+    root: root.clone(),
+    offset,
+    length: k as usize,
+  };
+  let right = SliceState {
+    root,
+    offset: offset + k as usize,
+    length: length - k as usize,
+  };
+  let first = slice_handle(left)?;
+  let second = slice_handle(right)?;
+  // The split handle is consumed: nothing may reach it again.
+  {
+    let mut reg = slices()?;
+    reg[idx] = None;
+  }
+  let pair = make_pair(natives, first, second)?;
+  make_result_ok(natives, pair)
+}
+
+fn slice_free(args: &[Value], _natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let handle = extract_handle_id(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("slice_free needs 1 arg".into()))?,
+  )?;
+  let idx = slice_index(handle, "slice_free")?;
+  let mut reg = slices()?;
+  let slot = reg
+    .get_mut(idx)
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("slice_free: no such Slice {handle}")))?;
   *slot = None;
   drop(reg);
   Ok(unit_value())
