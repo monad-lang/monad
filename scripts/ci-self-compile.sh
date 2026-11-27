@@ -151,6 +151,19 @@ rm -rf "$out"
 nightly_rc=0
 MONAD_HOST_BIN="$nightly" scripts/build-self-hosted.sh "$out" || nightly_rc=$?
 if [ "$nightly_rc" -ne 0 ]; then
+  # A signal exit (>= 128) is NOT a compile verdict: the host was killed, and
+  # on these runners that means the memory limit, not the tree. Reporting it as
+  # a build failure sends the reader to the two-step-rollout advice while the
+  # real cause is a machine that ran out of memory -- run 46043704292's host was
+  # SIGKILLed at 1.09 GB RSS during a global OOM storm and got exactly that
+  # message.
+  if [ "$nightly_rc" -ge 128 ]; then
+    say "FAILED: the latest nightly ($nightly_commit) was killed by signal $((nightly_rc - 128)) while building this tree (exit $nightly_rc)."
+    say "That is a RESOURCE failure, not a compile verdict: nothing here says the"
+    say "nightly cannot read the tree. Re-run once the host has headroom (AGENTS.md's"
+    say "memory discipline); the gate is not weakened by doing so."
+    exit "$nightly_rc"
+  fi
   rust_fallback "the latest nightly ($nightly_commit) cannot build this tree"
 fi
 
@@ -164,7 +177,14 @@ fi
 # Building is not enough: the binary has to do the job it was built for. A
 # nightly that compiles the sources but miscompiles them is the failure class
 # the old fallback scheme accepted (see the await_fiber_raw incident).
-if ! "$out/monad" check cli/src/main.mo; then
+check_rc=0
+"$out/monad" check cli/src/main.mo || check_rc=$?
+if [ "$check_rc" -ne 0 ]; then
+  if [ "$check_rc" -ge 128 ]; then
+    say "FAILED: the nightly-built compiler ($nightly_commit) was killed by signal $((check_rc - 128)) checking cli/src/main.mo (exit $check_rc)."
+    say "That is a RESOURCE failure, not a compile verdict. Re-run with headroom."
+    exit "$check_rc"
+  fi
   rust_fallback "the nightly-built compiler ($nightly_commit) cannot check cli/src/main.mo"
 fi
 built="$("$out/monad" version 2>/dev/null | tr -d '[:space:]' || true)"

@@ -7,8 +7,10 @@
 #
 # The cases cover: the bootstrap window (nightly before the floor), a floor
 # the clone cannot resolve, the strict success path, a nightly that cannot
-# build, a nightly-built compiler that cannot check itself, the explicit local
-# opt-out, and the no-monadup failure.
+# build, a nightly the kernel killed for memory (which must be reported as a
+# resource failure rather than a compile verdict), a nightly-built compiler
+# that cannot check itself, the explicit local opt-out, and the no-monadup
+# failure.
 set -euo pipefail
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -36,10 +38,15 @@ printf '%s\n' "$real_floor" > "$work/floor-real"
 #   build cli/src/main.mo -o OUT                          (a `monad` host)
 #   run cli/src/main.mo build cli/src/main.mo -o OUT      (everything else)
 # FAKE_FAIL_ONE_RUNG=1 makes only the one-rung (nightly) build fail, so the
-# opt-out case can have a working fallback.
+# opt-out case can have a working fallback. FAKE_KILL_ONE_RUNG=1 instead dies
+# of SIGKILL, which is what the kernel's OOM killer does to a host that runs
+# out of memory: the parent sees exit 137, not a compiler diagnostic.
 cat > "$work/host" <<'HOST'
 #!/usr/bin/env bash
 set -eu
+if [ "$1" = build ] && [ "${FAKE_KILL_ONE_RUNG:-0}" = 1 ]; then
+  kill -KILL $$
+fi
 if [ "$1" = build ] && [ "${FAKE_FAIL_ONE_RUNG:-0}" = 1 ]; then
   echo "host: simulated nightly build failure" >&2
   exit 1
@@ -113,6 +120,14 @@ expect_log() {
   fi
 }
 
+expect_no_log() {
+  local needle="$1" label="$2"
+  if grep -qF "$needle" "$LAST_LOG"; then
+    cat "$LAST_LOG" >&2
+    fail "$label: log unexpectedly contains: $needle"
+  fi
+}
+
 # ─── cases ─────────────────────────────────────────────────────────────────
 
 make_nightly
@@ -162,7 +177,17 @@ expect_log "Rust host fallback" "opt-out fallback"
 NIGHTLY="$head_commit" run_gate 1 "built compiler check failure" FAKE_CHECK_RC=1
 expect_log "cannot check cli/src/main.mo" "built compiler check failure"
 
-# 7. No usable installer is a failure by default. `MONADUP_BIN` is the
+# 7. A host the kernel killed (SIGKILL, exit 137) did not fail to read the tree
+#    -- it ran out of memory. The gate must still fail (an unbuilt tree is not
+#    verified) but the message must say so, or the reader is sent to the
+#    two-step-rollout advice for a machine problem. Run 46043704292 is the
+#    observed case: a 1.09 GB host SIGKILLed mid-compile during a global OOM.
+NIGHTLY="$head_commit" run_gate 1 "killed host" FAKE_KILL_ONE_RUNG=1
+expect_log "killed by signal 9" "killed host"
+expect_log "RESOURCE failure" "killed host"
+expect_no_log "last nightly must be able to build this tree" "killed host"
+
+# 8. No usable installer is a failure by default. `MONADUP_BIN` is the
 #    explicit override; an unusable one must fail rather than silently reach
 #    for the repo stub (which would hit the network).
 bash_bin="$(command -v bash)"
