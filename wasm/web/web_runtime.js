@@ -106,9 +106,16 @@ let currentEvent = null;
 // ever holds their index. The kind numbers are `lib::rtc`'s; the state codes
 // are `web_event::rtc`'s `state_of_code`.
 // `peers` is append-only: the index IS the handle, exactly as for sockets.
-const peers = [];
-const mediaStreams = [];
-const mediaOps = [];
+//
+// Index 0 is reserved in all three so it IS the null handle, the convention
+// `webKeys`, `glContexts` and `glObjects` already follow. Without the
+// reservation the first peer/stream/op takes id 0, which is the value the
+// API uses for "nothing": `media_stream` answers 0 until a request finishes,
+// so `MediaStream.result` on a pending op would name the first LIVE stream,
+// and `attach`/`add_stream` would bind the wrong one instead of refusing.
+const peers = [null];
+const mediaStreams = [null];
+const mediaOps = [null];
 
 const RTC_KIND_SDP = 1;
 const RTC_KIND_ICE = 2;

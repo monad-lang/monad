@@ -1122,7 +1122,11 @@ extern int64_t monad_js_media_error(int64_t op, int64_t ptr, int64_t max);
 
 __attribute__((import_module("monad"), import_name("media_free")))
 extern int64_t monad_js_media_free(int64_t stream);
+
+__attribute__((import_module("monad"), import_name("media_free_op")))
 extern int64_t monad_js_media_free_op(int64_t op);
+
+__attribute__((import_module("monad"), import_name("media_stream_of")))
 extern int64_t monad_js_media_stream_of(int64_t id);
 
 __attribute__((import_module("monad"), import_name("dom_set_src_object")))

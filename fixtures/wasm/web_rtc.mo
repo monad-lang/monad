@@ -24,7 +24,7 @@ use web_wasm::rtc {
 }
 use web_wasm::media_stream {
     MediaStream.request_av, MediaStream.poll, MediaStream.result, MediaStream.attach,
-    MediaStream.stop,
+    MediaStream.stop, MediaStream.release,
 }
 use web_wasm::dom {Dom.create, Dom.append}
 use web_wasm::console {Console.log}
@@ -193,6 +193,26 @@ def imp_camera : IO Unit := do {
         MediaStream.stop stream
     }
     else IO.pure unit
+}
+
+/// The null handle must be REFUSED. Index 0 of the host's stream table is
+/// reserved so that "no stream yet" (`MediaStream.result` before `poll`
+/// answers 1) is a handle nothing accepts -- otherwise it would name the
+/// first live stream and `attach` would bind the wrong one.
+///
+/// Reported as two lines: `null:attach=<0|1>` for the pending op's handle
+/// and `null:stop=1` for the call itself, which always returns unit.
+#[export "c"]
+def imp_null_handle : IO Unit := do {
+    // Deliberately NOT polled: the op is still pending, so `result` answers
+    // the null handle.
+    let pending <- MediaStream.request_av;
+    let unborn <- MediaStream.result pending;
+    let video <- Dom.create "video";
+    let shown <- MediaStream.attach unborn video;
+    let ok := match shown { Result.ok _ => 1i64, Result.err _ => 0i64 };
+    Console.log (String.concat "null:attach=" (I64.to_string ok));
+    MediaStream.release pending
 }
 
 /// A channel that is not open must report a failure rather than throw.
