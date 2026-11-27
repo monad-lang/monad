@@ -268,6 +268,13 @@ expectLog(sendLogs, 'send:bytes=0');
 const closedLogs = captureLogs(() => instance.exports.imp_closed_send());
 expectLog(closedLogs, 'closed:send=0');
 
+// ── the null handle is REFUSED. Index 0 of the host's stream table is
+// reserved, so the handle a still-pending `getUserMedia` answers names
+// nothing: `attach` must fail rather than bind the first live stream. ──
+peers.length = 0;
+const nullLogs = captureLogs(() => instance.exports.imp_null_handle());
+expectLog(nullLogs, 'null:attach=0');
+
 // ── a remote stream: `ontrack` must REGISTER the stream, so the app gets a
 // handle it can attach -- that is the receive half of media, and the pure
 // layer names it `RtcEvent.track`. Before the fix nothing was registered and
@@ -285,8 +292,10 @@ if (streamsCreated.length !== remoteBefore) fail('a remote track created a local
 // ── the camera: begin, poll, attach to a `<video>`, stop ──
 const camLogs = captureLogs(() => instance.exports.imp_camera());
 expectLog(camLogs, 'camera:poll=0');
-if (requestedConstraints.length !== 1) fail(`getUserMedia was called ${requestedConstraints.length} times`);
-const got = requestedConstraints[0];
+// Two requests by now: `imp_null_handle` starts one (deliberately unpolled)
+// and `imp_camera` starts the other.
+if (requestedConstraints.length !== 2) fail(`getUserMedia was called ${requestedConstraints.length} times`);
+const got = requestedConstraints[requestedConstraints.length - 1];
 if (got.audio !== true || got.video !== true) fail(`constraints were ${JSON.stringify(got)}`);
 
 // The promise settles on a microtask, so the poll inside the export saw
