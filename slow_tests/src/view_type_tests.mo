@@ -259,3 +259,76 @@ def test_a_linear_producing_function_is_accepted : IO Bool := do {
     let diags <- check_source_diags src "linear_function";
     return (List.is_empty diags)
 }
+
+// ── Slice: the indexed contiguous handle ───────────────────────────
+//
+// `Slice n A` is `#[linear]` like `Cell`/`Slot`, so the same four rules
+// apply, plus one of its own: the length index is a runtime-checked
+// contract (`Slice.of_list` compares the list with the `n` it is given),
+// never a licence to skip the bounds check.
+
+#[test]
+def test_a_dropped_slice_is_never_used : IO Bool := do {
+    let src : String :=
+        "use init::view {Slice}\n"
+        ++ "def bad (s : Slice 3 I64) : I64 := 0\n";
+    let diags <- check_source_diags src "slice_dropped";
+    return (diags_contain "never used" diags)
+}
+
+#[test]
+def test_a_slice_cannot_be_used_twice : IO Bool := do {
+    let src : String :=
+        "use init::view {Slice}\n"
+        ++ "def bad (s : Slice 3 I64) : Unit :=\n"
+        ++ "  let _ := Slice.free s in\n"
+        ++ "  let _ := Slice.free s in\n"
+        ++ "  unit\n";
+    let diags <- check_source_diags src "slice_twice";
+    return (diags_contain "is used 2 times" diags)
+}
+
+#[test]
+def test_a_slice_may_not_be_shared : IO Bool := do {
+    let src : String :=
+        "use init::view {Slice}\n"
+        ++ "def bad (s : Slice 3 I64) : Unit := let _ := Shared.of s in unit\n";
+    let diags <- check_source_diags src "slice_shared";
+    return (diags_contain "re-readable container" diags)
+}
+
+#[test]
+def test_a_copy_instance_for_a_slice_is_rejected : IO Bool := do {
+    let src : String :=
+        "use init::view {Slice}\n"
+        ++ "instance Copy (Slice 3 I64) {\n"
+        ++ "  def copy (s : Slice 3 I64) : Pair (Slice 3 I64) (Slice 3 I64) := Pair.pair s s\n"
+        ++ "}\n";
+    let diags <- check_source_diags src "slice_copy";
+    return (diags_contain "is not allowed for the linear or proof type" diags)
+}
+
+/// P12: a nullary def may not name a value that contains a linear handle --
+/// every reference would hand out the same slice.
+#[test]
+def test_a_nullary_def_may_not_hold_a_slice : IO Bool := do {
+    let src : String :=
+        "use init::view {Slice, SliceError}\n"
+        ++ "def bad : Result SliceError (Slice 3 I64) := Slice.of_list [] 3\n";
+    let diags <- check_source_diags src "slice_global";
+    return (diags_contain "cannot be a global value" diags)
+}
+
+/// The acceptance twin: build, read, free on every path.
+#[test]
+def test_a_slice_build_and_free_is_accepted : IO Bool := do {
+    let src : String :=
+        "use init::view {Slice}\n"
+        ++ "def good (xs : List I64) : Unit :=\n"
+        ++ "  match Slice.of_list xs 3 {\n"
+        ++ "    Result.ok s => Slice.free s,\n"
+        ++ "    Result.err _e => unit,\n"
+        ++ "  }\n";
+    let diags <- check_source_diags src "slice_good";
+    return (List.is_empty diags)
+}

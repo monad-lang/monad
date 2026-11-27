@@ -7,7 +7,7 @@
 /// The type-level half (linearity, no Copy, no capture, no Shared) is
 /// asserted by `lang/src/module.mo`'s e2e fixtures; these pin the four
 /// natives round-tripping on a real runtime.
-use init::view {Cell, Empty, Full, Slot}
+use init::view {Cell, Empty, Full, Slice, SliceError, Slot}
 
 def finish_with_42 (p : Pair I64 (Cell I64)) : Bool :=
     match p {
@@ -196,4 +196,175 @@ def test_slot_swap_moves_non_copy_payloads : Bool :=
     let p := Slot.swap a b in
     match p {
         Pair.pair a2 b2 => slot_swap_read a2 b2,
+    }
+
+// ── Slice ────────────────────────────────────────────────────────────
+
+def slice_free_and (s : Slice 3 I64) (answer : Bool) : Bool :=
+    let _ := Slice.free s in answer
+
+def slice_length_is (s : Slice 3 I64) (want : I64) : Bool :=
+    match Slice.length s {
+        Pair.pair n s1 => slice_free_and s1 (I64.beq n want),
+    }
+
+#[test]
+def test_slice_of_list_reports_its_length : Bool :=
+    match Slice.of_list [10, 20, 30] 3 {
+        Result.ok s => slice_length_is s 3,
+        Result.err _e => false,
+    }
+
+/// The index is a runtime-checked contract: a list that does not have it
+/// is refused, with the actual length.
+#[test]
+def test_slice_of_list_rejects_a_wrong_length : Bool :=
+    match Slice.of_list [1, 2, 3] 2 {
+        Result.ok s => let _ := Slice.free s in false,
+        Result.err e => I64.beq e.actual 3,
+    }
+
+def slice_read_zero_then_one (first : I64) (s : Slice 3 I64) : Bool :=
+    match Slice.get s 1 {
+        Result.ok p => match p {
+            Pair.pair v s1 => slice_free_and s1 (I64.beq first 10 && I64.beq v 20),
+        },
+        Result.err s1 => slice_free_and s1 false,
+    }
+
+#[test]
+def test_slice_get_reads_elements : Bool :=
+    match Slice.of_list [10, 20, 30] 3 {
+        Result.ok s => match Slice.get s 0 {
+            Result.ok p => match p {
+                Pair.pair first s1 => slice_read_zero_then_one first s1,
+            },
+            Result.err s1 => slice_free_and s1 false,
+        },
+        Result.err _e => false,
+    }
+
+def slice_read_after_set (s : Slice 3 I64) : Bool :=
+    match Slice.get s 1 {
+        Result.ok p => match p {
+            Pair.pair v s1 => slice_free_and s1 (I64.beq v 99),
+        },
+        Result.err s1 => slice_free_and s1 false,
+    }
+
+#[test]
+def test_slice_set_writes_through : Bool :=
+    match Slice.of_list [1, 2, 3] 3 {
+        Result.ok s => match Slice.set s 1 99 {
+            Result.ok s1 => slice_read_after_set s1,
+            Result.err s1 => slice_free_and s1 false,
+        },
+        Result.err _e => false,
+    }
+
+/// An out-of-range read is an error carrying the handle, not a lost
+/// slice: the error arm can still free it.
+#[test]
+def test_slice_get_out_of_range_keeps_the_handle : Bool :=
+    match Slice.of_list [1, 2, 3] 3 {
+        Result.ok s => match Slice.get s 3 {
+            Result.ok p => match p {
+                Pair.pair _v s1 => slice_free_and s1 false,
+            },
+            Result.err s1 => slice_free_and s1 true,
+        },
+        Result.err _e => false,
+    }
+
+#[test]
+def test_slice_set_out_of_range_keeps_the_handle : Bool :=
+    match Slice.of_list [1, 2, 3] 3 {
+        Result.ok s => match Slice.set s 3 99 {
+            Result.ok s1 => slice_free_and s1 false,
+            Result.err s1 => slice_free_and s1 true,
+        },
+        Result.err _e => false,
+    }
+
+def split_half_lengths (s : Slice 4 I64) : Bool :=
+    match Slice.length s {
+        Pair.pair n s1 => slice_free_and4 s1 (I64.beq n 4),
+    }
+
+def slice_free_and4 (s : Slice 4 I64) (answer : Bool) : Bool :=
+    let _ := Slice.free s in answer
+
+/// The halves are indexed: `split_at 2` on `Slice 4` gives two
+/// `Slice 2`s (the right half is `Nat.sub 4 2`, which reduces).
+#[test]
+def test_slice_split_halves_are_indexed : Bool :=
+    match Slice.of_list [1, 2, 3, 4] 4 {
+        Result.ok s => match Slice.split_at s 2 {
+            Result.ok p => match p {
+                Pair.pair l r =>
+                    let pl := Slice.length l in
+                    match pl {
+                        Pair.pair llen l1 =>
+                            let pr := Slice.length r in
+                            match pr {
+                                Pair.pair rlen r1 =>
+                                    let _a := Slice.free l1 in
+                                    let _b := Slice.free r1 in
+                                    I64.beq llen 2 && I64.beq rlen 2,
+                            },
+                    },
+            },
+            Result.err s1 => slice_free_and4 s1 false,
+        },
+        Result.err _e => false,
+    }
+
+/// The halves see the SAME elements: reading the left half's last element
+/// and the right half's first shows the split point. The right half's type
+/// is spelled `Nat.sub 4 2` because that is what `split_at` gives it; the
+/// self-hosted checker reduces it to `2`, and the spelling is what the
+/// Rust host (which has no `Nat` reduction) matches.
+#[test]
+def test_slice_split_ranges_are_disjoint : Bool :=
+    match Slice.of_list [1, 2, 3, 4] 4 {
+        Result.ok s => match Slice.split_at s 2 {
+            Result.ok p => match p {
+                Pair.pair l r => split_read_ends l r,
+            },
+            Result.err s1 => slice_free_and4 s1 false,
+        },
+        Result.err _e => false,
+    }
+
+def split_read_ends (l : Slice 2 I64) (r : Slice (Nat.sub 4 2) I64) : Bool :=
+    match Slice.get l 1 {
+        Result.ok p => match p {
+            Pair.pair lv l1 => split_read_right r lv,
+        },
+        Result.err l1 => let _a := Slice.free l1 in let _b := Slice.free r in false,
+    }
+
+def split_read_right (r : Slice (Nat.sub 4 2) I64) (lv : I64) : Bool :=
+    match Slice.get r 0 {
+        Result.ok p => match p {
+            Pair.pair rv r1 => let _a := Slice.free r1 in I64.beq lv 2 && I64.beq rv 3,
+        },
+        Result.err r1 => let _a := Slice.free r1 in false,
+    }
+
+def slice_free_and_string (s : Slice 3 String) (answer : Bool) : Bool :=
+    let _ := Slice.free s in answer
+
+/// A `String` element: the backing array must stay GC-SCANNED, or Boehm
+/// collects the bytes the elements point at.
+#[test]
+def test_slice_holds_strings : Bool :=
+    match Slice.of_list ["a", "bb", "ccc"] 3 {
+        Result.ok s => match Slice.get s 2 {
+            Result.ok p => match p {
+                Pair.pair v s1 => slice_free_and_string s1 (String.beq v "ccc"),
+            },
+            Result.err s1 => slice_free_and_string s1 false,
+        },
+        Result.err _e => false,
     }

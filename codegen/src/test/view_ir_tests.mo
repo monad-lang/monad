@@ -128,3 +128,87 @@ def test_fused_and_boxed_agree : IO Bool := do {
     let boxed <- compile_source_run_expect escaping_source "view_boxed_run" 42;
     return (fused && boxed)
 }
+
+// ── Slice: the six natives reach the compiled backend ───────────────
+//
+// `Slice` has no fused lowering in v1 -- `split` returns two handles and
+// `get` returns a `Result` -- so what needs pinning is that every one of
+// the six `monad_slice_*` targets is CALLED. A missing `natives.mo` entry
+// fails the call-target gate at compile time and a missing
+// `runtime_declarations` entry fails linking; this one compile covers
+// both, and the run half pins that the wiring computes.
+
+/// A program that exercises all six `Slice` natives and answers 102:
+/// 99 (the `set` wrote it) plus 1 (the left half's first element) plus 2
+/// (its length).
+def slice_source : String :=
+    "use init::view {Slice}\n"
+    ++ "def read_mid (s : Slice 3 I64) : I64 :=\n"
+    ++ "    match Slice.get s 1 {\n"
+    ++ "        Result.ok p => match p {\n"
+    ++ "            Pair.pair v s1 => let _ := Slice.free s1 in v,\n"
+    ++ "        },\n"
+    ++ "        Result.err s1 => let _ := Slice.free s1 in 0 - 2,\n"
+    ++ "    }\n"
+    ++ "def set_and_read (xs : List I64) : I64 :=\n"
+    ++ "    match Slice.of_list xs 3 {\n"
+    ++ "        Result.ok s => match Slice.set s 1 99 {\n"
+    ++ "            Result.ok s1 => read_mid s1,\n"
+    ++ "            Result.err s1 => let _ := Slice.free s1 in 0 - 3,\n"
+    ++ "        },\n"
+    ++ "        Result.err _e => 0 - 4,\n"
+    ++ "    }\n"
+    ++ "def split_halves (s : Slice 4 I64) : I64 :=\n"
+    ++ "    match Slice.split_at s 2 {\n"
+    ++ "        Result.ok p => match p {\n"
+    ++ "            Pair.pair l r => match Slice.length l {\n"
+    ++ "                Pair.pair llen l1 => match Slice.get l1 0 {\n"
+    ++ "                    Result.ok q => match q {\n"
+    ++ "                        Pair.pair v l2 =>\n"
+    ++ "                            let _l := Slice.free l2 in\n"
+    ++ "                            let _r := Slice.free r in\n"
+    ++ "                            I64.add v llen,\n"
+    ++ "                    },\n"
+    ++ "                    Result.err l2 =>\n"
+    ++ "                        let _l := Slice.free l2 in\n"
+    ++ "                        let _r := Slice.free r in\n"
+    ++ "                        0 - 5,\n"
+    ++ "                },\n"
+    ++ "            },\n"
+    ++ "        },\n"
+    ++ "        Result.err s1 => let _ := Slice.free s1 in 0 - 6,\n"
+    ++ "    }\n"
+    ++ "def main (args : List String) : IO I64 := do {\n"
+    ++ "    let p := Slice.of_list [1, 2, 3, 4] 4;\n"
+    ++ "    match p {\n"
+    ++ "        Result.ok s => do {\n"
+    ++ "            let c := set_and_read [0, 0, 0];\n"
+    ++ "            let h := split_halves s;\n"
+    ++ "            return (I64.add c h)\n"
+    ++ "        },\n"
+    ++ "        Result.err _e => do { return 0 },\n"
+    ++ "    }\n"
+    ++ "}\n"
+
+#[test]
+def test_slice_ops_emit_all_six_native_calls : IO Bool := do {
+    let ir <- compile_source_ir slice_source "slice_ir";
+    match ir {
+        Result.err e => do {
+            println ("slice_ir: compile failed: " ++ e);
+            return false
+        },
+        Result.ok text =>
+            return (check_contains text "call i64 @monad_slice_of_list(i64 "
+                && check_contains text "call i64 @monad_slice_length(i64 "
+                && check_contains text "call i64 @monad_slice_get(i64 "
+                && check_contains text "call i64 @monad_slice_set(i64 "
+                && check_contains text "call i64 @monad_slice_split(i64 "
+                && check_contains text "call i64 @monad_slice_free(i64 "),
+    }
+}
+
+/// The same program through the compiled backend.
+#[test]
+def test_slice_program_runs : IO Bool :=
+    compile_source_run_expect slice_source "slice_run" 102
