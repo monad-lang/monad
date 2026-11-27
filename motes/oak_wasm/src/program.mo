@@ -1085,18 +1085,18 @@ def Runtime.set_audio {S : Type} {Msg : Type} (audio : Option AudioCtx)
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
         { root, last, model, queue, stopped, handlers, subs, timers, focus, paint,
-            sockets, sounds, .. } =>
+            sockets, sounds, peers, .. } =>
             RuntimeState.st root last model queue stopped handlers subs timers focus paint
-                sockets audio sounds,
+                sockets audio sounds peers,
     }
 
 def Runtime.set_sounds {S : Type} {Msg : Type} (sounds : List LoadedSound)
     (state : RuntimeState S Msg) : RuntimeState S Msg :=
     match state {
         { root, last, model, queue, stopped, handlers, subs, timers, focus, paint,
-            sockets, audio, .. } =>
+            sockets, audio, peers, .. } =>
             RuntimeState.st root last model queue stopped handlers subs timers focus paint
-                sockets audio sounds,
+                sockets audio sounds peers,
     }
 
 /// Resume a suspended context. This is the gesture hook: `Runtime.dispatch`
