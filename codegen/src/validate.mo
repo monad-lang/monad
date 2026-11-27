@@ -453,14 +453,16 @@ def export_has_implicit_param (typ : Term) : Bool := match term_peel typ {
     _ => false,
 }
 
-/// Fail fast on a struct literal that reached codegen still spelled as
-/// `Literal.struct_lit`/`Literal.struct_update` instead of a real
-/// `Term.con`.
+/// Fail fast on a SURFACE form (`Literal.match_`, `if_`, `struct_lit`,
+/// `struct_update`) that reached codegen: the checker's job is to turn every
+/// one of them into `Term.elim`/`Term.con` before this pipeline sees it, and
+/// what is left here is the evidence that it did not.
 ///
-/// `compile_lit_ir` compiles both of those to `void_val` -- a silent
-/// placeholder written on the assumption that
-/// `lang/typecheck/infer.mo`'s `type_check_struct_lit` ALWAYS desugars
-/// them first (see its own doc comment there). That assumption holds
+/// The struct half is the older rule. `compile_lit_ir` compiles
+/// `struct_lit`/`struct_update` to `void_val` -- a silent placeholder written
+/// on the assumption that `lang/typecheck/infer.mo`'s
+/// `type_check_struct_lit` ALWAYS desugars them first (see its own doc
+/// comment there). That assumption holds
 /// only for a def that elaboration actually SUCCEEDED on:
 /// `elaborate_module_decls_best_effort` is best-effort by design, and
 /// when `type_check` fails for a def it keeps the ORIGINAL, un-desugared
@@ -484,54 +486,53 @@ def export_has_implicit_param (typ : Term) : Bool := match term_peel typ {
 /// binary finds it.
 ///
 /// Reachable decls only, same reasoning as
-/// `validate_no_unwired_natives`. The fix at any reported site is to
-/// bind the literal to a local with an explicit type annotation first
-/// (AGENTS.md's rule-1 pitfall).
+/// `validate_no_unwired_natives`. For a struct literal the fix at the
+/// reported site is to bind it to a local with an explicit type annotation
+/// first (AGENTS.md's rule-1 pitfall); a surviving `match_`/`if_` is always
+/// a checker bug.
 #[partial]
-def validate_no_undesugared_struct_lits (decl_list : List Decl) : Result CodegenError (List Decl) :=
-    validate_with decl_list (find_undesugared_struct_lit_defs (extract_defs decl_list))
+def validate_no_surface_forms (decl_list : List Decl) : Result CodegenError (List Decl) :=
+    validate_with decl_list (find_surface_form_defs (extract_defs decl_list))
 
-/// One message per reachable def whose body still contains an
-/// un-desugared struct literal -- see
-/// `validate_no_undesugared_struct_lits`'s own doc comment.
+/// One message per reachable def whose body still contains a surface form
+/// -- see `validate_no_surface_forms`'s own doc comment.
 #[partial]
-def find_undesugared_struct_lit_defs (defs : List Def) : List CodegenDiagnostic :=
-    List.reverse (find_undesugared_struct_lit_defs_go defs List.empty)
+def find_surface_form_defs (defs : List Def) : List CodegenDiagnostic :=
+    List.reverse (find_surface_form_defs_go defs List.empty)
 
 #[partial]
-def find_undesugared_struct_lit_defs_go (defs : List Def) (acc : List CodegenDiagnostic) : List CodegenDiagnostic :=
+def find_surface_form_defs_go (defs : List Def) (acc : List CodegenDiagnostic) : List CodegenDiagnostic :=
     match defs {
         List.empty => acc,
         List.cons d rest =>
             match d {
                 Def.mk {name, typ := _typ, term := term_, constraints := _constraints, attrs := _attrs, vis := _vis, ..} =>
-                    if term_has_struct_lit term_
+                    if term_has_surface_form term_
                     then
                         let def_name := name_path_to_str name in
-                        find_undesugared_struct_lit_defs_go rest
-                            (List.cons (CodegenDiagnostic.undesugared_struct_lit def_name) acc)
-                    else find_undesugared_struct_lit_defs_go rest acc,
+                        find_surface_form_defs_go rest
+                            (List.cons (CodegenDiagnostic.surface_form_survived def_name) acc)
+                    else find_surface_form_defs_go rest acc,
             },
     }
 
-/// Structural walk for a surviving `Literal.struct_lit`/
-/// `Literal.struct_update` anywhere inside `t`. This gate's whole reason
+/// Structural walk for a surviving surface form anywhere inside `t`. This gate's whole reason
 /// for existing is that its caller runs on BEST-EFFORT decls -- a def
 /// `type_check` rejected is left un-elaborated and codegen proceeds on it
 /// anyway (see this file's own doc comment above on the SIGSEGV that
 /// shape caused) -- so, unlike a gate that only ever sees type-checked
 /// terms, this one is exactly where a leftover `Term.quote_`/`var_macro`
 /// is most likely to still be sitting; it must cover them for real.
-def term_has_struct_lit (t : Term) : Bool := match t {
+def term_has_surface_form (t : Term) : Bool := match t {
     Term.var _idx _dbg => false,
-    Term.lam _dbg typ body => term_has_struct_lit typ || term_has_struct_lit body,
+    Term.lam _dbg typ body => term_has_surface_form typ || term_has_surface_form body,
     // Merged; inert on the folded flavour -- a quantifier's domain is a
     // sort, and a sort carries no struct literal.
-    Term.pi _b arg ret => term_has_struct_lit arg || term_has_struct_lit ret,
-    Term.app fun_ arg_ => term_has_struct_lit fun_ || term_has_struct_lit arg_,
-    Term.ntv native => native_has_struct_lit native,
-    Term.con con_ => con_has_struct_lit con_,
-    Term.lit lit_ => lit_has_struct_lit lit_,
+    Term.pi _b arg ret => term_has_surface_form arg || term_has_surface_form ret,
+    Term.app fun_ arg_ => term_has_surface_form fun_ || term_has_surface_form arg_,
+    Term.ntv native => native_has_surface_form native,
+    Term.con con_ => con_has_surface_form con_,
+    Term.lit lit_ => lit_has_surface_form lit_,
     // A sort carries no struct literal.
     Term.sort _level => false,
     Term.hole => false,
@@ -539,14 +540,14 @@ def term_has_struct_lit (t : Term) : Bool := match t {
     Term.var_macro _idx _dbg => false,
     // Must recurse, mirroring the `ctx` arm below: a struct literal can sit
     // under an unexpanded quote.
-    Term.quote_ inner => term_has_struct_lit inner,
+    Term.quote_ inner => term_has_surface_form inner,
     // Must recurse, or a struct literal under a located term passes the
     // gate and later compiles to a `void_val` placeholder.
-    Term.ctx _loc inner => term_has_struct_lit inner,
+    Term.ctx _loc inner => term_has_surface_form inner,
     // Must recurse: once `PathP` takes type arguments a struct literal can
     // sit under one, and this gate is what keeps it from reaching the
     // `void_val` placeholder.
-    Term.cubical c => match c { { prim := _, args := args } => terms_have_struct_lit args },
+    Term.cubical c => match c { { prim := _, args := args } => terms_have_surface_form args },
     // Must recurse into all five term-bearing fields, same reason as
     // `ctx`/`cubical` above. Destructured, not projected through `e.`,
     // like the `cubical` arm just above -- the termination checker's
@@ -560,68 +561,60 @@ def term_has_struct_lit (t : Term) : Bool := match t {
                 motive := motive,
                 minors := minors,
                 scrutinee := scrutinee } =>
-                    terms_have_struct_lit params
-                        || terms_have_struct_lit indices
-                        || term_has_struct_lit motive
-                        || minors_have_struct_lit minors
-                        || term_has_struct_lit scrutinee,
+                    terms_have_surface_form params
+                        || terms_have_surface_form indices
+                        || term_has_surface_form motive
+                        || minors_have_surface_form minors
+                        || term_has_surface_form scrutinee,
         },
 }
 
-def terms_have_struct_lit (ts : List Term) : Bool := match ts {
+def terms_have_surface_form (ts : List Term) : Bool := match ts {
     List.empty => false,
-    List.cons x rest => term_has_struct_lit x || terms_have_struct_lit rest,
+    List.cons x rest => term_has_surface_form x || terms_have_surface_form rest,
 }
 
-def minors_have_struct_lit (ms : List Minor) : Bool := match ms {
+def minors_have_surface_form (ms : List Minor) : Bool := match ms {
     List.empty => false,
     List.cons m rest =>
         match m {
-            Minor.case body => term_has_struct_lit body || minors_have_struct_lit rest,
-            Minor.impossible => minors_have_struct_lit rest,
+            Minor.case body => term_has_surface_form body || minors_have_surface_form rest,
+            Minor.impossible => minors_have_surface_form rest,
         },
 }
 
-def lit_has_struct_lit (l : Literal) : Bool := match l {
+/// The four SURFACE constructors the checker must have turned into
+/// `Term.elim`/`Term.con` before codegen sees them. Their arguments are not
+/// walked: whether they are well-formed is irrelevant once the form itself
+/// is a survivor.
+def lit_has_surface_form (l : Literal) : Bool := match l {
     Literal.num _n _suffix => false,
     Literal.flt _text _suffix => false,
     Literal.str _s => false,
     Literal.char _c => false,
-    Literal.if_ cond then_ else_ =>
-        term_has_struct_lit cond || term_has_struct_lit then_ || term_has_struct_lit else_,
-    Literal.match_ scrutinee cases =>
-        term_has_struct_lit scrutinee || cases_have_struct_lit cases,
+    Literal.if_ _cond _then_ _else_ => true,
+    Literal.match_ _scrutinee _cases => true,
     Literal.struct_lit _fields _type_name => true,
     Literal.struct_update _base _fields => true,
 }
 
 #[partial]
-def native_has_struct_lit (n : Native) : Bool := match n {
-    Native.mk _name _num_args args => opt_terms_have_struct_lit args,
+def native_has_surface_form (n : Native) : Bool := match n {
+    Native.mk _name _num_args args => opt_terms_have_surface_form args,
 }
 
 #[partial]
-def con_has_struct_lit (c : Con) : Bool := match c {
-    Con.mk _name _typ_name _num_args args => opt_terms_have_struct_lit args,
+def con_has_surface_form (c : Con) : Bool := match c {
+    Con.mk _name _typ_name _num_args args => opt_terms_have_surface_form args,
 }
 
 #[partial]
-def opt_terms_have_struct_lit (args : List (Option Term)) : Bool := match args {
+def opt_terms_have_surface_form (args : List (Option Term)) : Bool := match args {
     List.empty => false,
     List.cons opt_ rest =>
         match opt_ {
-            Option.some t => term_has_struct_lit t || opt_terms_have_struct_lit rest,
-            Option.none => opt_terms_have_struct_lit rest,
-        },
-}
-
-#[partial]
-def cases_have_struct_lit (cases : List MatchCase) : Bool := match cases {
-    List.empty => false,
-    List.cons c rest =>
-        match c {
-            MatchCase.mk _name _args body _fp _typ_name =>
-                term_has_struct_lit body || cases_have_struct_lit rest,
+            Option.some t => term_has_surface_form t || opt_terms_have_surface_form rest,
+            Option.none => opt_terms_have_surface_form rest,
         },
 }
 
@@ -996,14 +989,14 @@ pub def report_elab_stats (verbose : Bool) (failed : List String) (elaborated : 
         let reach_elab := restrict_decls_to_names (reachable_def_names (extract_defs reachable) str_map_empty) elaborated;
         let cc_all := find_unresolved_class_calls_decls classes elaborated;
         let cc_reach := find_unresolved_class_calls_decls classes reach_elab;
-        let sl_all := find_undesugared_struct_lit_defs (extract_defs elaborated);
-        let sl_reach := find_undesugared_struct_lit_defs (extract_defs reach_elab);
+        let sl_all := find_surface_form_defs (extract_defs elaborated);
+        let sl_reach := find_surface_form_defs (extract_defs reach_elab);
         let spread0 : CtorSpread := { counts := str_map_empty, first := str_map_empty, arity_multi := str_map_empty, bare_names := 0, multi_owner := 0, multi_arity := 0 };
         let spread := scan_ctor_spread (List.reverse (collect_ctor_claims_inds (extract_inductives reachable) List.empty)) spread0;
         let l_swallowed : String := "elab_stats: swallowed=" ++ I64.to_string (List.length failed);
         let swallowed_lines : List String := List.map (fn m => "elab_stats: swallowed " ++ m) (stats_take failed 100);
         let l_calls : String := "elab_stats: unresolved_class_call_sites graph=" ++ I64.to_string (List.length cc_all) ++ " reachable=" ++ I64.to_string (List.length cc_reach);
-        let l_lits : String := "elab_stats: undesugared_struct_lit_defs graph=" ++ I64.to_string (List.length sl_all) ++ " reachable=" ++ I64.to_string (List.length sl_reach);
+        let l_lits : String := "elab_stats: surface_form_survived_defs graph=" ++ I64.to_string (List.length sl_all) ++ " reachable=" ++ I64.to_string (List.length sl_reach);
         let l_ctors : String := "elab_stats: ctor_bare_names reachable=" ++ I64.to_string spread.bare_names ++ " multi_owner=" ++ I64.to_string spread.multi_owner ++ " multi_arity=" ++ I64.to_string spread.multi_arity;
         let samples : List String := List.map (fn m => "elab_stats: sample " ++ m) (stats_take cc_reach 5);
         print_stats_lines (List.append [l_swallowed, l_calls, l_lits, l_ctors] (List.append swallowed_lines samples))

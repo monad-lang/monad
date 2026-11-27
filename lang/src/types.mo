@@ -1012,8 +1012,8 @@ pub type Literal {
     /// annotated struct literal to a real `Term.con` before use; this
     /// variant survives only when best-effort elaboration fails, and
     /// every survivor is rejected fail-fast by
-    /// `validate_no_undesugared_struct_lits` (compile path) or
-    /// `lower_literal`'s `le_struct_lit_survived` (eval path). New code
+    /// `validate_no_surface_forms` (compile path) or
+    /// `lower_literal`'s `le_surface_form_survived` (eval path). New code
     /// should not add consumers for it.
     /// A struct-literal expression (`{ field := value, ... }`),
     /// optionally self-annotated with which struct it builds
@@ -1028,8 +1028,8 @@ pub type Literal {
     /// codegen (`desugar_struct_lits_decls`, `codegen/emit.mo`)
     /// rewrite a struct update away before use; this variant survives
     /// only when best-effort elaboration fails, and every survivor is
-    /// rejected fail-fast by `validate_no_undesugared_struct_lits`
-    /// (compile path) or `lower_literal`'s `le_struct_lit_survived`
+    /// rejected fail-fast by `validate_no_surface_forms`
+    /// (compile path) or `lower_literal`'s `le_surface_form_survived`
     /// (eval path). New code should not add consumers for it.
     /// `{ base with field := value, ... }` — a copy of `base` (an
     /// existing struct VALUE, not a type name) with the listed fields
@@ -2210,7 +2210,7 @@ pub type Term {
 ///
 /// Call this at the ENTRY of anything that matches on a term's shape --
 /// `flatten_call_spine`, `class_method_ref`, `collect_db_params`,
-/// `term_has_struct_lit` -- rather than adding a `ctx` arm to each. A
+/// `term_has_surface_form` -- rather than adding a `ctx` arm to each. A
 /// shape probe that forgets does not fail loudly; it silently stops
 /// matching, and the call it was meant to resolve quietly does not.
 #[partial]
@@ -2325,6 +2325,9 @@ pub type TypeError {
     /// A match whose scrutinee's type is not a resolvable inductive, so its
     /// coverage cannot be checked.
     match_unresolved_inductive (scrutinee_type : Term),
+    /// A struct update whose base's type is not a resolvable struct, so the
+    /// constructor the update rebuilds cannot be named.
+    struct_update_unresolved_base (base_type : Term),
 }
 
 /// `f #Named.Instance args`'s lowered marker argument: a sentinel `Term.var`

@@ -48,7 +48,7 @@ def dedup_idents_go (names : List Identifier) (seen : List Identifier) : List Id
 /// per compile would cost one full ~8-minute self-compile run each.
 /// The complete list is the point. Shared by both fail-fast
 /// gates: `validate_no_unwired_natives` and
-/// `validate_no_undesugared_struct_lits`.
+/// `validate_no_surface_forms`.
 #[partial]
 def join_semicolon_msgs (msgs : List String) (acc : String) : String :=
     match msgs {

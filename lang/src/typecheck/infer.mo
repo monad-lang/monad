@@ -1161,7 +1161,7 @@ def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDe
                         // de-Bruijn-index-0 one. See both functions' own doc
                         // comments (`lang/scope.mo`) for the full D5 story.
                         Option.none =>
-                            let term := build_dict_field_projection_checked cls dict_id method_name List.empty in
+                            let term := build_dict_field_projection_checked cls dict_id method_name List.empty expected_type in
                             ok (mk_typed term expected_type),
                         Option.some carrier =>
                             resolve_class_method_carrier class_name method_name carrier expected_type scope locals,
@@ -1824,28 +1824,25 @@ def type_check_if (one : Term) (two : Term) (three : Term) (expected_type : Term
                                 Option.some e => err e,
                                 Option.none =>
                                     match find_bool_inductive scope {
-                                        // No `Bool` (a synthetic test scope):
-                                        // keep the old literal shape.
-                                        Option.none =>
-                                            let lit_val : Literal := Literal.if_ cond_term then_term els_term in
-                                            ok (mk_typed (Term.lit lit_val) then_typ),
+                                        // No `Bool` at all means no prelude:
+                                        // there is no inductive to dispatch on.
+                                        Option.none => err (TypeError.match_unresolved_inductive bool_typ),
                                         // R3c full flip: every `if` is a `Bool`
                                         // `Elim`, with a constant motive (the
                                         // two branches already share `then_typ`).
-                                        // An un-informative result type keeps the
-                                        // literal: a hole motive would be
-                                        // rejected by `type_check_elim` on any
-                                        // later re-check of this term.
+                                        // An un-informative result type keeps a
+                                        // HOLE motive rather than a leftover
+                                        // `Literal` -- `type_check_elim` accepts
+                                        // that shape, which only this checker
+                                        // produces.
                                         Option.some ind =>
-                                            if is_hole then_typ
-                                            then
-                                                let lit_val : Literal := Literal.if_ cond_term then_term els_term in
-                                                ok (mk_typed (Term.lit lit_val) then_typ)
-                                            else
-                                                let motive : Term := Term.lam binder_anon bool_typ (term_shift 1 then_typ) in
-                                                let minors : List Minor := bool_elim_minors (inductive_constructors ind) then_term els_term in
-                                                let e : Elim := Elim.mk ind.name List.empty List.empty List.empty motive minors cond_term in
-                                                ok (mk_typed (Term.elim e) then_typ),
+                                            let motive : Term :=
+                                                if is_hole then_typ
+                                                then Term.hole
+                                                else Term.lam binder_anon bool_typ (term_shift 1 then_typ) in
+                                            let minors : List Minor := bool_elim_minors (inductive_constructors ind) then_term els_term in
+                                            let e : Elim := Elim.mk ind.name List.empty List.empty List.empty motive minors cond_term in
+                                            ok (mk_typed (Term.elim e) then_typ),
                                     },
                             },
                         err e => err e,
@@ -1862,8 +1859,8 @@ def type_check_if (one : Term) (two : Term) (three : Term) (expected_type : Term
 /// constant motive (no re-checking -- the arms were just checked against
 /// `expected_type`), so every accepted corpus program keeps its exact
 /// semantics. An unresolvable inductive (`maybe_ind = Option.none`) is an
-/// error: its coverage cannot be checked. A hole result type stays on the old
-/// `Literal.match_` path (complete, since coverage was checked).
+/// error: its coverage cannot be checked. A hole result type gets a HOLE
+/// motive (`elim_from_checked_cases`), never a leftover `Literal.match_`.
 /// A constructor the scrutinee's indices rule out is not missing: its minor is
 /// `impossible`. Only a match the old rule REJECTS can reach
 /// the dependent fallback, which derives a motive and runs `type_check_elim`.
@@ -1889,14 +1886,27 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
                                             match maybe_ind {
                                                 Option.none => err (TypeError.match_unresolved_inductive sc_typ),
                                                 Option.some ind =>
-                                                    if List.is_empty (possibly_uncovered checked_cases ind sc_typ scope)
-                                                        && Bool.not (is_hole unified_typ)
-                                                    then
-                                                        let e : Elim := elim_from_checked_cases ind sc_term sc_typ checked_cases unified_typ in
-                                                        ok (mk_typed (Term.elim e) unified_typ)
-                                                    else
-                                                        let lit_val : Literal := Literal.match_ sc_term checked_cases in
-                                                        ok (mk_typed (Term.lit lit_val) unified_typ),
+                                                    // Coverage was already enforced by
+                                                    // `type_check_cases_accum`; re-derive
+                                                    // the gap so a term that slipped past it
+                                                    // can never be turned into an `Elim`
+                                                    // whose `impossible` minors would lie.
+                                                    //
+                                                    // The scrutinee type here is `case_typ`,
+                                                    // the type the ARMS see: a constructor
+                                                    // application (`match Vec.nil { .. }`) has
+                                                    // its indices computed from the
+                                                    // constructor's own arguments, while its
+                                                    // own inferred type can still be a hole.
+                                                    // `type_check_cases_accum`'s own coverage
+                                                    // check uses the same one.
+                                                    let missing := possibly_uncovered checked_cases ind case_typ scope in
+                                                    match missing {
+                                                        List.empty =>
+                                                            let e : Elim := elim_from_checked_cases ind sc_term case_typ checked_cases unified_typ in
+                                                            ok (mk_typed (Term.elim e) unified_typ),
+                                                        List.cons _ _ => err (TypeError.non_exhaustive_match ind.name missing),
+                                                    },
                                             },
                                         // The arms all checked, but their
                                         // result type is not the declared one:
@@ -1950,12 +1960,19 @@ def reject_opaque_match (maybe_ind : Option Inductive) : Option TypeError :=
 /// today's non-dependent result, in the core's one elimination form. Mirrors
 /// `elaborate_match_to_elim` (R3b), but takes the checked cases and the final
 /// unified type rather than re-deriving them.
-def elim_from_checked_cases (ind : Inductive) (sc_term : Term) (sc_typ : Term)
+def elim_from_checked_cases (ind : Inductive) (sc_term : Term) (seen_typ : Term)
     (checked_cases : List MatchCase) (result_typ : Term) : Elim :=
-    let params : List Term := match flatten_call_spine sc_typ { CallSpine.mk _head args => args } in
-    let motive : Term := Term.lam binder_anon sc_typ (term_shift 1 result_typ) in
+    let params : List Term := match flatten_call_spine seen_typ { CallSpine.mk _head args => args } in
+    // An un-informative result type gets a HOLE motive: the checker knows
+    // nothing about the arms' types, so there is no motive to state. It is
+    // the one shape `type_check_elim` admits without a sort check, and no
+    // source term can write one (an `Elim` is never parsed).
+    let motive : Term :=
+        if is_hole result_typ
+        then Term.hole
+        else Term.lam binder_anon seen_typ (term_shift 1 result_typ) in
     let maybe_ind : Option Inductive := Option.some ind in
-    let minors : List Minor := build_elim_minors (inductive_constructors ind) checked_cases sc_typ maybe_ind in
+    let minors : List Minor := build_elim_minors (inductive_constructors ind) checked_cases seen_typ maybe_ind in
     Elim.mk ind.name List.empty params List.empty motive minors sc_term
 
 /// The dependent fallback: refine the scrutinee to each constructor. Returns
@@ -2221,6 +2238,15 @@ def type_check_elim_motive (e : Elim) (ind : Inductive) (sc_term : Term) (sc_typ
     match e {
         { inductive := _, levels := _, params := _, indices := indices, motive := motive,
             minors := _, scrutinee := _ } =>
+                // A HOLE motive is "the checker had no arm type to derive one
+                // from" -- produced only when every arm's type was unknown, and
+                // no source term can spell an `Elim`. There is no sort to check
+                // and no motive to apply; the minors are still checked (against
+                // a hole expectation, which is exactly the information level
+                // that produced them).
+                if is_hole motive
+                then type_check_elim_minors e ind Term.hole sc_term sc_typ expected_type scope local_types locals
+                else
                 match type_check motive Term.hole scope local_types locals {
                     err err_ => err err_,
                     ok motive_tt =>
@@ -2341,8 +2367,13 @@ def type_check_elim_minors (e : Elim) (ind : Inductive) (motive_term : Term) (sc
             // (real, checked) scrutinee -- `motive y e` for `Eq.rec`, not
             // just `motive e`. `rebuild_call` generalizes the plain
             // `Term.app motive_term sc_term` this was before R4c.
+            // A hole motive has no application to compute (see
+            // `type_check_elim_motive`); the elim's type is then simply the
+            // hole, which unifies with whatever the caller expects.
             let elim_typ : Term :=
-                rebuild_call motive_term (List.append e.indices (List.cons sc_term List.empty)) in
+                if is_hole motive_term
+                then Term.hole
+                else rebuild_call motive_term (List.append e.indices (List.cons sc_term List.empty)) in
             match unify elim_typ expected_type scope locals {
                 err err_ => err err_,
                 ok unified =>
@@ -2449,8 +2480,13 @@ def type_check_elim_minor (ctor : InductConstructor) (minor : Term) (ind : Induc
     // are built from OUTER-context data now sitting under `n` new binders
     // the Pi-chain just introduced.
     let ctor_indices : List Term := terms_shift n (ctor_index_values ind actual_args num_params ctor) in
+    // A hole motive contributes no result type to the minor's Pi chain; the
+    // chain then ends in a hole, which `elim_minor_type_error` accepts for
+    // whatever the minor inferred.
     let expected_minor_typ : Term :=
-        build_elim_minor_pi_chain field_types
+        if is_hole motive_term
+        then Term.hole
+        else build_elim_minor_pi_chain field_types
             (rebuild_call shifted_motive (List.append ctor_indices (List.cons ctor_app List.empty))) in
     // Infer the minor INDEPENDENTLY first. `unify`/`Similar` compare a
     // bound variable's DEBUG NAME as well as its index, and the
@@ -2980,8 +3016,8 @@ def find_inductive_by_type_head_or_scan (cases : List MatchCase) (scrutinee_term
                 // `d_instance`/`d_error` and died on `validate_cases_against_
                 // inductive`'s "constructor not found in inductive", with
                 // `elaborate_module_decls_best_effort` then keeping the
-                // un-elaborated decl and `validate_no_undesugared_struct_
-                // lits` rejecting the struct literal it still contained.
+                // un-elaborated decl and `validate_no_surface_forms`
+                // rejecting the struct literal it still contained.
                 // Which `Decl` won flipped purely on an unrelated `use` list
                 // change in `cli/src/main.mo`.
                 //
@@ -10562,30 +10598,31 @@ def named_call_def_fold_app (f : Term) (args : List Term) : Term :=
 /// codegen-proven representation instead of teaching codegen a second,
 /// parallel way to build a constructor value.
 ///
-/// Falls back to leaving the un-desugared `Literal.struct_update` in
-/// place (unchanged from before, so still a crash if actually reached)
-/// only when `base`'s type genuinely can't be resolved to a registered
-/// struct — matching the reference's own documented fallback for that
-/// case (`core_check.rs`'s own comment: "Falls back to leaving a
-/// `StructUpdate` literal in place... if `base`'s type can't be
-/// determined").
+/// A base whose type cannot be resolved to a registered struct is an ERROR,
+/// never a leftover `Literal.struct_update` (which no backend compiles, so
+/// it was a run-time crash). An uninformative base type takes the expected
+/// type first: `{ p with x := 1 }` in a position whose type is known is
+/// still an update. With neither, nothing can name the constructor.
 def type_check_struct_update (base : Term) (fields : List StructLitField) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match type_check base Term.hole scope local_types locals {
         err e => err e,
         ok base_tt =>
             let base_term : Term := base_tt.term in
-            let base_typ : Term := base_tt.typ in
+            let base_typ : Term := if is_hole base_tt.typ then expected_type else base_tt.typ in
+            if is_hole base_typ
+            then err (TypeError.struct_update_unresolved_base base_tt.typ)
+            else
             match type_head_name base_typ {
-                Option.none => struct_update_fallback base_term fields base_typ,
+                Option.none => err (TypeError.struct_update_unresolved_base base_typ),
                 Option.some sname =>
                     let typ_mp : NamePath := NamePath.mk (List.cons sname List.empty) in
                     match scope_find_inductive typ_mp scope {
-                        err _ => struct_update_fallback base_term fields base_typ,
+                        err _ => err (TypeError.struct_update_unresolved_base base_typ),
                         ok ind =>
                             match ind {
                                 Inductive.mk _ _ _ ctors _ _ =>
                                     match ctors {
-                                        List.empty => struct_update_fallback base_term fields base_typ,
+                                        List.empty => err (TypeError.struct_update_unresolved_base base_typ),
                                         List.cons ctor _ =>
                                             match ctor {
                                                 InductConstructor.mk con_name params _ =>
@@ -10631,14 +10668,6 @@ def type_check_struct_update (base : Term) (fields : List StructLitField) (expec
                     },
             }
     }
-
-/// Un-resolvable-struct-type fallback: same term this function used to
-/// build unconditionally before this fix. Still a crash if it ever
-/// actually reaches codegen, but that was already true before this fix
-/// and only happens when `base`'s type can't be determined at all
-/// (matches the reference's own documented behavior for that case).
-def struct_update_fallback (base : Term) (fields : List StructLitField) (base_typ : Term) : Result TypeError TypedTerm :=
-    ok (mk_typed (Term.lit (Literal.struct_update base fields)) base_typ)
 
 /// One slot per declared field: the update's own override term where it
 /// names that field, `Option.none` otherwise. `check_con_args_against_

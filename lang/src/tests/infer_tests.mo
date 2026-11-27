@@ -1957,6 +1957,19 @@ def test_type_check_elim_rejects_non_sort_motive : Bool :=
         (case_minors (List.cons Term.hole (List.cons Term.hole List.empty))) scrutinee in
     elim_result_err (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
 
+/// The ONE shape `elim_from_checked_cases` builds when no arm had a type: a
+/// bare `Term.hole` motive. It is admitted without a sort check -- no source
+/// term can spell an `Elim`, so the shape is the checker's own fingerprint
+/// of "no information" -- while the same hole under a LAMBDA stays rejected
+/// just above.
+#[test]
+def test_type_check_elim_accepts_a_hole_motive : Bool :=
+    let scrutinee : Term := Term.var 0 DebugName.unnamed in
+    let local_types : List Term := List.cons (named_free_var "Bool") List.empty in
+    let e : Elim := Elim.mk bool_name_for_elim_tests List.empty List.empty List.empty Term.hole
+        (case_minors (List.cons Term.hole (List.cons Term.hole List.empty))) scrutinee in
+    elim_result_ok (type_check_elim e Term.hole bool_scope_for_elim_tests local_types empty_locals)
+
 /// `Bool` declares two constructors; one minor is one short.
 #[test]
 def test_type_check_elim_rejects_too_few_minors : Bool :=

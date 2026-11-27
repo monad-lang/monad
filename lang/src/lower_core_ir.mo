@@ -10,7 +10,7 @@ use lib::scope {
 }
 use lang::types {
     AttrArg, Attribute, Con, DebugName, Decl, Def, Identifier, InductConstructor,
-    Inductive, Literal, MatchCase, ModulePath, NamePath, Native, Scope, ScopeData,
+    Inductive, Literal, ModulePath, NamePath, Native, Scope, ScopeData,
     ScopeDef, Term, i64, id_eq, name_map_values, nid, sentinel, show_identifier,
     show_module_path, show_name_path,
 }
@@ -152,10 +152,10 @@ pub type LowerError {
     /// `desugar_struct_lits_decls` pass (`codegen/emit.mo`) should
     /// both have turned it into a `Term.con` before here. The eval-path
     /// (`lower_root`/`meta_eval`) counterpart of `codegen/emit.mo`'s
-    /// `validate_no_undesugared_struct_lits` compile gate: this used to
+    /// `validate_no_surface_forms` compile gate: this used to
     /// be a bare missing arm, i.e. a non-exhaustive-match crash with no
     /// named cause.
-    le_struct_lit_survived,
+    le_surface_form_survived,
     /// A float literal reached lowering: the eval IR has no way to carry
     /// one. `IrLit.ir_float` exists and every consumer already has an arm
     /// for it, but nothing can CONSTRUCT one -- the literal arrives as
@@ -176,7 +176,7 @@ pub type LowerError {
     /// prerequisite (this module's own doc comment, and `meta_eval.mo`'s
     /// caller contract): `expand_decls_graph`'s best-effort macro expansion
     /// can legitimately leave either shape in place mid-expansion. Named
-    /// rather than reused, following `le_struct_lit_survived`'s own
+    /// rather than reused, following `le_surface_form_survived`'s own
     /// precedent -- this used to be a bare missing arm too.
     le_unresolved_macro_artifact,
     /// A `Term.elim` that `elim_arms_in` could not lower: an unresolvable
@@ -304,9 +304,8 @@ def name_path_last_segment (path : NamePath) : String :=
 
 /// The named constructor's own (tag, arity), searched by BARE name
 /// alone across every inductive in scope (same "if ambiguous, first
-/// match wins" tradeoff this file's own `find_case_inductive`/
-/// `find_inductive_by_case_name` already makes for ordinary match-arm
-/// resolution) -- shared by both `lower_point_free_ctor` (a free-
+/// match wins" tradeoff `find_inductive_by_case_name` makes) -- shared
+/// by both `lower_point_free_ctor` (a free-
 /// variable OCCURRENCE, needs a `CoreIr`) and `lower_one_global` (a
 /// GLOBAL SLOT with no ordinary `Def`, needs a `GlobalDef`).
 def find_ctor_tag_arity (ctx : LowerCtx) (bare_name : String) : Option (Pair I64 I64) :=
@@ -354,20 +353,6 @@ def find_ctor_arity (ctors : List InductConstructor) (name : Identifier) : Optio
 
 def ctor_field_count (ctor : InductConstructor) : I64 :=
     match ctor { InductConstructor.mk _ params _ => List.length params }
-
-// ─── if / match -> match_ ────────────────────────────────────────────
-
-/// `Bool { true, false }` (`init/prelude.mo`) -- `true` is declared
-/// first, so tag 0; `false` is tag 1. Matches `lang/core_eval.mo`'s
-/// `bool_value` -- both must agree, since natives (`i64_lt`, ...) return
-/// values built by `bool_value` at runtime, and this is the tag `if`
-/// dispatches on.
-#[partial]
-def lower_if (ctx : LowerCtx) (cond : Term) (then_ : Term) (else_ : Term) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
-    lower_then (lower_term ctx cond acc) (fn cir => fn acc1 =>
-        lower_then (lower_term ctx then_ acc1) (fn tir => fn acc2 =>
-            lower_then (lower_term ctx else_ acc2) (fn eir => fn acc3 =>
-                lower_ok (CoreIr.match_ cir [MatchArm.arm 0 tir, MatchArm.arm 0 eir]) acc3)))
 
 // `ScopeData.inductives` is a typed `NameMap` (see its own doc comment in
 // `lang/types.mo`) -- `find_inductive_by_case_name` below needs to scan
@@ -439,8 +424,8 @@ def inductive_has_constructor_named (ind : Inductive) (name : Identifier) : Bool
 ///
 /// A cheap, purely incremental narrowing that IS attempted here: among
 /// same-named candidates, prefer one whose constructor's field count
-/// also matches the written case's own binder count (`find_case_inductive`
-/// passes its first case's `List.length case_args` down as `arity_hint`).
+/// also matches the caller's own `arity_hint` (`find_ctor_tag_arity`
+/// passes the written constructor application's argument count down).
 /// Two same-named, same-ARITY ctors can still collide -- this does not
 /// claim to be the real fix -- but a generated `match v { mk f1 f2 => .. }`
 /// derived from a 2-field struct no longer resolves to an unrelated
@@ -511,147 +496,6 @@ def lower_inductive_path_of (best : Option Inductive) (candidate : Inductive) : 
 def inductive_path_str (ind : Inductive) : String :=
     match ind { Inductive.mk ind_name _ _ _ _ _ => show_name_path ind_name }
 
-/// A `match`'s `MatchCase`s don't carry the scrutinee's inductive path
-/// directly (`MatchCase.mk`'s `name` is a bare `Identifier`, per
-/// `lang/parser.mo`'s own doc comment on `match_case_name`) -- resolve it
-/// by finding which inductive in scope owns a constructor named after the
-/// first case. Well-typed, exhaustive matches always have at least one
-/// real (non-wildcard) case naming a real constructor of the scrutinee's
-/// type, so this is sufficient in practice.
-///
-/// "Sufficient in practice" breaks down for a VERY common shape: a list
-/// match's first case is `List.empty`/`List.cons`'s own OWN bare "empty"
-/// or "cons" (qualifier dropped, as above) -- names and arities ALSO
-/// owned by any other arity-0-`empty` type in whole-program scope
-/// (`BTreeMap`/`HashMap`-shaped trees all declare one). Confirmed by
-/// direct repro: once such a type is anywhere in scope, a generated
-/// derive function's own `match tail { List.empty => .., List.cons _ _
-/// => .. }` could resolve to THAT type instead of `List` -- same name,
-/// same arity (0) for the first case, so the one-name arity hint above
-/// cannot break the tie -- building arms for the wrong inductive's ctor
-/// list entirely and dispatching a real `List.cons` value into whichever
-/// arm lands at its tag, which is sized for an unrelated constructor.
-/// `ce_arity_mismatch expected=5 got=2` was exactly this: tag 1 landed on
-/// a `BTreeMap`-shaped type's 5-field `node`, not `List`'s own 2-field
-/// `cons`.
-///
-/// Fixed by requiring a candidate to own a matching (name, arity) ctor
-/// for EVERY explicit case in the match, not just the first -- `List`
-/// owns both "empty" and "cons", a `BTreeMap`-shaped type owns "empty"
-/// but never "cons", so the all-cases filter alone already disambiguates
-/// this specific collision. Falls back to the old first-case-only search
-/// (arity-hinted, then name-only) when the all-cases filter finds
-/// nothing, so no previously-resolved match changes.
-def find_case_inductive (scope : Scope) (cases : List MatchCase) : Option Inductive :=
-    if has_any_explicit_case cases
-    then
-        match find_inductive_matching_all_cases (scope_all_inductives scope) cases Option.none {
-            Option.some ind => Option.some ind,
-            Option.none => find_case_inductive_by_first_case scope cases,
-        }
-    else find_case_inductive_by_first_case scope cases
-
-/// Resolve a match's inductive, preferring an EXPLICIT `MatchCase.typ_name`
-/// when a caller supplied one. The `Elim` reconstruction sets it on every
-/// case, which is strictly better than the name/arity search below; ordinary
-/// parsed cases leave it `Option.none` and keep that search unchanged.
-def find_case_inductive_typed (scope : Scope) (cases : List MatchCase) : Option Inductive :=
-    match case_typ_name cases {
-        Option.none => find_case_inductive scope cases,
-        Option.some np =>
-            match scope_find_inductive np scope {
-                Result.err _ => find_case_inductive scope cases,
-                Result.ok ind => Option.some ind,
-            },
-    }
-
-/// The head case's own `typ_name`, if it carries one.
-def case_typ_name (cases : List MatchCase) : Option NamePath :=
-    match cases {
-        List.empty => Option.none,
-        List.cons c _ => match c { MatchCase.mk _ _ _ _ typ_name => typ_name },
-    }
-
-/// Guards `find_inductive_matching_all_cases` against a match built from
-/// nothing but wildcard cases (e.g. `match v { _ => default }`) -- with
-/// no explicit case to constrain anything, `inductive_matches_all_cases`
-/// is vacuously true for every inductive in the whole program, and the
-/// lowest-path tie-break would pick one essentially at random. Only a
-/// match with at least one real, named case gets the all-cases search;
-/// a wildcard-only match keeps the old first-case-only behavior (where
-/// the "first case" IS the wildcard, same as before this fix).
-#[partial]
-def has_any_explicit_case (cases : List MatchCase) : Bool :=
-    match cases {
-        List.empty => false,
-        List.cons c rest => if is_wildcard_case c then has_any_explicit_case rest else true,
-    }
-
-def find_case_inductive_by_first_case (scope : Scope) (cases : List MatchCase) : Option Inductive :=
-    match cases {
-        List.empty => Option.none,
-        List.cons c _ =>
-            match c {
-                MatchCase.mk name case_args _ _ _ =>
-                    find_inductive_by_case_name (scope_all_inductives scope) name (Option.some (List.length case_args)),
-            },
-    }
-
-#[partial]
-def find_inductive_matching_all_cases (inds : List Inductive) (cases : List MatchCase) (best : Option Inductive) : Option Inductive :=
-    match inds {
-        List.empty => best,
-        List.cons ind rest =>
-            if inductive_matches_all_cases ind cases
-            then find_inductive_matching_all_cases rest cases (lower_inductive_path_of best ind)
-            else find_inductive_matching_all_cases rest cases best,
-    }
-
-#[partial]
-def inductive_matches_all_cases (ind : Inductive) (cases : List MatchCase) : Bool :=
-    match cases {
-        List.empty => true,
-        List.cons c rest =>
-            if is_wildcard_case c
-            then inductive_matches_all_cases ind rest
-            else
-                match c {
-                    MatchCase.mk name case_args _ _ _ =>
-                        if inductive_has_constructor_named_with_arity ind name (List.length case_args)
-                        then inductive_matches_all_cases ind rest
-                        else false,
-                },
-    }
-
-def is_wildcard_case (c : MatchCase) : Bool :=
-    match c {
-        MatchCase.mk name _ _ _ _ =>
-            match name {
-                Identifier.id s => String.beq s "_",
-            },
-    }
-
-#[partial]
-def find_case_for_ctor (ctor : InductConstructor) (cases : List MatchCase) : Option MatchCase :=
-    match cases {
-        List.empty => Option.none,
-        List.cons c rest =>
-            match c {
-                MatchCase.mk name _ _ _ _ =>
-                    if constructor_simple_name_eq ctor name
-                    then Option.some c
-                    else find_case_for_ctor ctor rest,
-            },
-    }
-
-#[partial]
-def find_wildcard_case (cases : List MatchCase) : Option MatchCase :=
-    match cases {
-        List.empty => Option.none,
-        List.cons c rest =>
-            if is_wildcard_case c then Option.some c else find_wildcard_case rest,
-    }
-
 def ctor_name (ctor : InductConstructor) : Identifier :=
     match ctor {
         InductConstructor.mk name _ _ => npath_last_id name,
@@ -673,64 +517,6 @@ def list_last_or_empty (ids : List Identifier) : Identifier :=
             },
     }
 
-/// One arm per constructor of `ind`, in declaration order: an explicit
-/// case if the source `match` covered it, else the wildcard case's body
-/// (if any), else a synthesized `match_fail`.
-#[partial]
-def lower_one_match_arm
-    (ctx : LowerCtx) (ind_name : NamePath) (ctor : InductConstructor) (cases : List MatchCase)
-    (acc : LowerAcc) (k : MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
-    : Pair (Result LowerError CoreIr) LowerAcc :=
-    match find_case_for_ctor ctor cases {
-        Option.some found_case => lower_explicit_match_case ctx found_case acc k,
-        Option.none =>
-            match find_wildcard_case cases {
-                Option.some wc => lower_wildcard_match_case ctx (ctor_field_count ctor) wc acc k,
-                Option.none => k (MatchArm.arm (ctor_field_count ctor) (CoreIr.match_fail (modpath_of ind_name) (ctor_name ctor))) acc,
-            },
-    }
-
-#[partial]
-def lower_explicit_match_case
-    (ctx : LowerCtx) (found_case : MatchCase) (acc : LowerAcc)
-    (k : MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
-    : Pair (Result LowerError CoreIr) LowerAcc :=
-    match found_case {
-        MatchCase.mk _ case_args case_body _ _ =>
-            lower_then (lower_term ctx case_body acc) (fn bir => fn acc1 =>
-                k (MatchArm.arm (List.length case_args) bir) acc1),
-    }
-
-/// A wildcard-filled arm's body binds none of the matched constructor's
-/// own fields (it never named them), but `dispatch_arm` (core_eval.mo)
-/// still requires `bind_count == List.length args` to extend the
-/// environment -- so this arm's `bind_count` must be the CTOR's real
-/// field count, not 0, or any non-nullary constructor falling through to
-/// this wildcard trips `ce_arity_mismatch` at run time.
-#[partial]
-def lower_wildcard_match_case
-    (ctx : LowerCtx) (arity : I64) (wc : MatchCase) (acc : LowerAcc)
-    (k : MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
-    : Pair (Result LowerError CoreIr) LowerAcc :=
-    match wc {
-        MatchCase.mk _ _ wc_body _ _ =>
-            lower_then (lower_term ctx wc_body acc) (fn bir => fn acc1 =>
-                k (MatchArm.arm arity bir) acc1),
-    }
-
-#[partial]
-def lower_match_arms_for_ctors
-    (ctx : LowerCtx) (ind_name : NamePath) (ctors : List InductConstructor) (cases : List MatchCase)
-    (acc : LowerAcc) (k : List MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
-    : Pair (Result LowerError CoreIr) LowerAcc :=
-    match ctors {
-        List.empty => k List.empty acc,
-        List.cons ctor rest =>
-            lower_one_match_arm ctx ind_name ctor cases acc (fn arm_ir => fn acc1 =>
-                lower_match_arms_for_ctors ctx ind_name rest cases acc1 (fn arms => fn acc2 =>
-                    k (List.cons arm_ir arms) acc2)),
-    }
-
 #[partial]
 def lower_elim_arms
     (ctx : LowerCtx) (arms : List ElimArm) (acc : LowerAcc)
@@ -745,38 +531,6 @@ def lower_elim_arms
     }
 
 #[partial]
-def lower_match_arms
-    (ctx : LowerCtx) (ind : Inductive) (cases : List MatchCase) (acc : LowerAcc)
-    (k : List MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
-    : Pair (Result LowerError CoreIr) LowerAcc :=
-    match ind {
-        Inductive.mk ind_name _ _ constructors _ _ =>
-            lower_match_arms_for_ctors ctx ind_name constructors cases acc k,
-    }
-
-#[partial]
-def lower_match (ctx : LowerCtx) (value : Term) (cases : List MatchCase) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
-    if is_dict_projection_scrutinee value then lower_dict_projection ctx value cases acc
-    else
-    match find_case_inductive_typed (ctx_scope ctx) cases {
-        Option.none => lower_err (LowerError.le_unknown_inductive (ModulePath.mk List.empty)) acc,
-        Option.some ind =>
-            lower_then (lower_term ctx value acc) (fn vir => fn acc1 =>
-                lower_match_arms ctx ind cases acc1 (fn arms => fn acc2 =>
-                    lower_ok (CoreIr.match_ vir arms) acc2)),
-    }
-
-#[partial]
-def lower_dict_projection (ctx : LowerCtx) (value : Term) (cases : List MatchCase) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
-    match cases {
-        List.cons c _ =>
-            lower_then (lower_term ctx value acc) (fn vir => fn acc1 =>
-                lower_explicit_match_case ctx c acc1 (fn arm => fn acc2 =>
-                    lower_ok (CoreIr.match_ vir [arm]) acc2)),
-        List.empty => lower_err (LowerError.le_unknown_inductive (ModulePath.mk List.empty)) acc,
-    }
-
-#[partial]
 def lower_literal (ctx : LowerCtx) (l : Literal) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
     match l {
         Literal.str s => lower_ok (CoreIr.lit (IrLit.ir_str s)) acc,
@@ -786,14 +540,16 @@ def lower_literal (ctx : LowerCtx) (l : Literal) (acc : LowerAcc) : Pair (Result
         Literal.num n suffix => lower_ok (CoreIr.lit (IrLit.ir_num n suffix)) acc,
         // Named, not fallen through -- see `le_float_literal_unsupported`.
         Literal.flt _text _suffix => lower_err LowerError.le_float_literal_unsupported acc,
-        Literal.if_ cond then_ else_ => lower_if ctx cond then_ else_ acc,
-        Literal.match_ value cases => lower_match ctx value cases acc,
-        // Backstop, not codegen: see `le_struct_lit_survived`'s own doc
-        // comment. A struct literal reaching here used to be a bare
-        // non-exhaustive-match crash; now it diagnoses like every other
-        // lower failure (wrapped in `le_in_def` by `lower_one_global`).
-        Literal.struct_lit _fields _type_name => lower_err LowerError.le_struct_lit_survived acc,
-        Literal.struct_update _base _fields => lower_err LowerError.le_struct_lit_survived acc,
+        // Backstop, not codegen: see `le_surface_form_survived`'s own doc
+        // comment. The checker turns every `match`/`if` into a `Term.elim`
+        // and every struct literal/update into a `Term.con`; one reaching
+        // here used to be a non-exhaustive-match crash, and now it
+        // diagnoses like every other lower failure (wrapped in `le_in_def`
+        // by `lower_one_global`).
+        Literal.if_ _cond _then_ _else_ => lower_err LowerError.le_surface_form_survived acc,
+        Literal.match_ _value _cases => lower_err LowerError.le_surface_form_survived acc,
+        Literal.struct_lit _fields _type_name => lower_err LowerError.le_surface_form_survived acc,
+        Literal.struct_update _base _fields => lower_err LowerError.le_surface_form_survived acc,
     }
 
 // ─── Con / Native (both share the same sparse-args shape) ──────────────
@@ -884,20 +640,6 @@ def is_dict_value_con (ctor : Identifier) (typ_name : NamePath) : Bool :=
             else false,
     }
 
-/// A D5 dictionary projection: `match __dict_Cls { mk f1 .. fn => body }`.
-def is_dict_projection_scrutinee (value : Term) : Bool :=
-    match value {
-        Term.var _ dbg =>
-            match dbg {
-                DebugName.named id =>
-                    match id {
-                        Identifier.id text => String.starts_with "__dict_" text,
-                    },
-                DebugName.unnamed => false,
-            },
-        _ => false,
-    }
-
 pub def show_lower_error (e : LowerError) : String :=
     match e {
         LowerError.le_unresolved_name name => String.concat "unresolved name " (show_identifier name),
@@ -907,7 +649,7 @@ pub def show_lower_error (e : LowerError) : String :=
         LowerError.le_unknown_native name => String.concat "unknown native " (show_identifier name),
         LowerError.le_type_level_term => "type-level term reached lowering",
         LowerError.le_con_hole_before_filled_arg => "constructor hole before a filled arg",
-        LowerError.le_struct_lit_survived => "struct literal reached lowering un-desugared (give the literal an explicit `: StructName` annotation, or bind it to an annotated local)",
+        LowerError.le_surface_form_survived => "a surface form (match, if, or a struct literal/update) reached lowering",
         LowerError.le_float_literal_unsupported => "float literals are not supported by the evaluator (the eval IR cannot carry one yet)",
         LowerError.le_unresolved_macro_artifact => "an unresolved macro-template variable or quote reached lowering",
         LowerError.le_elim_ill_formed reason => String.concat "a dependent match/if could not be lowered: " reason,

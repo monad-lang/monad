@@ -14,12 +14,12 @@
 use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 use std::list {List.filter_map}
 use lang::types {
-    Attribute, Decl, DebugName, Def, Identifier, Inductive, Multiplicity, NamePath, Struct,
+    Attribute, Class, Decl, DebugName, Def, Identifier, Inductive, Multiplicity, NamePath, Struct,
     StructField, Term, Visibility, binder_is_explicit, concrete, has_attr, id_eq, sentinel,
     show_name_path, term_peel,
 }
 use lang::module {ModuleInfo}
-use lang::scope {struct_synthetic_inductive}
+use lang::scope {dict_synthetic_inductive, struct_synthetic_inductive}
 use lib::symbols {def_symbol_name}
 use lang::name_text {unqualify_def_name}
 use lib::free_names {collect_referenced_names}
@@ -89,11 +89,33 @@ def struct_of_decl (d : Decl) : Option Struct := match d {
 def extract_structs (decl_list : List Decl) : List Struct :=
     List.filter_map struct_of_decl decl_list
 
-/// Every inductive a `Term.elim` can name: the declared ones, and each
-/// struct's synthetic one-constructor inductive (`struct_synthetic_inductive`).
+/// The class declarations in `decl_list` -- kept in a reachable list for the
+/// same reason inductives and structs are: the D5 dictionary inductive is
+/// derived from its class, and a `Term.elim` names it.
+#[partial]
+def class_of_decl (d : Decl) : Option Class := match d {
+    Decl.class_d c => Option.some c,
+    _ => Option.none,
+}
+
+#[partial]
+def extract_classes (decl_list : List Decl) : List Class :=
+    List.filter_map class_of_decl decl_list
+
+#[partial]
+def map_class_decl (classes : List Class) : List Decl :=
+    List.map (fn c => Decl.class_d c) classes
+
+/// Every inductive a `Term.elim` can name: the declared ones, each struct's
+/// synthetic one-constructor inductive (`struct_synthetic_inductive`), and
+/// each class's dictionary inductive (`dict_synthetic_inductive`) -- the D5
+/// projection is an `Elim` over the last of those.
 #[partial]
 def elim_inductives (decl_list : List Decl) : List Inductive :=
-    List.append (extract_inductives decl_list) (List.map struct_synthetic_inductive (extract_structs decl_list))
+    List.append (extract_inductives decl_list)
+        (List.append
+            (List.map struct_synthetic_inductive (extract_structs decl_list))
+            (List.map dict_synthetic_inductive (extract_classes decl_list)))
 
 /// `inds` keyed the way `Elim.inductive` is looked up (`elim_inductive_find`).
 /// Emit (`CodegenCtx.inductives`) and the gate (`validate_elims_well_formed`)
@@ -120,7 +142,9 @@ def elim_inductive_find (table : HashMap String Inductive) (name : NamePath) : O
 /// reason to filter them and every reason to keep this simple) and every
 /// Struct (which compile to nothing at all -- their only codegen
 /// footprint is the ARITY claim their implicit `mk` contributes, see
-/// `extract_structs`'s own doc comment, so keeping them is cheaper still).
+/// `extract_structs`'s own doc comment, so keeping them is cheaper still)
+/// and every Class (which compile to nothing either, but whose synthetic
+/// dictionary inductive a D5 projection's `Term.elim` names).
 /// `compile_loaded_modules_to_ir` previously fed `compile_db_module`
 /// every loaded module's ENTIRE declaration set -- prelude, init,
 /// string, number, io, id, ... -- regardless of whether the program
@@ -155,9 +179,11 @@ pub def filter_reachable_decls (roots : List String) (decl_list : List Decl) : L
     // `lookup_loop` directly with `String.lt`/`String.gt`) instead of
     // calling `Map.insert`/`Map.lookup` -- same latent-bug workaround
     // `lang/scope.mo`'s `modpath_map_*` already uses.
+    let all_classes := extract_classes decl_list in
     let defs_map := build_def_name_map all_defs str_map_empty in
     let reachable := reachable_defs_from defs_map roots str_map_empty List.empty in
-    List.append (map_inductive_decl all_inds) (List.append (map_struct_decl all_structs) (map_def_decl reachable))
+    List.append (map_inductive_decl all_inds) (List.append (map_struct_decl all_structs)
+        (List.append (map_class_decl all_classes) (map_def_decl reachable)))
 
 #[partial]
 def build_def_name_map (defs : List Def) (acc : HashMap String Def) : HashMap String Def := match defs {

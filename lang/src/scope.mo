@@ -1,5 +1,5 @@
 use lang::types {Minor, map_minors, minor_bodies,
-    Attribute, Binder, Class, ClassDef, Con, CubicalPrim, DebugName, Decl, DeclGroup, Def,
+    Attribute, Binder, Class, ClassDef, Con, CubicalPrim, DebugName, Decl, DeclGroup, Def, Elim,
     NameSet,
     FieldPattern, FieldPatternEntry, Identifier, InductConstructor, Inductive,
     Infix, Instance, InstanceKey, Literal, LocalScope, LocalVar, MatchCase, Module,
@@ -23,6 +23,7 @@ use lang::types {Minor, map_minors, minor_bodies,
     AttrArg,
 }
 use lib::typecheck::name_subst {name_subst_term}
+use lib::typecheck::subst {term_shift}
 use lib::typecheck::traverse {con_map_children, native_map_children, term_map_children}
 // `collect_def_types` registers `elaborate_def`-wrapped types and needs the
 // same whole-graph known-name set the `check` path's `elaborate_def_typs`
@@ -899,7 +900,57 @@ def build_scope_class (cls : Class) (path : ModulePath) (acc : ScopeData) : Scop
             let name_list : List Identifier := List.cons clsname List.empty in
             let cls_np : NamePath := NamePath.mk name_list in
             let with_cls : ScopeData := scope_data_add_class acc cls in
-            add_class_methods with_cls methods cls_np
+            // The dictionary type (D5): registered beside the class so the
+            // checker's dictionary projection is an `Elim` over a real
+            // inductive and can be re-checked. See `dict_synthetic_inductive`.
+            let with_dict : ScopeData := scope_data_add_inductive with_cls (dict_synthetic_inductive cls) in
+            add_class_methods with_dict methods cls_np
+    }
+
+/// The type an instance dictionary inhabits (D5). The projection's `Elim`
+/// names it back, so the two spellings must come from this one function.
+///
+/// The BARE class name, deliberately: a loaded class arrives module-qualified
+/// (`prelude::Div`) while a source one does not, and the name is a single
+/// `Identifier` (not a `NamePath` segment), so letting `::` through would
+/// make the two spellings disagree wherever the name is re-split.
+///
+/// The cost is that two classes with the same bare name share one
+/// `__Dict_<Cls>` (the corpus has two `class Show A`). That is safe only
+/// while their METHOD LISTS have the same length -- the projection's minor
+/// has one binder per method, and `elim_arms_in` peels that many -- and a
+/// mismatch fails loudly there ("minor with fewer lambdas"), never silently.
+/// Keying on the qualified name instead is not available here: the
+/// dictionary parameter's placeholder is built from a `TypeConstraint`'s
+/// spelling, which need not be resolvable.
+pub def dict_type_name (cls : Class) : NamePath :=
+    match cls {
+        { name := clsname, .. } =>
+            NamePath.mk (List.cons
+                (Identifier.id (String.concat "__Dict_" (unqualify_def_name (show_identifier clsname))))
+                List.empty),
+    }
+
+/// The synthetic inductive a class's dictionary stands for: one constructor
+/// `mk` with one hole-typed field per class method, in the class's declared
+/// order -- the shape `struct_synthetic_inductive` gives a struct. Field
+/// types are holes for the same reason a struct's are (nothing downstream
+/// reads them); the METHODS stay reachable through the class itself.
+pub def dict_synthetic_inductive (cls : Class) : Inductive :=
+    let mk_np : NamePath := NamePath.mk (List.cons (Identifier.id "mk") List.empty) in
+    let mk_params : List Param := dict_field_params (class_method_names cls) in
+    let mk_con : InductConstructor := InductConstructor.mk mk_np mk_params Term.hole in
+    match cls {
+        { vis, .. } =>
+            Inductive.mk (dict_type_name cls) List.empty (Term.sort (SortLevel.concrete 1))
+                (List.cons mk_con List.empty) List.empty vis,
+    }
+
+#[partial]
+def dict_field_params (names : List Identifier) : List Param :=
+    match names {
+        List.empty => List.empty,
+        List.cons n rest => List.cons (param_many n Term.hole) (dict_field_params rest),
     }
 
 def add_class_methods (acc : ScopeData) (methods : List ClassDef) (cls_np : NamePath) : ScopeData :=
@@ -1247,7 +1298,7 @@ pub def split_qualified_identifier (i : Identifier) : Option QualifiedName :=
             // Annotated local, NOT a bare `Option.some { .. }`: a struct
             // literal in argument position never desugars to a
             // constructor and silently compiles to a void placeholder
-            // (`le_struct_lit_survived` rejects it outright).
+            // (`le_surface_form_survived` rejects it outright).
             let qn : QualifiedName := { qmod := qmod, qname := qname } in
             Option.some qn
 
@@ -1997,7 +2048,7 @@ def infix_from_decl (d : Decl) : Option Infix :=
     match d {
         // Annotated local, not `Option.some { ... }` -- the bare
         // struct-literal-in-argument-position pitfall
-        // (`validate_no_undesugared_struct_lits`'s own message): the
+        // (`validate_no_surface_forms`'s own message): the
         // unannotated literal never desugars to `Infix.mk` and silently
         // compiles to a void placeholder, so EVERY infix operator
         // resolution would read garbage through this backend.
@@ -2468,7 +2519,7 @@ def resolve_open_alias_decl (names : HashMap String String) (d : Decl) : Decl :=
         // `ScopeData` literal fail to elaborate with "unknown variable"
         // -- and, because codegen elaboration is best-effort, that
         // surfaced only as `scope_data_empty` tripping the
-        // undesugared-struct-literal gate, several stages later.
+        // surface-form gate, several stages later.
         //
         // Only the DEFAULTS are walked. A field's/method's `typ` stays
         // untouched for the same reason `resolve_open_alias_def` skips
@@ -2536,18 +2587,18 @@ pub def resolve_open_alias_decls (names : HashMap String String) (decl_list : Li
 // a Class/Instance buried inside a `scoped_open_d` wrapper isn't found
 // either, matching `collect_infixes`'s own existing gap).
 //
-// No real `Decl.struct_d`/`Decl.inductive_d` declaration is synthesized
-// for a "dictionary type" -- confirmed unnecessary: `compile_con_ir`/
-// `compile_match_ir` (codegen/emit.mo) work structurally off a
-// `Con`'s own name/typ_name/num_args/args and a `MatchCase`'s own
-// constructor name, neither needing a registered Inductive/Struct. A
-// dictionary value is built directly as `Term.con`; `Con.mk` carries no
-// numeric tag field at all -- every dictionary is destructured via
-// exactly one match arm (`compile_match_ir` skips tag comparison
-// entirely for a single-case match) -- confirmed by direct reading, not
-// assumed. (A `dict_tag_placeholder` sentinel constant existed here for
-// this doc comment to point at, but was never actually wired to
-// anything -- removed as dead code 2026-08-25.)
+// No `Decl.inductive_d` is synthesized here for a "dictionary type": the
+// promoted value def stays a plain `Term.con` of its own minted name, and
+// `compile_con_ir` handles it structurally (`is_dict_value_con`,
+// `lang/lower_core_ir.mo`). What IS registered, in `build_scope_class`, is
+// the per-CLASS `__Dict_<Cls>` inductive: it exists so the checker's
+// dictionary projection is an `Elim` over a real inductive and can be
+// re-checked, not so the value def has a type to inhabit. The two names are
+// distinct (per-instance `__Dict_<Cls>_<args>` vs per-class `__Dict_<Cls>`),
+// and the value def's own declared type stays `Sort 1`.
+// (A `dict_tag_placeholder` sentinel constant existed here for this doc
+// comment to point at, but was never actually wired to anything -- removed
+// as dead code 2026-08-25.)
 
 /// Flat scan for every top-level Class declaration.
 #[partial]
@@ -6667,28 +6718,51 @@ def dict_match_pattern_vars (method_names : List Identifier) (target : Identifie
 
 /// Checker-facing sibling of `build_dict_field_projection` (D5 dict-
 /// forwarding, see that function's own doc comment for the full
-/// story). Structurally identical EXCEPT both `Term.var` references use
-/// the checker's real free-variable convention (`Term.var sentinel
-/// (DebugName.named _)`, `sentinel = -1` -- `lang.typecheck.infer`'s own
-/// `type_check_var` dispatches on this exact sentinel to resolve by
-/// NAME via `scope_resolve_name`/`LocalScope`, the same path D4 and
-/// every ordinary bound-var lookup already use successfully) instead of
-/// a raw de Bruijn index -- so the produced term re-typechecks
-/// correctly no matter what's already bound in the surrounding
-/// `LocalScope` (`dict_id` resolves to the already-bound dict
-/// parameter; the match arm's own `method_name` pattern var resolves
-/// via `prepend_typed_local_vars`, exactly like any other match-bound
-/// local). `-1` is inlined directly (not imported from `infer.mo`'s own
-/// `sentinel` constant) to avoid a circular module dependency --
-/// `infer.mo` already imports FROM `lang.scope`, not the reverse.
+/// story). Both `Term.var` references use the checker's real
+/// free-variable convention (`Term.var sentinel (DebugName.named _)`,
+/// `sentinel = -1` -- `lang.typecheck.infer`'s own `type_check_var`
+/// dispatches on this exact sentinel to resolve by NAME via
+/// `scope_resolve_name`/`LocalScope`, the same path D4 and every
+/// ordinary bound-var lookup already use successfully) -- so the
+/// produced term re-typechecks correctly no matter what's already bound
+/// in the surrounding `LocalScope` (`dict_id` resolves to the
+/// already-bound dict parameter; the minor's own `method_name` binder
+/// resolves like any other lambda-bound local). `-1` is inlined
+/// directly (not imported from `infer.mo`'s own `sentinel` constant) to
+/// avoid a circular module dependency -- `infer.mo` already imports
+/// FROM `lang.scope`, not the reverse.
+///
+/// The projection is an `Elim` over `dict_synthetic_inductive`, not a
+/// `Literal.match_`: that is what lets the checker re-check the term it
+/// produced (`check` re-checks elaborated decls), and what makes "no
+/// surface form survives checking" true for the dictionary path too.
 #[partial]
-def build_dict_field_projection_checked (cls : Class) (dict_id : Identifier) (method_name : Identifier) (real_args : List Term) : Term :=
+def build_dict_field_projection_checked (cls : Class) (dict_id : Identifier) (method_name : Identifier)
+    (real_args : List Term) (expected_type : Term) : Term :=
     let free_var_sentinel : I64 := 0 - 1 in
     let method_names := class_method_names cls in
     let pattern_vars := dict_match_pattern_vars method_names method_name in
     let call := rebuild_call (Term.var free_var_sentinel (DebugName.named method_name)) real_args in
-    let case_ := MatchCase.mk (Identifier.id "mk") pattern_vars call Option.none Option.none in
-    Term.lit (Literal.match_ (Term.var free_var_sentinel (DebugName.named dict_id)) (List.cons case_ List.empty))
+    let body := dict_projection_minor pattern_vars call in
+    // The result type is the call's own expected type: a projection is the
+    // method reference itself, so the motive is constant. The domain is a
+    // hole because the dict parameter's own annotation is one
+    // (`dict_param_type_placeholder`).
+    let motive : Term := Term.lam binder_anon Term.hole (term_shift 1 expected_type) in
+    let e : Elim := Elim.mk (dict_type_name cls) List.empty List.empty List.empty motive
+        (List.cons (Minor.case body) List.empty)
+        (Term.var free_var_sentinel (DebugName.named dict_id)) in
+    Term.elim e
+
+/// The projection's single minor: one `binder_named` per class method, in
+/// `dict_match_pattern_vars`'s order, with hole field types (the dictionary
+/// inductive's fields are holes).
+#[partial]
+def dict_projection_minor (names : List Identifier) (body : Term) : Term :=
+    match names {
+        List.empty => body,
+        List.cons n rest => Term.lam (binder_named n) Term.hole (dict_projection_minor rest body),
+    }
 
 /// Is `t` unusable as an expected carrier? A hole, or a bare sort -- the
 /// same two shapes `is_uninformative_carrier` (`lang/typecheck/infer.mo`)

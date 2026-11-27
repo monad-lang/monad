@@ -25,7 +25,7 @@ use runtime::natives {runtime_native_functions}
 use lib::validate {
     build_defined_symbol_set, collect_call_targets, missing_call_targets,
     strip_db_lams, validate_export_defs, validate_no_colliding_def_symbols,
-    report_elab_stats, validate_no_undesugared_struct_lits,
+    report_elab_stats, validate_no_surface_forms,
     validate_no_monad_externs, validate_no_unwired_natives,
     validate_native_target_availability,
 }

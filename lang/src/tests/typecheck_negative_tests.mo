@@ -340,6 +340,17 @@ def test_a_struct_literal_missing_a_required_field_is_rejected : IO Bool :=
 def test_a_struct_update_with_an_unknown_field_is_rejected : IO Bool :=
     rejected_with "struct_update_unknown" "unknown field `nosuch`" struct_update_source
 
+/// An update whose base's type is not a struct has no constructor to
+/// rebuild. It used to be left as a `Literal.struct_update`, which no
+/// backend compiles -- a crash at compile time instead of a diagnostic.
+def struct_update_unresolved_source : String :=
+    "struct P { x : I64, y : I64 }\n"
+    ++ "def struct_update_unresolved (f : I64 -> I64) : P := { f with x := 1 }\n"
+
+#[test]
+def test_a_struct_update_over_a_non_struct_base_is_rejected : IO Bool :=
+    rejected_with "struct_update_unresolved" "cannot update a value of type" struct_update_unresolved_source
+
 #[test]
 def test_complete_literals_and_defaulted_omissions_are_accepted : IO Bool :=
     accepted (

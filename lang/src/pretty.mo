@@ -283,8 +283,8 @@ def show_literal (lit : Literal) : String := match lit {
     // desugaring (`desugar_struct_lits_decls`, codegen/emit.mo) or
     // the checker's rewrite, which is the only state this printer can
     // still see one in: every surviving struct literal is rejected
-    // fail-fast by `validate_no_undesugared_struct_lits` on the compile
-    // path and by `le_struct_lit_survived` on the eval path. Missing
+    // fail-fast by `validate_no_surface_forms` on the compile
+    // path and by `le_surface_form_survived` on the eval path. Missing
     // until now, which the self-hosted checker's own exhaustiveness
     // analysis flagged the moment this printer became reachable from
     // `lang/module.mo` ("Literal.struct_lit was constructed but not

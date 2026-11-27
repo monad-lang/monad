@@ -851,7 +851,7 @@ pub def runtime_declarations_for_with_ownership (kind : TargetKind) (ownership_o
     let d8 := mk_decl "alloc_closure" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "i64" in
     let d9 := mk_decl "alloc_constructor" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d10 := mk_decl "alloc_string" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
-    // Tag/field accessors for match dispatch (compile_match_ir) --
+    // Tag/field accessors for match dispatch (compile_case_arms_ir) --
     // there's no other way to read back what an already-allocated value
     // was tagged/constructed with.
     let d11 := mk_decl "monad_get_tag" (List.cons "i64" List.empty) "i64" in

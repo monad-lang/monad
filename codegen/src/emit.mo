@@ -29,7 +29,7 @@ use runtime::natives {runtime_native_functions}
 use lib::validate {
     build_defined_symbol_set, collect_call_targets, missing_call_targets,
     strip_db_lams, validate_export_defs, validate_no_colliding_def_symbols,
-    report_elab_stats, validate_no_undesugared_struct_lits,
+    report_elab_stats, validate_no_surface_forms,
     validate_elims_well_formed,
     validate_no_monad_externs, validate_no_unwired_natives,
     validate_native_target_availability,
@@ -512,11 +512,11 @@ def fold_native_const (op : NativeOp) (n1 : I64) (n2 : I64) : Option LLVMValue :
 /// literal is rewritten to a real `Term.con` twice over before here
 /// (`desugar_struct_lits_decls` in this file, then the type checker's
 /// own `type_check_struct_lit` on any def elaboration succeeds on),
-/// and `validate_no_undesugared_struct_lits` rejects any survivor on
+/// and `validate_no_surface_forms` rejects any survivor on
 /// the main pipeline BEFORE codegen. Reaching these arms therefore
 /// means a caller that skips the gate (a direct `compile_db_module`
 /// user) -- and the previous behavior, emitting `void_val`, silently
-/// miscompiled (see `validate_no_undesugared_struct_lits`'s own doc
+/// miscompiled (see `validate_no_surface_forms`'s own doc
 /// comment for the bootstrap rung that cost).
 def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match lit_ {
     Literal.num n suffix => CompileResult.ok c List.empty (LLVMValue.int_ n) List.empty List.empty List.empty,
@@ -544,14 +544,14 @@ def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match li
     // has to settle for BOTH runtimes at once.
     Literal.char ch => compile_str_lit_ir c (char_to_string ch),
     Literal.str s => compile_str_lit_ir c s,
-    Literal.if_ cond then_ else_ => compile_db_if_ir c cond then_ else_,
-    Literal.match_ scrutinee cases => compile_match_ir c scrutinee cases,
-    // Both struct arms funnel into `crash_struct_lit_reached_codegen`
-    // -- see its own doc comment for why a named crash beats either
-    // the old silent `void_val` placeholder or an unnamed
-    // non-exhaustive-match abort.
-    Literal.struct_lit _fields _type_name => crash_struct_lit_reached_codegen c,
-    Literal.struct_update _base _fields => crash_struct_lit_reached_codegen c,
+    // The checker produces `Term.elim` for every `match`/`if`, and `Term.con`
+    // for every struct literal/update. A surface form reaching here survived
+    // both it and `validate_no_surface_forms`, so fail fast on a named
+    // symbol rather than silently compiling a placeholder.
+    Literal.if_ _cond _then_ _else_ => crash_surface_form_reached_codegen c,
+    Literal.match_ _scrutinee _cases => crash_surface_form_reached_codegen c,
+    Literal.struct_lit _fields _type_name => crash_surface_form_reached_codegen c,
+    Literal.struct_update _base _fields => crash_surface_form_reached_codegen c,
 }
 
 /// The `String`-constant half of `compile_lit_ir`, split out so the
@@ -590,20 +590,19 @@ def compile_str_lit_ir (c : CodegenCtx) (s : String) : CompileResult :=
             },
     }
 
-/// Fail-fast backstop for `compile_lit_ir`'s struct arms: reachable
-/// only when a struct literal survived BOTH desugaring passes
-/// (`desugar_struct_lits_decls` here, `type_check_struct_lit` in the
-/// checker) and every validate gate (i.e. a direct `compile_db_module`
-/// caller that skips `validate_no_undesugared_struct_lits`). The
+/// Fail-fast backstop for `compile_lit_ir`'s four surface arms: reachable
+/// only when a `match`/`if`/struct literal survived the checker's lowering
+/// and every validate gate (i.e. a direct `compile_db_module` caller that
+/// skips `validate_no_surface_forms`). The
 /// `CompileResult` has no error constructor to thread through the term
 /// compiler (retrofitting one means an arm at every `CompileResult.ok`
 /// site), and a silent `void_val` placeholder is exactly the miscompile
-/// class `validate_no_undesugared_struct_lits` exists to fail fast on, so
+/// class `validate_no_surface_forms` exists to fail fast on, so
 /// the value is `codegen_backstop`'s undeclared call: the module is
 /// rejected with a symbol naming this hole.
 #[partial]
-def crash_struct_lit_reached_codegen (c : CodegenCtx) : CompileResult :=
-    codegen_backstop c "monad_backstop_struct_lit_reached_codegen"
+def crash_surface_form_reached_codegen (c : CodegenCtx) : CompileResult :=
+    codegen_backstop c "monad_backstop_surface_form_reached_codegen"
 
 /// A fail-fast backstop's value: a call to `symbol`, which nothing declares,
 /// so the module is rejected by the call-target gate (or `llc`) with the
@@ -612,42 +611,16 @@ def crash_struct_lit_reached_codegen (c : CodegenCtx) : CompileResult :=
 def codegen_backstop (c : CodegenCtx) (symbol : String) : CompileResult :=
     CompileResult.ok c List.empty (LLVMValue.call symbol LLVMType.i64_ List.empty false) List.empty List.empty List.empty
 
-/// Compile a match expression to LLVM IR: compiles the scrutinee once,
-/// reads its runtime tag (@monad_get_tag), and generates a chain of
-/// tag-comparison blocks -- one per case except the last, which is
-/// always the unconditional final branch (covers both an explicit `_`
-/// wildcard last arm and a naturally-exhaustive case list with no
-/// wildcard, uniformly, without needing to special-case the string "_").
-/// Each case's own block binds its pattern's bound names to
-/// @monad_get_field calls before compiling its body. Mirrors
-/// compile_db_if_ir/build_db_if_blocks/build_merge_result's N=2 pattern,
-/// generalized to N cases and reusing the same helpers (fresh_label,
-/// build_branch_block, ends_with_terminator).
-#[partial]
-def compile_match_ir (c : CodegenCtx) (scrutinee : Term) (cases : List MatchCase) : CompileResult :=
-    compile_case_arms_ir c scrutinee (case_arms_of_cases cases)
-
 /// One arm of a compiled match: the constructor it tests, the names its
 /// fields bind, its body, and the constructor's resolved owner when known.
-/// A source `MatchCase` and an `Elim` minor both compile through it.
+/// Every arm comes from an `Elim` minor; source `MatchCase`s never reach
+/// codegen.
 pub struct CaseArm {
     name : Identifier,
     args : List Identifier,
     body : Term,
     owner : Option NamePath,
 }
-
-#[partial]
-def case_arms_of_cases (cases : List MatchCase) : List CaseArm :=
-    match cases {
-        List.empty => List.empty,
-        List.cons mc rest =>
-            match mc {
-                MatchCase.mk name args body _fp typ_name =>
-                    let arm : CaseArm := { name := name, args := args, body := body, owner := typ_name } in
-                    List.cons arm (case_arms_of_cases rest),
-            },
-    }
 
 #[partial]
 def case_arms_of_elim (arms : List ElimArm) : List CaseArm :=
@@ -1443,7 +1416,7 @@ def compose_seq (a : Triple) (b : Triple) : Triple := match a {
                     Option.some rewritten =>
                         { instrs := a_instrs, blocks := append_blocks rewritten b_blocks, val := b_val }
                     // Couldn't find a's own terminal block (shouldn't
-                    // happen given compile_db_if_ir/compile_match_ir's
+                    // happen given compile_db_if_ir/compile_case_arms_ir's
                     // own invariant that a branching term's LAST
                     // appended block is always closed with `ret <its
                     // own reported val>` — but stay total/safe rather
@@ -2236,7 +2209,7 @@ def build_merge_result (ctx_else : CodegenCtx) (merge_label : String) (then_reac
             } in
             let merge_block := LLVMBasicBlock.mk merge_label merge_instrs in
             // Order is dominance order, and it is load-bearing -- see
-            // `compile_match_ir`'s own `merge_block` note for the measured
+            // `compile_case_arms_ir`'s own `merge_block` note for the measured
             // `llc: instruction forward referenced with type 'i64'` this
             // class produces. Entry's blocks first (the `br then/else` the
             // splice put in the cond's own terminal block lives there,
@@ -4781,7 +4754,7 @@ def zero_return_instrs (instrs : List LLVMInstruction) : List LLVMInstruction :=
 ///
 /// Rewrites EVERY block that ends in a bare `ret v` (a function's body
 /// can compile to several such blocks — one per branch of a top-level
-/// `if`/`match`, see `compile_db_if_ir`/`compile_match_ir` — not just
+/// `if`/`match`, see `compile_db_if_ir`/`compile_case_arms_ir` — not just
 /// one) to first call the runtime's own `monad_get_field(v, 0)` (field
 /// 0 of the 1-field `RawIO.io` constructor (inner of `IO.mk`) is its payload) and return THAT
 /// instead of the raw constructor pointer.
@@ -5307,7 +5280,7 @@ pub struct TerminalBlocks {
 /// block so its own `ret` closes with the boxed Bool constructor instead.
 /// A total no-op (ctx/blocks/val returned unchanged) whenever the body is
 /// not a native comparison, and a safe fallback too when no block ends in
-/// `ret <val>` (that would violate `compile_db_if_ir`/`compile_match_ir`'s
+/// `ret <val>` (that would violate `compile_db_if_ir`/`compile_case_arms_ir`'s
 /// own closing invariant; kept non-crashing to match `compose_seq`'s
 /// stance on the same impossibility).
 ///
@@ -6278,12 +6251,12 @@ def drop_prefix (prefix : String) (p : String) : String :=
 /// best) a fail-fast crash and (at worst, historically) a silent
 /// `void_val` miscompile. Un-annotated literals are LEFT alone (no way
 /// to know the struct without an expected type) and stay caught by
-/// `validate_no_undesugared_struct_lits` with its actionable message;
+/// `validate_no_surface_forms` with its actionable message;
 /// `struct_update` is left too (it needs the base's type, which only
 /// the checker's expected-type context supplies).
 ///
 /// Runs on def BODIES only (`Decl.def_d`), mirroring exactly what
-/// `validate_no_undesugared_struct_lits` walks (`extract_defs`) -- the
+/// `validate_no_surface_forms` walks (`extract_defs`) -- the
 /// gate this pass feeds. Scope rebuild afterwards is unnecessary: the
 /// pass rewrites only term bodies, never decl shapes, so the scope
 /// built from the pre-pass decls is bit-identical.
@@ -6307,7 +6280,7 @@ def desugar_struct_lit_def (scope : Scope) (d : Def) : Def := match d {
 }
 
 /// The term-level rewrite. Structural traversal mirrors
-/// `term_has_struct_lit` (`codegen/validate.mo`) -- the same
+/// `term_has_surface_form` (`codegen/validate.mo`) -- the same
 /// positions, but rebuilding instead of probing. `Term.ctx` wrappers
 /// are recursed into and PRESERVED (located `--debug` decls are
 /// wrapped; "every site that rebuilds preserves", per Term.ctx's own
@@ -6363,7 +6336,7 @@ def desugar_struct_lit_lit (scope : Scope) (l : Literal) : Term := match l {
 /// exactly as it would for a hand-written `Point.mk 1 2`.
 /// `Option.none` = unresolvable (no head name / not registered / no
 /// constructors): leave the literal for the checker and the
-/// `validate_no_undesugared_struct_lits` gate. Under `--debug` the located
+/// `validate_no_surface_forms` gate. Under `--debug` the located
 /// parser wraps the annotation in `Term.ctx`; `type_head_name` peels that
 /// itself since R10, so this call site no longer has to -- the peel that
 /// used to sit here was the per-site obligation R10 removes.
@@ -6872,12 +6845,12 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                             // And once more for the OTHER silent-placeholder path
                             // codegen has: a struct literal that best-effort
                             // elaboration never desugared still compiles to
-                            // `void_val` (see `validate_no_undesugared_struct_lits`).
+                            // `void_val` (see `validate_no_surface_forms`).
                             match gate_then
-                            (validate_no_undesugared_struct_lits reachable_decls)
+                            (validate_no_surface_forms reachable_decls)
                             (validate_elims_well_formed (elim_inductives reachable_decls) reachable_decls) {
                                 Result.err e => do {
-                                    if verbose then do { fail_line ("FAILED at stage: validate_no_undesugared_struct_lits/validate_elims_well_formed (" ++ CodegenError.render e ++ ")"); return unit } else return unit;
+                                    if verbose then do { fail_line ("FAILED at stage: validate_no_surface_forms/validate_elims_well_formed (" ++ CodegenError.render e ++ ")"); return unit } else return unit;
                                     return (Result.err e)
                                 },
                                 Result.ok _ =>

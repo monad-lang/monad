@@ -65,7 +65,7 @@ use lib::symbols {
 use parsec::number {parse_i64}
 use lib::validate {
     report_elab_stats, validate_no_colliding_def_symbols,
-    validate_no_undesugared_struct_lits, validate_elims_well_formed,
+    validate_no_surface_forms, validate_elims_well_formed,
     validate_no_unwired_natives
 }
 use llvm::ir {LLVMModule}
@@ -625,7 +625,7 @@ pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) (result_path 
 /// `elaborate_decl_with_scope` rejects, which `elaborate_module_decls_
 /// best_effort` then falls back on SILENTLY, leaving this file's
 /// annotated struct literals un-desugared and tripping the
-/// `validate_no_undesugared_struct_lits` gate at a stage far from the
+/// `validate_no_surface_forms` gate at a stage far from the
 /// real failure. At a def's top level the same bind elaborates fine --
 /// `codegen.emit`'s `compile_loaded_modules_to_ir` has the identical
 /// call.
@@ -758,7 +758,7 @@ def test_driver_gates (elab_gate : Result CodegenError (List Decl)) (classes : L
         (gate_then
             (gate_then elab_gate (class_gate_result (validate_no_unresolved_class_calls classes reachable)))
             (gate_then
-                (validate_no_undesugared_struct_lits reachable)
+                (validate_no_surface_forms reachable)
                 (validate_elims_well_formed (elim_inductives reachable) reachable)))
         (validate_no_colliding_def_symbols reachable)
 

@@ -21,7 +21,7 @@ pub type CodegenDiagnostic {
     export_no_body (name : String),
     export_implicit (name : String),
     export_constraints (name : String),
-    undesugared_struct_lit (def_name : String),
+    surface_form_survived (def_name : String),
     ill_formed_elim (def_name : String) (reason : String),
     duplicate_symbol (symbol : String),
     runtime_symbol_collision (symbol : String),
@@ -71,9 +71,9 @@ pub def CodegenDiagnostic.render (d : CodegenDiagnostic) : String :=
             String.concat (export_label name) " cannot have implicit parameters: the export ABI passes only explicit i64 words",
         CodegenDiagnostic.export_constraints name =>
             String.concat (export_label name) " cannot have type-class constraints: no dictionary can cross the export ABI",
-        CodegenDiagnostic.undesugared_struct_lit def_name =>
+        CodegenDiagnostic.surface_form_survived def_name =>
             String.concat "def `" (String.concat def_name
-                "` contains a struct literal that never desugared to a constructor -- it would silently compile to a void placeholder; give the literal an explicit `: StructName` annotation, or bind it to an annotated local before passing it"),
+                "` contains a surface form (`match`, `if` or a struct literal/update) the checker did not turn into an elimination or a constructor -- it would silently compile to a placeholder; for a struct literal, give it an explicit `: StructName` annotation or bind it to an annotated local before passing it"),
         CodegenDiagnostic.ill_formed_elim def_name reason =>
             String.concat "def `" (String.concat def_name (String.concat "` contains an elimination codegen cannot compile: " reason)),
         CodegenDiagnostic.duplicate_symbol symbol =>

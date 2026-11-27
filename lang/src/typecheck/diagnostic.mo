@@ -154,6 +154,9 @@ pub def type_error_message (e : TypeError) : String :=
         TypeError.match_unresolved_inductive typ =>
             String.concat "cannot match on a value of type " (String.concat (show_term typ)
                 ": it is not an inductive type in scope, so the match's coverage cannot be checked"),
+        TypeError.struct_update_unresolved_base typ =>
+            String.concat "cannot update a value of type " (String.concat (show_term typ)
+                ": it is not a struct type in scope, so the update cannot rebuild a constructor"),
     }
 
 /// `` `T.d` `` -- the constructor qualified by its OWN inductive's name.

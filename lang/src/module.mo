@@ -1606,7 +1606,7 @@ def collect_dep_module_infos (to_visit : List PendingModule) (visiting : List Mo
         List.empty => do {
             // Annotated local, never a bare literal in `return` position
             // -- see AGENTS.md's own "known pitfall" and
-            // `validate_no_undesugared_struct_lits`: a bare `return
+            // `validate_no_surface_forms`: a bare `return
             // { ... }` never reaches `type_check_struct_lit` with an
             // expected type, so it survives to codegen as a
             // `Literal.struct_lit` and compiles to a void placeholder.
@@ -10131,9 +10131,9 @@ def test_elaborate_dotted_class_name_resolves : IO Bool := do {
 
 /// A list literal handed straight to a class method has no expected type to name its
 /// collection; the class's declared default carrier (`L := List`) is the checker's choice.
-/// The re-check may report only the D5 dictionary projection (`match __dict_Ser { mk .. }`):
-/// its scrutinee is typed `_` and no dictionary inductive exists, so it cannot be re-checked
-/// (surface/core split S5).
+/// The re-check must be CLEAN, D5 dictionary projection included: the
+/// projection is an `Elim` over the class's synthetic dictionary inductive,
+/// so it re-checks like any other elim (surface/core split S2b).
 #[test]
 def test_elaborate_list_literal_class_call_argument_resolves : IO Bool := do {
     let src : String :=
@@ -10150,8 +10150,7 @@ def test_elaborate_list_literal_class_call_argument_resolves : IO Bool := do {
         "def bound : J := let xs := [1] in Ser.ser xs\n";
     let out <- elaborate_synthetic_source src;
     let diags <- recheck_elaborated_source src;
-    let unexpected : List String := List.filter (fn (d : String) => Bool.not (String.contains d "cannot match on a value of type _")) diags;
-    return (List.is_empty unexpected && not (String.contains out "Ser.ser") && not (String.contains out "FromListLiteral.cons") &&
+    return (List.is_empty diags && not (String.contains out "Ser.ser") && not (String.contains out "FromListLiteral.cons") &&
         String.contains out "Ser_List_A_ser __Dict_Ser_I64")
 }
 

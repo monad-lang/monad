@@ -18,7 +18,7 @@ use lib::symbols {
 use parsec::number {parse_i64}
 use lib::validate {
     report_elab_stats, validate_no_colliding_def_symbols,
-    validate_no_undesugared_struct_lits,
+    validate_no_surface_forms,
     validate_no_unwired_natives
 }
 use llvm::ir {LLVMModule}
@@ -459,7 +459,7 @@ def test_driver_source_bool_test_has_no_match : Bool :=
     Bool.not (String.contains src "match __q0")
 
 #[test]
-def test_driver_gates_reject_an_undesugared_struct_literal : Bool :=
+def test_driver_gates_reject_a_surviving_surface_form : Bool :=
     let lit_def := Decl.def_d (Def.mk (dummy_npath "f") Term.hole (Term.lit (Literal.struct_lit List.empty Option.none)) List.empty no_attrs Visibility.package_private List.empty) in
     match test_driver_gates (Result.ok List.empty) List.empty (List.cons lit_def List.empty) {
         Result.err _ => true,

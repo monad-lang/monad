@@ -100,7 +100,7 @@ def free_vars (typ : Term) (known_names : List Identifier) : List Identifier :=
         // mention names, so they are walked like every other child.
         // Destructured rather than projected: the termination checker's
         // structural-decrease proof needs the pattern-bound form (R3a's own
-        // `term_has_struct_lit` note).
+        // `term_has_surface_form` note).
         Term.elim e =>
             match e {
                 { inductive := _, levels := _, params := params, indices := indices,

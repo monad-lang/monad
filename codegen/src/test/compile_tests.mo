@@ -115,7 +115,7 @@ def test_compile_multiarg_call : IO Bool := do {
     compile_link_run_expect [subtract_def, main_def] "test_multiarg" 7
 }
 
-/// Regression tests for the real compile_match_ir tag-dispatch
+/// Regression tests for the real compile_case_arms_ir tag-dispatch
 /// implementation (codegen/emit.mo), the runtime tag/field
 /// accessors and List/constructor tag fixes (runtime.c), and the
 /// compile_db_def_ir "already terminated" fix (needed because a
