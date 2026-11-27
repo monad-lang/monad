@@ -242,3 +242,118 @@ def slot_swap_apply (va : A) (ea : Slot Empty A) (vb : A) (eb : Slot Empty A) : 
     let fa := Slot.fill ea vb in
     let fb := Slot.fill eb va in
     Pair.pair fa fb
+
+// ── Slice: the indexed contiguous view ──────────────────────────────
+//
+// The third view-types shape: a linear handle over `n` CONTIGUOUS
+// elements, with the length in the TYPE (`Slice n A`). `n` is a
+// `Nat`, so a computed length and a literal one are the same term
+// (`Vec`'s discipline, and why `whnf` reduces literal indices).
+//
+// The index is a runtime-checked contract, not a proof:
+// `Slice.of_list` compares the list's actual length with the `n` value
+// argument it is given (the SAME binder that indexes the result), and
+// `Slice.split_at` splits at its `Nat` argument and types the halves
+// `Slice k A` / `Slice (Nat.sub n k) A`. So a `Slice n A` always really
+// has `n` elements; an index that does not fit is an error, never a
+// silent difference between the type and the data. A static `Fits i n`
+// proof (discharged at the call from a literal index) is the planned
+// follow-up; until then every access is bounds-checked at run time, and
+// an out-of-range access returns the HANDLE in the error variant so a
+// linear slice is never lost to a failed operation.
+//
+// A slice never owns its elements: `split_at` gives two handles over one
+// backing array with disjoint ranges, and the array is released by the
+// collector once every handle over it is gone. Element access needs
+// `[Copy A]` for the same reason `Cell.get` does -- the element stays in
+// the slice and a copy leaves -- and `set` requires it too, so a linear
+// element is never silently overwritten.
+
+/// Why `Slice.of_list` refused a list -- it is the only thing that can go
+/// wrong at construction, and `actual` is what the list really held, so a
+/// caller can report the disagreement, not just that one exists. (Every
+/// other `Slice` failure is a bounds miss, which returns the handle
+/// instead; there is nothing left to describe.)
+pub struct SliceError {
+    actual : I64,
+}
+
+/// An opaque LINEAR handle over `n` contiguous elements of `A`. The
+/// witness is the inhabitation proof and is unreferenceable
+/// (`#[opaque]`); values come only from `Slice.of_list` and
+/// `Slice.split_at`.
+#[linear]
+#[opaque]
+pub type Slice (n : Nat) (A : Type) { slice_witness }
+
+// ── Natives ─────────────────────────────────────────────────────────
+//
+// Pure for the same reason `Cell`'s are: the write is confined to the
+// handle the native consumes and returns. The `{n : Nat}` / `{i : Nat}`
+// binders are TYPE-ONLY -- an implicit binder is never passed to a
+// native -- so each signature also carries the I64 offset the runtime
+// actually uses. `Result` (10/11) and `Pair` (15) are the fixed
+// builtin tags, which is what lets the C side build them.
+
+#[native slice_of_list]
+priv def slice_of_list_raw {n : Nat} (xs : List A) (len : I64) : Result I64 (Slice n A)
+
+#[native slice_length]
+priv def slice_length_raw {n : Nat} (s : Slice n A) : Pair I64 (Slice n A)
+
+#[native slice_get]
+priv def slice_get_raw [Copy A] {n : Nat} (s : Slice n A) (i : I64) : Result (Slice n A) (Pair A (Slice n A))
+
+#[native slice_set]
+priv def slice_set_raw [Copy A] {n : Nat} (s : Slice n A) (i : I64) (a : A) : Result (Slice n A) (Slice n A)
+
+#[native slice_split]
+priv def slice_split_raw {n : Nat} {k : Nat} (s : Slice n A) (ix : I64)
+    : Result (Slice n A) (Pair (Slice k A) (Slice (Nat.sub n k) A))
+
+#[native slice_free]
+priv def slice_free_raw {n : Nat} (s : Slice n A) : Unit
+
+// ── The user-facing operations ──────────────────────────────────────
+
+/// Allocate a slice of exactly `n` elements from `xs`. `n` indexes the
+/// result AND is the length checked against the list, so the two cannot
+/// disagree: a list of a different length comes back as `Result.err`
+/// carrying its actual length. Construction is
+/// pure -- the fresh handle is the only route to the new block.
+pub def Slice.of_list (xs : List A) (n : Nat) : Result SliceError (Slice n A) :=
+    match slice_of_list_raw xs (Nat.to_i64 n) {
+        Result.ok s => Result.ok s,
+        Result.err actual => Result.err (SliceError.mk actual),
+    }
+
+/// The runtime element count, with the handle returned. Equal to the
+/// type index `n` by construction; the value is what a loop needs.
+pub def Slice.length {n : Nat} (s : Slice n A) : Pair I64 (Slice n A) :=
+    slice_length_raw s
+
+/// Read element `i`, returning it with the same handle. Consumes and
+/// returns the handle (view-types P2). An out-of-range `i` returns
+/// `Result.err` carrying the handle -- reading never loses the slice.
+pub def Slice.get [Copy A] {n : Nat} (s : Slice n A) (i : I64) : Result (Slice n A) (Pair A (Slice n A)) :=
+    slice_get_raw s i
+
+/// Overwrite element `i`, leaving the slice intact. `[Copy A]` because
+/// the overwritten element is duplicated away (see this section's
+/// header); an out-of-range `i` returns the handle unchanged.
+pub def Slice.set [Copy A] {n : Nat} (s : Slice n A) (i : I64) (a : A) : Result (Slice n A) (Slice n A) :=
+    slice_set_raw s i a
+
+/// Split at `k`, giving two handles with the left one's length in ITS
+/// type and the right one's `Nat.sub n k`. `k` must satisfy `k <= n`;
+/// a larger `k` is an error carrying the unsplit handle. Both halves
+/// share the backing array -- the ranges are disjoint, and the type
+/// index of each half is the runtime length `split_at` enforces.
+pub def Slice.split_at {n : Nat} (s : Slice n A) (k : Nat)
+    : Result (Slice n A) (Pair (Slice k A) (Slice (Nat.sub n k) A)) :=
+    slice_split_raw s (Nat.to_i64 k)
+
+/// Consume the slice and release its storage (the backing array is
+/// collector-owned; this POISONS the handle, see `Cell.free`).
+pub def Slice.free {n : Nat} (s : Slice n A) : Unit :=
+    slice_free_raw s
