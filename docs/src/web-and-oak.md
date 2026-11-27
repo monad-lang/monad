@@ -250,9 +250,9 @@ with its own loop the imperative API is `web_wasm::rtc` (`Rtc.connect`,
 Camera and screen capture are two-phase, like `Fetch`/`Crypto`, because
 `getUserMedia` is promise-based: `MediaStream.request_av` starts the
 permission prompt, `poll` answers 0 pending / 1 done / 2 failed, `result`
-yields the stream, and `MediaStream.attach stream video_node` plays it (the
-one object-property write in the boundary — typed on a stream, so it cannot
-set an arbitrary JS property). `error` gives the DOMException name for a
+yields the stream, and `MediaStream.attach stream video_node` plays it (one
+of the boundary's few object-property writes — typed on a stream, so it
+cannot set an arbitrary JS property). `error` gives the DOMException name for a
 refused prompt (`NotAllowedError`, `NotFoundError`). Adding a local stream to
 a peer is `Rtc.add_stream`, called **before** the offer — a `MediaStream` is a
 `web_wasm` handle, so it is not a `Command` and the pure layer never sees one.

@@ -112,9 +112,10 @@ def MediaStream.await_go (op : MediaStreamOp) (max_ticks : I64) (tick : I64) : I
 /// Play `stream` in `video` (a `<video>` or `<audio>` node) by setting its
 /// `srcObject`.
 ///
-/// This is the ONLY object-property write in the web boundary, and it is
-/// typed on purpose: it takes a node and a stream, never a property NAME, so
-/// it cannot set an arbitrary JS property.
+/// One of the web boundary's few property writes, and typed on purpose: it
+/// takes a node and a stream, never a property NAME, so it cannot set an
+/// arbitrary JS property. `media_element.mo`'s volume/muted/loop setters are
+/// the other family, each typed on its own property for the same reason.
 ///
 /// `Err` when the node is not a media element or the stream is the null
 /// handle. Playback still needs the element's own `autoplay`/`play()`

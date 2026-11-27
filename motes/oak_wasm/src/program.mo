@@ -355,10 +355,11 @@ def Runtime.dispatch_socket {S : Type} {Msg : Type} (id : I64) (sockets : List (
 
 /// A wake-up that no render handler owns: a peer's or a socket's.
 ///
-/// Peers are asked first only because a program with both is unusual; the
-/// two id spaces are the same hash, so both are probed and a genuinely
-/// unknown id falls through to `dispatch_socket`, which does nothing for an
-/// id it does not know.
+/// One id space covers both: `Runtime.socket_id` hashes the subscription key,
+/// which is `ws:...` for a socket and `rtc:<key>` for a peer, so a given id
+/// belongs to at most one of the two. Peers are probed first (a program with
+/// both is unusual), and an id in neither falls through to
+/// `dispatch_socket`, which does nothing for an id it does not know.
 def Runtime.dispatch_source {S : Type} {Msg : Type} (id : I64)
     (sockets : List (WsSocket Msg)) (peers : List (RtcPeerEntry Msg)) : IO Unit :=
     match Runtime.peer_for_id id peers {
