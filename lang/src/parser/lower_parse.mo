@@ -37,13 +37,12 @@
 /// old dotted-path copy predates the qualified-names split, when
 /// name paths and module paths shared one rendering and one type.
 use lang::types {
-    Attribute, Binder, Class, ClassDef, DebugName, Decl, Def, DoStmt, Identifier,
-    InductConstructor, Inductive, Instance, Literal, MatchCase, ModulePath,
-    NamePath, NameRef, Param, ParseClass, ParseClassDef,
+    Attribute, Binder, DebugName, Decl, DoStmt, Identifier,
+    NamePath, NameRef, ParseClass, ParseClassDef,
     ParseDecl, ParseDeclKind, ParseDef, ParseInductConstructor, ParseInductive,
     ParseInstance, ParseLiteral, ParseMatchCase, ParseParam,
     ParseStruct, ParseStructField, ParseStructLitField, ParseTerm, ParseTermKind,
-    QualifiedName, Struct, StructField, StructLitField, Term, binder_anon, binder_binder,
+    Term, binder_anon, binder_binder,
     binder_named,
     dict_hint_marker_prefix, list_reverse,
     sentinel,
@@ -56,7 +55,16 @@ use lang::types {
 // the duplicate-top-level-name collision item 18 records). The grammar no
 // longer resolves names at all, so nothing flows the other way: it
 // imports `lower_parse_do` from here and that is the only edge.
-use lib::types {Location, OpenFilter, ParseSpan, field_access_chain, parse_span_is_unknown, show_module_path, show_name_path, show_operator}
+use lib::types {Location, OpenFilter, ParseSpan, parse_span_is_unknown, show_module_path, show_name_path, show_operator}
+// The surface AST this pass produces; the three legacy wrappers
+// (`lower_parse_decls`, `lower_parse_decl`, `lower_parse_term`) are the
+// embedding point S4 flips.
+use lib::surface {
+    ClassDefS, ClassS, DeclS, DefS, InductConstructorS, InductiveS, InstanceS,
+    ParamS, SMatchCase, SStructLitField, SLiteral, StructFieldS, StructS,
+    Surface, s_field_access_chain, surface_decl_to_legacy,
+    surface_decls_to_legacy, surface_to_legacy,
+}
 // The monomorphic string map, from the leaf module -- never `Map.lookup`,
 // whose generic dispatch can resolve to the wrong instance
 // (`codegen/util.mo` documents the live bug).
@@ -209,7 +217,7 @@ def extend_ctx (names : List Identifier) (ctx : List Identifier) : List Identifi
 /// (`std::list::List.cons`) is NEVER ambiguous: it always lowers to the
 /// global, never a field chain (`lower_var`'s `Qn` arm).
 #[partial]
-def lower_name_ref (ctx : ParseLowerCtx) (nref : NameRef) : Term :=
+def lower_name_ref (ctx : ParseLowerCtx) (nref : NameRef) : Surface :=
     match nref {
         // `find_index` directly rather than `var_term`, which only takes
         // a `String` to re-wrap it as an `Identifier` immediately -- and
@@ -220,13 +228,13 @@ def lower_name_ref (ctx : ParseLowerCtx) (nref : NameRef) : Term :=
             // oak's `title`/`head`/`body`), and an opened-first order
             // would rewrite those binders into global references.
             match find_index id ctx.binders 0 {
-                Option.some idx => Term.var idx (DebugName.named id),
+                Option.some idx => Surface.var idx (DebugName.named id),
                 Option.none =>
                     match find_opened id ctx.opened {
                         // The spelling an opened name lowers to is exactly
                         // the one a written `Cubical.I` gets.
-                        Option.some qualified => Term.var sentinel (DebugName.named qualified),
-                        Option.none => Term.var sentinel (DebugName.named id),
+                        Option.some qualified => Surface.var sentinel (DebugName.named qualified),
+                        Option.none => Surface.var sentinel (DebugName.named id),
                     },
             },
         NameRef.nnp np => lower_path ctx np nref,
@@ -235,18 +243,18 @@ def lower_name_ref (ctx : ParseLowerCtx) (nref : NameRef) : Term :=
     }
 
 #[partial]
-def lower_path (ctx : ParseLowerCtx) (np : NamePath) (nref : NameRef) : Term :=
+def lower_path (ctx : ParseLowerCtx) (np : NamePath) (nref : NameRef) : Surface :=
     match np {
         NamePath.mk ids => lower_path_ids ctx ids nref,
     }
 
 #[partial]
-def lower_path_ids (ctx : ParseLowerCtx) (ids : List Identifier) (nref : NameRef) : Term :=
+def lower_path_ids (ctx : ParseLowerCtx) (ids : List Identifier) (nref : NameRef) : Surface :=
     match ids {
         List.cons first fields =>
             match find_index first ctx.binders 0 {
                 Option.some idx =>
-                    field_access_chain (Term.var idx (DebugName.named first)) fields,
+                    s_field_access_chain (Surface.var idx (DebugName.named first)) fields,
                 Option.none => lower_name_global nref,
             },
         List.empty => lower_name_global nref,
@@ -256,10 +264,10 @@ def lower_path_ids (ctx : ParseLowerCtx) (ids : List Identifier) (nref : NameRef
 /// resolution (`is_constructor_var` and the module resolver) extracts the
 /// base name when it needs to.
 #[partial]
-def lower_name_global (nref : NameRef) : Term :=
+def lower_name_global (nref : NameRef) : Surface :=
     match name_ref_to_string nref {
-        Option.some qualified => Term.var sentinel (DebugName.named (Identifier.id qualified)),
-        Option.none => Term.var sentinel DebugName.unnamed,
+        Option.some qualified => Surface.var sentinel (DebugName.named (Identifier.id qualified)),
+        Option.none => Surface.var sentinel DebugName.unnamed,
     }
 
 // --- Name resolution -------------------------------------------------
@@ -566,11 +574,11 @@ def projection_fields (pt : ParseTerm) : Option (List Identifier) :=
     }
 
 /// Recognise `app (app (var ".") lhs) rhs)` and lower it as
-/// `field_access_chain lhs fields` (a struct projection), so
+/// `s_field_access_chain lhs fields` (a struct projection), so
 /// `(mk 1).a` works like `x.a` does. Anything else is an ordinary
 /// application.
 #[partial]
-def dot_projection (ctx : ParseLowerCtx) (f : ParseTerm) (a : ParseTerm) : Option Term :=
+def dot_projection (ctx : ParseLowerCtx) (f : ParseTerm) (a : ParseTerm) : Option Surface :=
     match f.kind {
         ParseTermKind.app op lhs =>
             match op.kind {
@@ -582,7 +590,7 @@ def dot_projection (ctx : ParseLowerCtx) (f : ParseTerm) (a : ParseTerm) : Optio
                                 match projection_fields a {
                                     Option.some fields =>
                                         Option.some
-                                            (field_access_chain (lower_parse_term ctx lhs) fields),
+                                            (s_field_access_chain (lower_parse_term_s ctx lhs) fields),
                                     Option.none => Option.none,
                                 }
                             else Option.none,
@@ -596,9 +604,16 @@ def dot_projection (ctx : ParseLowerCtx) (f : ParseTerm) (a : ParseTerm) : Optio
 /// Lower a term in VALUE position, recording its position when there is
 /// one to record.
 #[partial]
-def lower_parse_term (ctx : ParseLowerCtx) (pt : ParseTerm) : Term :=
-    let inner : Term := lower_parse_kind ctx pt.kind in
+def lower_parse_term_s (ctx : ParseLowerCtx) (pt : ParseTerm) : Surface :=
+    let inner : Surface := lower_parse_kind_s ctx pt.kind in
     if kind_wants_loc pt.kind then locate_term ctx pt.span inner else inner
+
+/// Legacy embedding of one term -- the second of the three boundary
+/// wrappers (with `lower_parse_decl` and `lower_parse_decls`). S4 flips the
+/// callers to `lower_parse_term_s`.
+#[partial]
+def lower_parse_term (ctx : ParseLowerCtx) (pt : ParseTerm) : Term :=
+    surface_to_legacy (lower_parse_term_s ctx pt)
 
 /// Lower a term WITHOUT recording a position.
 ///
@@ -625,8 +640,8 @@ def lower_parse_term (ctx : ParseLowerCtx) (pt : ParseTerm) : Term :=
 /// placement rules matters for the IR the transparency oracle compares;
 /// correctness no longer rests on them.
 #[partial]
-def lower_parse_term_bare (ctx : ParseLowerCtx) (pt : ParseTerm) : Term :=
-    lower_parse_kind ctx pt.kind
+def lower_parse_term_bare_s (ctx : ParseLowerCtx) (pt : ParseTerm) : Surface :=
+    lower_parse_kind_s ctx pt.kind
 
 /// Wrap with the position this span resolves to, if the context is
 /// recording positions and the span is a real one. Synthesized terms
@@ -634,24 +649,24 @@ def lower_parse_term_bare (ctx : ParseLowerCtx) (pt : ParseTerm) : Term :=
 /// cells) carry `parse_span_unknown` and are left bare -- they were never
 /// written anywhere, so there is no position to claim.
 #[partial]
-def locate_term (ctx : ParseLowerCtx) (span : ParseSpan) (inner : Term) : Term :=
+def locate_term (ctx : ParseLowerCtx) (span : ParseSpan) (inner : Surface) : Surface :=
     match ctx.locs {
         Option.none => inner,
         Option.some table => locate_term_from table span inner,
     }
 
 #[partial]
-def locate_term_from (table : HashMap String Location) (span : ParseSpan) (inner : Term) : Term :=
+def locate_term_from (table : HashMap String Location) (span : ParseSpan) (inner : Surface) : Surface :=
     if parse_span_is_unknown span
     then inner
     else
         match str_map_lookup (I64.to_string span.start_rem) table {
-            Option.some loc => Term.ctx loc inner,
+            Option.some loc => Surface.ctx loc inner,
             Option.none => inner,
         }
 
 #[partial]
-def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
+def lower_parse_kind_s (ctx : ParseLowerCtx) (k : ParseTermKind) : Surface :=
     match k {
         ParseTermKind.var nref => lower_name_ref ctx nref,
         // A macro name resolves in its own namespace at expansion time,
@@ -659,22 +674,22 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
         ParseTermKind.var_macro nref =>
             match name_ref_to_string nref {
                 Option.some qualified =>
-                    Term.var_macro sentinel (DebugName.named (opened_identifier ctx (Identifier.id qualified))),
-                Option.none => Term.var_macro sentinel DebugName.unnamed,
+                    Surface.var_macro sentinel (DebugName.named (opened_identifier ctx (Identifier.id qualified))),
+                Option.none => Surface.var_macro sentinel DebugName.unnamed,
             },
         // `lam`/`forall`/`pi` bind over their BODY only, never over their
         // own type/argument -- the type is lowered in the OUTER ctx.
         ParseTermKind.lam name typ body =>
-            Term.lam (binder_named name)
-                (lower_parse_term_bare ctx typ)
-                (lower_parse_term (lower_ctx_bind name ctx) body),
+            Surface.lam (binder_named name)
+                (lower_parse_term_bare_s ctx typ)
+                (lower_parse_term_s (lower_ctx_bind name ctx) body),
         // R2b folded `Term.forall` into `Term.pi`; a parse-stage `forall`
         // is the TERM-level quantifier, so it lowers to `binder_binder` and
         // its sort argument stays where it was, in the domain slot.
         ParseTermKind.forall name typ body =>
-            Term.pi (binder_binder name)
-                (lower_parse_term_bare ctx typ)
-                (lower_parse_term (lower_ctx_bind name ctx) body),
+            Surface.pi (binder_binder name)
+                (lower_parse_term_bare_s ctx typ)
+                (lower_parse_term_s (lower_ctx_bind name ctx) body),
         // A `pi` binds when the source wrote a name: `(n : T) -> body`
         // puts `n` in scope over `body`, which is what `type_dep_arrow_tag`
         // (`lang/parser.mo`) used to do inline before the grammar stopped
@@ -708,11 +723,11 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
         // pi-codomain delta case.
         // R1 on both sides: a pi is entirely type-level.
         ParseTermKind.pi arg_name arg ret =>
-            Term.pi (pi_binder arg_name) (lower_parse_term_bare ctx arg)
-                (lower_parse_term_bare (pi_ret_ctx arg_name ctx) ret),
+            Surface.pi (pi_binder arg_name) (lower_parse_term_bare_s ctx arg)
+                (lower_parse_term_bare_s (pi_ret_ctx arg_name ctx) ret),
         // R3: the callee is bare so a spine's inner `app`s stay visible to
         // `flatten_call_spine`; only the outermost `app` (located by
-        // `lower_parse_term` on the way in) and each argument carry one.
+        // `lower_parse_term_s` on the way in) and each argument carry one.
         //
         // `(f x).field`: `.` is a registered infix with no declaration, so
         // the parser builds `app (app (var ".") lhs) rhs)`. When the lhs is
@@ -722,9 +737,9 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
         ParseTermKind.app f a =>
             match dot_projection ctx f a {
                 Option.some projected => projected,
-                Option.none => Term.app (lower_parse_term_bare ctx f) (lower_parse_term ctx a),
+                Option.none => Surface.app (lower_parse_term_bare_s ctx f) (lower_parse_term_s ctx a),
             },
-        ParseTermKind.lit l => Term.lit (lower_parse_literal ctx l),
+        ParseTermKind.lit l => lower_parse_literal ctx l,
         // Every level the grammar produces -- `Prop`/`Type`/`Sort n` in
         // source, and the implicit-parameter and lambda defaults it
         // hardcodes -- lowers through here. A `ParseTermKind.sort` is
@@ -737,8 +752,8 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
         // check, so an arm left over against the old concrete-only spelling
         // failed at RUNTIME rather than at compile time -- which is why the
         // spelling collapse was gated on this being the only arm left.
-        ParseTermKind.sort level => Term.sort level,
-        ParseTermKind.quote_ inner => Term.quote_ (lower_parse_term ctx inner),
+        ParseTermKind.sort level => Surface.sort level,
+        ParseTermKind.quote_ inner => Surface.quote_ (lower_parse_term_s ctx inner),
         // Desugared HERE, not in the grammar -- this is the whole reason
         // the parse stage can drop `ctx`.
         ParseTermKind.do_ stmts => lower_parse_do ctx stmts,
@@ -751,31 +766,35 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
         // reference it, and an unstripped marker that reaches free-var
         // checking is a loud error naming the instance.
         ParseTermKind.dict_hint name =>
-            Term.var sentinel (DebugName.named (Identifier.id (String.concat dict_hint_marker_prefix (show_identifier name)))),
-        ParseTermKind.hole => Term.hole,
+            Surface.var sentinel (DebugName.named (Identifier.id (String.concat dict_hint_marker_prefix (show_identifier name)))),
+        ParseTermKind.hole => Surface.hole,
     }
 
+/// A literal lowers to a `Surface`: the four immediates keep their
+/// `SLiteral` shape, and the four surface forms are first-class `Surface`
+/// constructors (so nothing downstream needs to peel a `Literal` to see a
+/// `match`).
 #[partial]
-def lower_parse_literal (ctx : ParseLowerCtx) (l : ParseLiteral) : Literal :=
+def lower_parse_literal (ctx : ParseLowerCtx) (l : ParseLiteral) : Surface :=
     match l {
-        ParseLiteral.str v => Literal.str v,
-        ParseLiteral.char v => Literal.char v,
-        ParseLiteral.num n suf => Literal.num n suf,
-        ParseLiteral.flt t suf => Literal.flt t suf,
+        ParseLiteral.str v => Surface.lit (SLiteral.str v),
+        ParseLiteral.char v => Surface.lit (SLiteral.char v),
+        ParseLiteral.num n suf => Surface.lit (SLiteral.num n suf),
+        ParseLiteral.flt t suf => Surface.lit (SLiteral.flt t suf),
         ParseLiteral.if_ a b c =>
-            Literal.if_ (lower_parse_term ctx a)
-                (lower_parse_term ctx b)
-                (lower_parse_term ctx c),
+            Surface.if_ (lower_parse_term_s ctx a)
+                (lower_parse_term_s ctx b)
+                (lower_parse_term_s ctx c),
         // The scrutinee is OUTSIDE every arm's bindings; each arm's body
         // is inside its own.
         ParseLiteral.match_ scrut cases =>
-            Literal.match_ (lower_parse_term ctx scrut)
+            Surface.match_ (lower_parse_term_s ctx scrut)
                 (lower_parse_match_cases ctx cases),
         ParseLiteral.struct_lit fields type_name =>
-            Literal.struct_lit (lower_parse_struct_lit_fields ctx fields)
+            Surface.struct_lit (lower_parse_struct_lit_fields ctx fields)
                 (lower_parse_opt ctx type_name),
         ParseLiteral.struct_update base fields =>
-            Literal.struct_update (lower_parse_term ctx base)
+            Surface.struct_update (lower_parse_term_s ctx base)
                 (lower_parse_struct_lit_fields ctx fields),
     }
 
@@ -783,7 +802,7 @@ def lower_parse_literal (ctx : ParseLowerCtx) (l : ParseLiteral) : Literal :=
 /// binding form and an easy one to miss -- AGENTS.md item 22 exists
 /// because of exactly this.
 #[partial]
-def lower_parse_match_cases (ctx : ParseLowerCtx) (cases : List ParseMatchCase) : List MatchCase :=
+def lower_parse_match_cases (ctx : ParseLowerCtx) (cases : List ParseMatchCase) : List SMatchCase :=
     match cases {
         List.empty => List.empty,
         List.cons c rest =>
@@ -791,13 +810,13 @@ def lower_parse_match_cases (ctx : ParseLowerCtx) (cases : List ParseMatchCase) 
     }
 
 #[partial]
-def lower_parse_match_case (ctx : ParseLowerCtx) (c : ParseMatchCase) : MatchCase :=
-    MatchCase.mk c.name c.args (lower_parse_term (lower_ctx_bind_all c.args ctx) c.body) c.field_pattern Option.none
+def lower_parse_match_case (ctx : ParseLowerCtx) (c : ParseMatchCase) : SMatchCase :=
+    SMatchCase.mk c.name c.args (lower_parse_term_s (lower_ctx_bind_all c.args ctx) c.body) c.field_pattern Option.none
 
 #[partial]
-def lower_parse_opt (ctx : ParseLowerCtx) (t : Option ParseTerm) : Option Term :=
+def lower_parse_opt (ctx : ParseLowerCtx) (t : Option ParseTerm) : Option Surface :=
     match t {
-        Option.some x => Option.some (lower_parse_term ctx x),
+        Option.some x => Option.some (lower_parse_term_s ctx x),
         Option.none => Option.none,
     }
 
@@ -807,11 +826,11 @@ def lower_parse_opt (ctx : ParseLowerCtx) (t : Option ParseTerm) : Option Term :
 /// same name, which the checker caught as a type mismatch rather than
 /// letting it become an item-18 collision.
 #[partial]
-def lower_parse_struct_lit_fields (ctx : ParseLowerCtx) (fs : List ParseStructLitField) : List StructLitField :=
+def lower_parse_struct_lit_fields (ctx : ParseLowerCtx) (fs : List ParseStructLitField) : List SStructLitField :=
     match fs {
         List.empty => List.empty,
         List.cons f rest =>
-            List.cons (StructLitField.mk f.name (lower_parse_term ctx f.value))
+            List.cons (SStructLitField.mk f.name (lower_parse_term_s ctx f.value))
                 (lower_parse_struct_lit_fields ctx rest),
     }
 
@@ -830,11 +849,15 @@ def lower_parse_struct_lit_fields (ctx : ParseLowerCtx) (fs : List ParseStructLi
 // with real semantic content.
 
 #[partial]
-def lower_parse_param (ctx : ParseLowerCtx) (p : ParseParam) : Param :=
-    Param.mk p.name (lower_parse_term_bare ctx p.type_) p.mult (lower_parse_opt ctx p.default) p.attrs
+def lower_parse_param (ctx : ParseLowerCtx) (p : ParseParam) : ParamS :=
+    { name := p.name,
+        type_ := lower_parse_term_bare_s ctx p.type_,
+        mult := p.mult,
+        default := lower_parse_opt ctx p.default,
+        attrs := p.attrs }
 
 #[partial]
-def lower_parse_params (ctx : ParseLowerCtx) (ps : List ParseParam) : List Param :=
+def lower_parse_params (ctx : ParseLowerCtx) (ps : List ParseParam) : List ParamS :=
     match ps {
         List.empty => List.empty,
         List.cons p rest => List.cons (lower_parse_param ctx p) (lower_parse_params ctx rest),
@@ -867,11 +890,11 @@ def lower_parse_params (ctx : ParseLowerCtx) (ps : List ParseParam) : List Param
 /// `void`-typed call argument. Mirrors the Rust reference's own
 /// `desugar_do_statements` (`rust/core/src/parser.rs`), which likewise
 /// desugars to a real dotted `Monad.bind`/`Monad.pure`.
-def monad_bind_term : Term :=
-    Term.var sentinel (DebugName.named (Identifier.id "Monad.bind"))
+def monad_bind_term : Surface :=
+    Surface.var sentinel (DebugName.named (Identifier.id "Monad.bind"))
 
-def monad_pure_term : Term :=
-    Term.var sentinel (DebugName.named (Identifier.id "Monad.pure"))
+def monad_pure_term : Surface :=
+    Surface.var sentinel (DebugName.named (Identifier.id "Monad.pure"))
 
 /// Desugar and lower a whole `do { }` block in one traversal.
 ///
@@ -884,35 +907,35 @@ def monad_pure_term : Term :=
 /// later statement's reference to an earlier binding OUTSIDE that
 /// binding's binder -- a spurious out-of-range `bound_var`.
 #[partial]
-def lower_parse_do (ctx : ParseLowerCtx) (stmts : List DoStmt) : Term :=
-    lower_parse_do_inner ctx stmts (Term.app monad_pure_term Term.hole)
+def lower_parse_do (ctx : ParseLowerCtx) (stmts : List DoStmt) : Surface :=
+    lower_parse_do_inner ctx stmts (Surface.app monad_pure_term Surface.hole)
 
 #[partial]
-def lower_parse_do_inner (ctx : ParseLowerCtx) (stmts : List DoStmt) (rest : Term) : Term :=
+def lower_parse_do_inner (ctx : ParseLowerCtx) (stmts : List DoStmt) (rest : Surface) : Surface :=
     match stmts {
         List.cons s ss => lower_parse_do_stmt ctx s ss rest,
         List.empty => rest,
     }
 
 #[partial]
-def lower_parse_do_stmt (ctx : ParseLowerCtx) (s : DoStmt) (ss : List DoStmt) (rest : Term) : Term :=
+def lower_parse_do_stmt (ctx : ParseLowerCtx) (s : DoStmt) (ss : List DoStmt) (rest : Surface) : Surface :=
     match s {
         // `expr` is lowered in the OUTER ctx -- a statement's own value
         // cannot refer to the variable it binds -- while the
         // continuation is lowered one binder deeper.
         DoStmt.bind_s name typ expr =>
-            Term.app (Term.app monad_bind_term (lower_parse_term ctx expr))
-                (Term.lam (binder_named name)
-                    (lower_parse_term_bare ctx typ)
+            Surface.app (Surface.app monad_bind_term (lower_parse_term_s ctx expr))
+                (Surface.lam (binder_named name)
+                    (lower_parse_term_bare_s ctx typ)
                     (lower_parse_do_inner (lower_ctx_bind name ctx) ss rest)),
         DoStmt.let_s name typ expr =>
-            Term.app (Term.lam (binder_named name)
-                (lower_parse_term_bare ctx typ)
+            Surface.app (Surface.lam (binder_named name)
+                (lower_parse_term_bare_s ctx typ)
                 (lower_parse_do_inner (lower_ctx_bind name ctx) ss rest))
-                (lower_parse_term ctx expr),
+                (lower_parse_term_s ctx expr),
         // `ret_s` DISCARDS the accumulated continuation, matching the
         // reference's `Return`.
-        DoStmt.ret_s expr => Term.app monad_pure_term (lower_parse_term ctx expr),
+        DoStmt.ret_s expr => Surface.app monad_pure_term (lower_parse_term_s ctx expr),
         DoStmt.expr_s expr => lower_parse_do_expr_stmt ctx expr ss rest,
     }
 
@@ -936,13 +959,13 @@ def lower_parse_do_stmt (ctx : ParseLowerCtx) (s : DoStmt) (ss : List DoStmt) (r
 /// identifier can never collide with a real name because `identifier`
 /// never produces one.
 #[partial]
-def lower_parse_do_expr_stmt (ctx : ParseLowerCtx) (expr : ParseTerm) (ss : List DoStmt) (rest : Term) : Term :=
+def lower_parse_do_expr_stmt (ctx : ParseLowerCtx) (expr : ParseTerm) (ss : List DoStmt) (rest : Surface) : Surface :=
     match ss {
-        List.empty => lower_parse_term ctx expr,
+        List.empty => lower_parse_term_s ctx expr,
         List.cons _ _ =>
-            Term.app (Term.app monad_bind_term (lower_parse_term ctx expr))
-                (Term.lam binder_anon
-                    Term.hole
+            Surface.app (Surface.app monad_bind_term (lower_parse_term_s ctx expr))
+                (Surface.lam binder_anon
+                    Surface.hole
                     (lower_parse_do_inner (lower_ctx_bind (Identifier.id "") ctx) ss rest)),
     }
 
@@ -958,11 +981,14 @@ def lower_parse_do_expr_stmt (ctx : ParseLowerCtx) (expr : ParseTerm) (ss : List
 // used.
 
 #[partial]
-def lower_parse_struct_field (ctx : ParseLowerCtx) (f : ParseStructField) : StructField :=
-    StructField.mk f.name (lower_parse_term_bare ctx f.typ) (lower_parse_opt ctx f.default) f.mult
+def lower_parse_struct_field (ctx : ParseLowerCtx) (f : ParseStructField) : StructFieldS :=
+    { name := f.name,
+        typ := lower_parse_term_bare_s ctx f.typ,
+        default := lower_parse_opt ctx f.default,
+        mult := f.mult }
 
 #[partial]
-def lower_parse_struct_decl_fields (ctx : ParseLowerCtx) (fs : List ParseStructField) : List StructField :=
+def lower_parse_struct_decl_fields (ctx : ParseLowerCtx) (fs : List ParseStructField) : List StructFieldS :=
     match fs {
         List.empty => List.empty,
         List.cons f rest =>
@@ -970,11 +996,11 @@ def lower_parse_struct_decl_fields (ctx : ParseLowerCtx) (fs : List ParseStructF
     }
 
 #[partial]
-def lower_parse_induct_ctor (ctx : ParseLowerCtx) (c : ParseInductConstructor) : InductConstructor :=
-    InductConstructor.mk c.name (lower_parse_params ctx c.params) (lower_parse_term_bare ctx c.typ)
+def lower_parse_induct_ctor (ctx : ParseLowerCtx) (c : ParseInductConstructor) : InductConstructorS :=
+    InductConstructorS.mk c.name (lower_parse_params ctx c.params) (lower_parse_term_bare_s ctx c.typ)
 
 #[partial]
-def lower_parse_induct_ctors (ctx : ParseLowerCtx) (cs : List ParseInductConstructor) : List InductConstructor :=
+def lower_parse_induct_ctors (ctx : ParseLowerCtx) (cs : List ParseInductConstructor) : List InductConstructorS :=
     match cs {
         List.empty => List.empty,
         List.cons c rest =>
@@ -982,11 +1008,11 @@ def lower_parse_induct_ctors (ctx : ParseLowerCtx) (cs : List ParseInductConstru
     }
 
 #[partial]
-def lower_parse_class_def (ctx : ParseLowerCtx) (m : ParseClassDef) : ClassDef :=
-    ClassDef.mk m.name (lower_parse_term_bare ctx m.typ) (lower_parse_opt ctx m.default)
+def lower_parse_class_def (ctx : ParseLowerCtx) (m : ParseClassDef) : ClassDefS :=
+    ClassDefS.mk m.name (lower_parse_term_bare_s ctx m.typ) (lower_parse_opt ctx m.default)
 
 #[partial]
-def lower_parse_class_defs (ctx : ParseLowerCtx) (ms : List ParseClassDef) : List ClassDef :=
+def lower_parse_class_defs (ctx : ParseLowerCtx) (ms : List ParseClassDef) : List ClassDefS :=
     match ms {
         List.empty => List.empty,
         List.cons m rest =>
@@ -1006,11 +1032,11 @@ def attrs_have_implicit_marker (attrs : List Attribute) : Bool :=
             else attrs_have_implicit_marker rest,
     }
 
-def lowered_param_is_implicit (p : Param) : Bool :=
+def lowered_param_is_implicit (p : ParamS) : Bool :=
     attrs_have_implicit_marker p.attrs
 
 #[terminating]
-def explicit_lowered_params (ps : List Param) : List Param :=
+def explicit_lowered_params (ps : List ParamS) : List ParamS :=
     match ps {
         List.empty => List.empty,
         List.cons p rest =>
@@ -1020,7 +1046,7 @@ def explicit_lowered_params (ps : List Param) : List Param :=
     }
 
 #[terminating]
-def implicit_lowered_params (ps : List Param) : List Param :=
+def implicit_lowered_params (ps : List ParamS) : List ParamS :=
     match ps {
         List.empty => List.empty,
         List.cons p rest =>
@@ -1035,123 +1061,130 @@ def implicit_lowered_params (ps : List Param) : List Param :=
 /// which is exactly the convention `elaborate_type`'s `wrap_forall` used
 /// and that `check`'s sentinel-based body typing expects.
 #[partial]
-def wrap_implicit_params (ps : List Param) (typ : Term) : Term :=
+def wrap_implicit_params (ps : List ParamS) (typ : Surface) : Surface :=
     match ps {
         List.empty => typ,
         List.cons p rest =>
-            Term.pi (binder_binder p.name) p.type_ (wrap_implicit_params rest typ),
+            Surface.pi (binder_binder p.name) p.type_ (wrap_implicit_params rest typ),
     }
 
 #[partial]
-def lower_parse_def (ctx : ParseLowerCtx) (d : ParseDef) : Def :=
-    let lowered_params : List Param := lower_parse_params ctx d.params in
-    let explicit : List Param := explicit_lowered_params lowered_params in
+def lower_parse_def (ctx : ParseLowerCtx) (d : ParseDef) : DefS :=
+    let lowered_params : List ParamS := lower_parse_params ctx d.params in
+    let explicit : List ParamS := explicit_lowered_params lowered_params in
     // `def_params_loop` returns the accumulated list REVERSED once at its
     // final exit; that reverse also flips the relative order of multiple
     // implicit-clause blocks. Reverse the implicit sublist back so each
     // clause is bound in source order (`{A : Type} {B : A -> Type}` must
     // not emit `B` before the `A` its domain mentions).
-    let implicit : List Param := list_reverse (implicit_lowered_params lowered_params) in
+    let implicit : List ParamS := list_reverse (implicit_lowered_params lowered_params) in
     { name := d.name,
-        typ := wrap_implicit_params implicit (lower_parse_term_bare ctx d.typ),
-        term := lower_parse_term ctx d.term,
+        typ := wrap_implicit_params implicit (lower_parse_term_bare_s ctx d.typ),
+        term := lower_parse_term_s ctx d.term,
         constraints := d.constraints,
         attrs := d.attrs,
         vis := d.vis,
         params := explicit }
 
 #[partial]
-def lower_parse_defs (ctx : ParseLowerCtx) (ds : List ParseDef) : List Def :=
+def lower_parse_defs (ctx : ParseLowerCtx) (ds : List ParseDef) : List DefS :=
     match ds {
         List.empty => List.empty,
         List.cons d rest => List.cons (lower_parse_def ctx d) (lower_parse_defs ctx rest),
     }
 
 #[partial]
-def lower_parse_inductive (ctx : ParseLowerCtx) (i : ParseInductive) : Inductive :=
-    Inductive.mk i.name (lower_parse_params ctx i.params) (lower_parse_term ctx i.typ)
+def lower_parse_inductive (ctx : ParseLowerCtx) (i : ParseInductive) : InductiveS :=
+    InductiveS.mk i.name (lower_parse_params ctx i.params) (lower_parse_term_s ctx i.typ)
         (lower_parse_induct_ctors ctx i.constructors) i.attrs i.vis
 
 #[partial]
-def lower_parse_class (ctx : ParseLowerCtx) (c : ParseClass) : Class :=
-    Class.mk c.name (lower_parse_params ctx c.params) c.constraints
+def lower_parse_class (ctx : ParseLowerCtx) (c : ParseClass) : ClassS :=
+    ClassS.mk c.name (lower_parse_params ctx c.params) c.constraints
         (lower_parse_class_defs ctx c.methods) c.vis
         (match c.sort {
-            Option.some s => Option.some (lower_parse_term_bare ctx s),
+            Option.some s => Option.some (lower_parse_term_bare_s ctx s),
             Option.none => Option.none,
         })
         (lower_parse_params ctx c.determined)
 
 #[partial]
-def lower_parse_instance (ctx : ParseLowerCtx) (i : ParseInstance) : Instance :=
-    Instance.mk i.name i.cls i.constraints (lower_parse_terms_bare ctx i.args) i.vis
+def lower_parse_instance (ctx : ParseLowerCtx) (i : ParseInstance) : InstanceS :=
+    InstanceS.mk i.name i.cls i.constraints (lower_parse_terms_bare ctx i.args) i.vis
         (lower_parse_params ctx i.implicit_params) (lower_parse_defs ctx i.defs)
 
 /// Terms in TYPE position (R1) -- an instance's class arguments, which
 /// `term_matches_carrier` (`lang/scope.mo`) probes structurally.
 #[partial]
-def lower_parse_terms_bare (ctx : ParseLowerCtx) (ts : List ParseTerm) : List Term :=
+def lower_parse_terms_bare (ctx : ParseLowerCtx) (ts : List ParseTerm) : List Surface :=
     match ts {
         List.empty => List.empty,
-        List.cons t rest => List.cons (lower_parse_term_bare ctx t) (lower_parse_terms_bare ctx rest),
+        List.cons t rest => List.cons (lower_parse_term_bare_s ctx t) (lower_parse_terms_bare ctx rest),
     }
 
 #[partial]
-def lower_parse_terms (ctx : ParseLowerCtx) (ts : List ParseTerm) : List Term :=
+def lower_parse_terms (ctx : ParseLowerCtx) (ts : List ParseTerm) : List Surface :=
     match ts {
         List.empty => List.empty,
-        List.cons t rest => List.cons (lower_parse_term ctx t) (lower_parse_terms ctx rest),
+        List.cons t rest => List.cons (lower_parse_term_s ctx t) (lower_parse_terms ctx rest),
     }
 
 #[partial]
-def lower_parse_struct (ctx : ParseLowerCtx) (s : ParseStruct) : Struct :=
-    Struct.mk s.name (lower_parse_struct_decl_fields ctx s.fields) s.attrs s.vis
+def lower_parse_struct (ctx : ParseLowerCtx) (s : ParseStruct) : StructS :=
+    StructS.mk s.name (lower_parse_struct_decl_fields ctx s.fields) s.attrs s.vis
 
+#[partial]
+def lower_parse_decl_s (ctx : ParseLowerCtx) (d : ParseDecl) : List DeclS :=
+    lower_parse_decl_kind ctx d.kind
+
+/// Legacy embedding of one declaration. Kept beside its surface twin so
+/// the two cannot drift: `parser.mo` and the lowering tests call this, and
+/// S4 switches them to `lower_parse_decl_s`.
 #[partial]
 def lower_parse_decl (ctx : ParseLowerCtx) (d : ParseDecl) : List Decl :=
-    lower_parse_decl_kind ctx d.kind
+    surface_decls_to_legacy (lower_parse_decl_s ctx d)
 
 /// One parsed declaration's core declarations: exactly one, except a
 /// `with` block, which expands to its prefixed inner declarations.
 #[partial]
-def lower_parse_decl_kind (ctx : ParseLowerCtx) (k : ParseDeclKind) : List Decl :=
+def lower_parse_decl_kind (ctx : ParseLowerCtx) (k : ParseDeclKind) : List DeclS :=
     match k {
-        ParseDeclKind.def_d d => [Decl.def_d (lower_parse_def ctx d)],
-        ParseDeclKind.inductive_d i => [Decl.inductive_d (lower_parse_inductive ctx i)],
-        ParseDeclKind.struct_d s => [Decl.struct_d (lower_parse_struct ctx s)],
-        ParseDeclKind.class_d c => [Decl.class_d (lower_parse_class ctx c)],
-        ParseDeclKind.instance_d i => [Decl.instance_d (lower_parse_instance ctx i)],
-        ParseDeclKind.infix_d op path vis => [Decl.infix_d op path vis],
-        ParseDeclKind.use_d path filter public => [Decl.use_d path filter public],
-        ParseDeclKind.open_d path filter => [Decl.open_d path filter],
+        ParseDeclKind.def_d d => [DeclS.def_ds (lower_parse_def ctx d)],
+        ParseDeclKind.inductive_d i => [DeclS.inductive_ds (lower_parse_inductive ctx i)],
+        ParseDeclKind.struct_d s => [DeclS.struct_ds (lower_parse_struct ctx s)],
+        ParseDeclKind.class_d c => [DeclS.class_ds (lower_parse_class ctx c)],
+        ParseDeclKind.instance_d i => [DeclS.instance_ds (lower_parse_instance ctx i)],
+        ParseDeclKind.infix_d op path vis => [DeclS.infix_ds op path vis],
+        ParseDeclKind.use_d path filter public => [DeclS.use_ds path filter public],
+        ParseDeclKind.open_d path filter => [DeclS.open_ds path filter],
         ParseDeclKind.scoped_open_d path filter inner =>
-            scoped_open_each path filter (lower_parse_decl ctx inner),
-        ParseDeclKind.def_macro_d d => [Decl.def_macro_d (lower_parse_def ctx d)],
+            scoped_open_each path filter (lower_parse_decl_s ctx inner),
+        ParseDeclKind.def_macro_d d => [DeclS.def_macro_ds (lower_parse_def ctx d)],
         ParseDeclKind.decl_gen_d name params decl_list attrs =>
-            [Decl.decl_gen_d name (lower_parse_params ctx params)
-                (lower_parse_decls (lower_ctx_clear_opened ctx) decl_list) attrs],
+            [DeclS.decl_gen_ds name (lower_parse_params ctx params)
+                (lower_parse_decls_s (lower_ctx_clear_opened ctx) decl_list) attrs],
         // A declaration-position `m!` resolves in the macro namespace by
         // the bare spelling (`macro_queue.mo` keys on it), so an opened
         // sibling has to be spelled out here too.
         ParseDeclKind.macro_call_d name args =>
-            [Decl.macro_call_d (opened_identifier ctx name) (lower_parse_terms ctx args)],
+            [DeclS.macro_call_ds (opened_identifier ctx name) (lower_parse_terms ctx args)],
         // Pass-through, not a lowering: both ASTs spell this as the same
         // `Attribute`, and an `Attribute` contains no `ParseTerm` to
         // de-Bruijn.
-        ParseDeclKind.mote_d attr => [Decl.mote_d attr],
+        ParseDeclKind.mote_d attr => [DeclS.mote_ds attr],
         // Unreachable after `cfg_filter_parse_decls`; lowered as its
         // wrappee should a caller skip the filter.
-        ParseDeclKind.attrs_d _attrs inner => lower_parse_decl ctx inner,
+        ParseDeclKind.attrs_d _attrs inner => lower_parse_decl_s ctx inner,
         ParseDeclKind.with_d prefix inner => lower_with_block ctx prefix inner,
     }
 
 /// A scoped `open` around each of `ds` (one, unless the wrapped declaration
 /// is a `with` block).
 #[partial]
-def scoped_open_each (path : NamePath) (filter : OpenFilter) (ds : List Decl) : List Decl :=
+def scoped_open_each (path : NamePath) (filter : OpenFilter) (ds : List DeclS) : List DeclS :=
     match ds {
         List.empty => List.empty,
-        List.cons d rest => List.cons (Decl.scoped_open_d path filter d) (scoped_open_each path filter rest),
+        List.cons d rest => List.cons (DeclS.scoped_open_ds path filter d) (scoped_open_each path filter rest),
     }
 
 /// `with Dotted.Name { ... }`'s name prefixing, applied here rather
@@ -1249,18 +1282,24 @@ def cfg_keep_if (keep : Bool) (d : ParseDecl) : Option ParseDecl :=
 /// doc comment).
 #[partial]
 pub def lower_parse_decls (ctx : ParseLowerCtx) (ds : List ParseDecl) : List Decl :=
+    surface_decls_to_legacy (lower_parse_decls_s ctx ds)
+
+/// The surface-producing half of the pair above; S4 flips the pipeline to
+/// call THIS and drops the legacy wrapper.
+#[partial]
+pub def lower_parse_decls_s (ctx : ParseLowerCtx) (ds : List ParseDecl) : List DeclS :=
     match ds {
         List.empty => List.empty,
-        List.cons d rest => List.append (lower_parse_decl ctx d) (lower_parse_decls ctx rest),
+        List.cons d rest => List.append (lower_parse_decl_s ctx d) (lower_parse_decls_s ctx rest),
     }
 
 /// A `with` block's body: its decls prefixed, lowered under a context
 /// that also opens the block's own names. `rest` is NOT lowered here --
 /// the block's names stop at its closing brace.
 #[partial]
-def lower_with_block (ctx : ParseLowerCtx) (prefix : Identifier) (inner : List ParseDecl) : List Decl :=
+def lower_with_block (ctx : ParseLowerCtx) (prefix : Identifier) (inner : List ParseDecl) : List DeclS :=
     let opened : List (Pair Identifier Identifier) := collect_block_names prefix inner in
-    lower_parse_decls (lower_ctx_open opened ctx) (List.map (prefix_parse_decl prefix) inner)
+    lower_parse_decls_s (lower_ctx_open opened ctx) (List.map (prefix_parse_decl prefix) inner)
 
 /// The names a `with` block itself declares, bare -> prefixed, at THIS
 /// level: a nested block's names belong to the nested block, which opens
