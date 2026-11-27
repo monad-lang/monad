@@ -41,10 +41,18 @@ use lang::core_ir {IrLit, match_}
 use lib::core_value {Value}
 use lib::scope {struct_fields_to_params}
 use lang::types {
-    AttrArg, Attribute, Decl, Def, Identifier, InductConstructor, Inductive, MatchCase,
+    AttrArg, Attribute, Decl, Identifier, InductConstructor, Inductive,
     NamePath, Param, Struct, Term, TypeConstraint, binder_anon, binder_named, i64, if_,
     many, match_, named, no_attrs, num, package_private, pub_, sentinel, show_identifier,
     show_name_path, str, unnamed,
+}
+// The reifier produces the SURFACE AST; the two public boundaries
+// (`reify_value_to_term`, `reify_decls_value_to_decls`) keep their
+// `Term`/`Decl` signatures and convert, so `module.mo`, `macro_expand.mo`
+// and the whole input side are unchanged.
+use lib::surface {
+    DeclS, DefS, InstanceS, SLiteral, SMatchCase, Surface,
+    surface_decls_to_legacy, surface_to_legacy,
 }
 
 // ─── Value-construction helpers (host -> Value, the INPUT side) ────────
@@ -406,10 +414,10 @@ def local_index_of_go (i : I64) (locals : List String) (name : String) : Option 
 def local_index_of (locals : List String) (name : String) : Option I64 :=
     local_index_of_go 0 locals name
 
-def var_term (locals : List String) (name : String) : Term :=
+def var_term (locals : List String) (name : String) : Surface :=
     match local_index_of locals name {
-        Option.some idx => Term.var idx (DebugName.named (Identifier.id name)),
-        Option.none => Term.var sentinel (DebugName.named (Identifier.id name)),
+        Option.some idx => Surface.var idx (DebugName.named (Identifier.id name)),
+        Option.none => Surface.var sentinel (DebugName.named (Identifier.id name)),
     }
 
 /// A `Value` shaped as a `List A` (`v_con 1 [head, tail]` /
@@ -469,7 +477,7 @@ def strings_of_values (vs : List Value) : Result String (List String) :=
 /// the term-position counterpart of `MetaDecl.d_error`. Both mirror
 /// `rust/core/src/eval/meta_reflect.rs`'s `reify_value_to_term`.
 #[partial]
-def reify_expr_value (locals : List String) (v : Value) : Result String Term :=
+def reify_expr_value (locals : List String) (v : Value) : Result String Surface :=
     match v {
         Value.v_con tag args =>
             if I64.beq tag 0 then reify_e_var locals args
@@ -481,7 +489,7 @@ def reify_expr_value (locals : List String) (v : Value) : Result String Term :=
             else if I64.beq tag 6 then reify_e_if locals args
             else if I64.beq tag 7 then reify_e_match locals args
             else if I64.beq tag 8 then reify_e_ctor locals args
-            else if I64.beq tag 9 then Result.ok Term.hole
+            else if I64.beq tag 9 then Result.ok Surface.hole
             else if I64.beq tag 10 then reify_e_error args
             else Result.err "reify_expr_value: unrecognized Expr constructor tag",
         _ => Result.err "reify_expr_value: expected an Expr value (v_con)",
@@ -492,11 +500,14 @@ def reify_expr_value (locals : List String) (v : Value) : Result String Term :=
 /// where there are no enclosing binders to resolve against. Mirrors
 /// `rust/core/src/eval/meta_reflect.rs`'s `reify_value_to_term`.
 pub def reify_value_to_term (v : Value) : Result String Term :=
-    reify_expr_value List.empty v
+    match reify_expr_value List.empty v {
+        Result.err e => Result.err e,
+        Result.ok s => Result.ok (surface_to_legacy s),
+    }
 
 /// `e_error message` — reject the meta function's whole result with
 /// `message`, reported as an ordinary macro-expansion error by the caller.
-def reify_e_error (args : List Value) : Result String Term :=
+def reify_e_error (args : List Value) : Result String Surface :=
     match args {
         List.cons message_val _ =>
             match value_as_str message_val {
@@ -506,7 +517,7 @@ def reify_e_error (args : List Value) : Result String Term :=
         List.empty => Result.err "e_error: missing message arg",
     }
 
-def reify_e_var (locals : List String) (args : List Value) : Result String Term :=
+def reify_e_var (locals : List String) (args : List Value) : Result String Surface :=
     match args {
         List.cons name_val _ =>
             match value_as_str name_val {
@@ -516,21 +527,21 @@ def reify_e_var (locals : List String) (args : List Value) : Result String Term 
         List.empty => Result.err "e_var: missing name arg",
     }
 
-def reify_e_str (args : List Value) : Result String Term :=
+def reify_e_str (args : List Value) : Result String Surface :=
     match args {
         List.cons v_val _ =>
             match value_as_str v_val {
-                Option.some s => Result.ok (Term.lit (Literal.str s)),
+                Option.some s => Result.ok (Surface.lit (SLiteral.str s)),
                 Option.none => Result.err "e_str: expected a String value",
             },
         List.empty => Result.err "e_str: missing value arg",
     }
 
-def reify_e_int (args : List Value) : Result String Term :=
+def reify_e_int (args : List Value) : Result String Surface :=
     match args {
         List.cons v_val _ =>
             match value_as_i64 v_val {
-                Option.some n => Result.ok (Term.lit (Literal.num n NumSuffix.i64)),
+                Option.some n => Result.ok (Surface.lit (SLiteral.num n NumSuffix.i64)),
                 Option.none => Result.err "e_int: expected an I64 value",
             },
         List.empty => Result.err "e_int: missing value arg",
@@ -553,17 +564,17 @@ def value_as_bool_tag (v : Value) : Option Bool :=
 /// ordinary parsed Monad source uses (`Literal` has no dedicated bool
 /// variant; `true`/`false` are ordinary identifiers resolved against
 /// `Bool`'s two nullary constructors).
-def reify_e_bool (args : List Value) : Result String Term :=
+def reify_e_bool (args : List Value) : Result String Surface :=
     match args {
         List.cons v_val _ =>
             match value_as_bool_tag v_val {
-                Option.some b => Result.ok (Term.var sentinel (DebugName.named (Identifier.id (if b then "true" else "false")))),
+                Option.some b => Result.ok (Surface.var sentinel (DebugName.named (Identifier.id (if b then "true" else "false")))),
                 Option.none => Result.err "e_bool: expected a Bool value",
             },
         List.empty => Result.err "e_bool: missing value arg",
     }
 
-def reify_e_app (locals : List String) (args : List Value) : Result String Term :=
+def reify_e_app (locals : List String) (args : List Value) : Result String Surface :=
     match args {
         List.cons f_val rest =>
             match rest {
@@ -573,7 +584,7 @@ def reify_e_app (locals : List String) (args : List Value) : Result String Term 
                         Result.ok f_term =>
                             match reify_expr_value locals a_val {
                                 Result.err e => Result.err e,
-                                Result.ok a_term => Result.ok (Term.app f_term a_term),
+                                Result.ok a_term => Result.ok (Surface.app f_term a_term),
                             },
                     },
                 List.empty => Result.err "e_app: missing arg operand",
@@ -581,7 +592,7 @@ def reify_e_app (locals : List String) (args : List Value) : Result String Term 
         List.empty => Result.err "e_app: missing func operand",
     }
 
-def reify_e_lam (locals : List String) (args : List Value) : Result String Term :=
+def reify_e_lam (locals : List String) (args : List Value) : Result String Surface :=
     match args {
         List.cons name_val rest1 =>
             match rest1 {
@@ -597,7 +608,7 @@ def reify_e_lam (locals : List String) (args : List Value) : Result String Term 
                                             match reify_expr_value (push_locals (List.cons pname List.empty) locals) body_val {
                                                 Result.err e => Result.err e,
                                                 Result.ok body_term =>
-                                                    Result.ok (Term.lam (binder_named (Identifier.id pname)) ptyp_term body_term),
+                                                    Result.ok (Surface.lam (binder_named (Identifier.id pname)) ptyp_term body_term),
                                             },
                                     },
                             },
@@ -608,7 +619,7 @@ def reify_e_lam (locals : List String) (args : List Value) : Result String Term 
         List.empty => Result.err "e_lam: missing param_name",
     }
 
-def reify_e_if (locals : List String) (args : List Value) : Result String Term :=
+def reify_e_if (locals : List String) (args : List Value) : Result String Surface :=
     match args {
         List.cons cond_val rest1 =>
             match rest1 {
@@ -624,7 +635,7 @@ def reify_e_if (locals : List String) (args : List Value) : Result String Term :
                                             match reify_expr_value locals else_val {
                                                 Result.err e => Result.err e,
                                                 Result.ok else_term =>
-                                                    Result.ok (Term.lit (Literal.if_ cond_term then_term else_term)),
+                                                    Result.ok (Surface.if_ cond_term then_term else_term),
                                             },
                                     },
                             },
@@ -644,7 +655,7 @@ def reify_e_if (locals : List String) (args : List Value) : Result String Term :
 /// reason for this shape: only the `Var`+`App` path lets the type
 /// checker correctly instantiate a constructor's type parameters, not
 /// a raw `Term.con`.
-def reify_e_ctor (locals : List String) (args : List Value) : Result String Term :=
+def reify_e_ctor (locals : List String) (args : List Value) : Result String Surface :=
     match args {
         List.cons ctor_name_val rest =>
             match rest {
@@ -658,7 +669,7 @@ def reify_e_ctor (locals : List String) (args : List Value) : Result String Term
                                     match reify_exprs locals arg_vals {
                                         Result.err e => Result.err e,
                                         Result.ok arg_terms =>
-                                            Result.ok (apply_chain (Term.var sentinel (DebugName.named (Identifier.id ctor_name))) arg_terms),
+                                            Result.ok (apply_chain (Surface.var sentinel (DebugName.named (Identifier.id ctor_name))) arg_terms),
                                     },
                             },
                     },
@@ -668,7 +679,7 @@ def reify_e_ctor (locals : List String) (args : List Value) : Result String Term
     }
 
 #[partial]
-def reify_exprs (locals : List String) (vs : List Value) : Result String (List Term) :=
+def reify_exprs (locals : List String) (vs : List Value) : Result String (List Surface) :=
     match vs {
         List.empty => Result.ok List.empty,
         List.cons hd rest =>
@@ -683,13 +694,13 @@ def reify_exprs (locals : List String) (vs : List Value) : Result String (List T
     }
 
 #[partial]
-def apply_chain (f : Term) (args : List Term) : Term :=
+def apply_chain (f : Surface) (args : List Surface) : Surface :=
     match args {
         List.empty => f,
-        List.cons hd rest => apply_chain (Term.app f hd) rest,
+        List.cons hd rest => apply_chain (Surface.app f hd) rest,
     }
 
-def reify_e_match (locals : List String) (args : List Value) : Result String Term :=
+def reify_e_match (locals : List String) (args : List Value) : Result String Surface :=
     match args {
         List.cons scrutinee_val rest =>
             match rest {
@@ -702,7 +713,7 @@ def reify_e_match (locals : List String) (args : List Value) : Result String Ter
                                 Result.ok arm_vals =>
                                     match reify_match_arms locals arm_vals {
                                         Result.err e => Result.err e,
-                                        Result.ok cases => Result.ok (Term.lit (Literal.match_ scrutinee_term cases)),
+                                        Result.ok cases => Result.ok (Surface.match_ scrutinee_term cases),
                                     },
                             },
                     },
@@ -712,7 +723,7 @@ def reify_e_match (locals : List String) (args : List Value) : Result String Ter
     }
 
 #[partial]
-def reify_match_arms (locals : List String) (arm_vals : List Value) : Result String (List MatchCase) :=
+def reify_match_arms (locals : List String) (arm_vals : List Value) : Result String (List SMatchCase) :=
     match arm_vals {
         List.empty => Result.ok List.empty,
         List.cons a rest =>
@@ -727,11 +738,11 @@ def reify_match_arms (locals : List String) (arm_vals : List Value) : Result Str
     }
 
 /// A `MetaMatchArm` Value (`init/meta.mo`'s single-ctor `match_arm ctor_name
-/// binders body`, tag 0) -> a real `MatchCase`. The field binders (in
+/// binders body`, tag 0) -> a real `SMatchCase`. The field binders (in
 /// DECLARATION order, matching `case_.args`'s own expected shape) get
 /// pushed onto `locals` per `push_locals`'s convention before reifying
 /// `body`.
-def reify_match_arm (locals : List String) (v : Value) : Result String MatchCase :=
+def reify_match_arm (locals : List String) (v : Value) : Result String SMatchCase :=
     match v {
         Value.v_con _tag args =>
             match args {
@@ -749,7 +760,7 @@ def reify_match_arm (locals : List String) (v : Value) : Result String MatchCase
                                                     match reify_expr_value (push_locals binder_names locals) body_val {
                                                         Result.err e => Result.err e,
                                                         Result.ok body_term =>
-                                                            Result.ok (MatchCase.mk (Identifier.id ctor_name) (identifiers_of binder_names) body_term Option.none Option.none),
+                                                            Result.ok (SMatchCase.mk (Identifier.id ctor_name) (identifiers_of binder_names) body_term Option.none Option.none),
                                                     },
                                             },
                                     },
@@ -773,7 +784,7 @@ def identifiers_of (names : List String) : List Identifier :=
 
 /// `init/meta.mo`'s `MetaParam` (single-ctor `meta_param name typ`, tag 0)
 /// -> the reified name plus its reified type `Term`.
-def reify_meta_param (v : Value) : Result String (Pair String Term) :=
+def reify_meta_param (v : Value) : Result String (Pair String Surface) :=
     match v {
         Value.v_con _tag args =>
             match args {
@@ -796,7 +807,7 @@ def reify_meta_param (v : Value) : Result String (Pair String Term) :=
     }
 
 #[partial]
-def reify_meta_params (vs : List Value) : Result String (List (Pair String Term)) :=
+def reify_meta_params (vs : List Value) : Result String (List (Pair String Surface)) :=
     match vs {
         List.empty => Result.ok List.empty,
         List.cons hd rest =>
@@ -810,7 +821,7 @@ def reify_meta_params (vs : List Value) : Result String (List (Pair String Term)
             },
     }
 
-def pair_names (ps : List (Pair String Term)) : List String :=
+def pair_names (ps : List (Pair String Surface)) : List String :=
     match ps {
         List.empty => List.empty,
         List.cons p rest => match p { Pair.pair n _ => List.cons n (pair_names rest) },
@@ -823,30 +834,30 @@ def pair_names (ps : List (Pair String Term)) : List String :=
 /// no index. The binders are therefore anonymous here, where the parser's
 /// chain has carried real names since R2a'.
 #[partial]
-def build_pi_chain (ps : List (Pair String Term)) (ret : Term) : Term :=
+def build_pi_chain (ps : List (Pair String Surface)) (ret : Surface) : Surface :=
     match ps {
         List.empty => ret,
         List.cons p rest =>
-            match p { Pair.pair _ typ => Term.pi binder_anon typ (build_pi_chain rest ret) },
+            match p { Pair.pair _ typ => Surface.pi binder_anon typ (build_pi_chain rest ret) },
     }
 
 /// `Term.lam p1 (Term.lam p2 (... body))` -- mirrors
 /// `lang/parser.mo`'s own `lam_params` exactly.
 #[partial]
-def build_lam_chain (ps : List (Pair String Term)) (body : Term) : Term :=
+def build_lam_chain (ps : List (Pair String Surface)) (body : Surface) : Surface :=
     match ps {
         List.empty => body,
         List.cons p rest =>
-            match p { Pair.pair name typ => Term.lam (binder_named (Identifier.id name)) typ (build_lam_chain rest body) },
+            match p { Pair.pair name typ => Surface.lam (binder_named (Identifier.id name)) typ (build_lam_chain rest body) },
     }
 
 def no_constraints : List TypeConstraint := List.empty
 
-/// `MetaDecl.d_def name params ret_typ body` (tag 0) -> a real `Def`. Body
+/// `MetaDecl.d_def name params ret_typ body` (tag 0) -> a real `DefS`. Body
 /// is reified with `params`'s own names already pushed onto `locals`
 /// (last-declared param innermost, per this file's own convention) so
 /// the body may reference them by name.
-def reify_d_def (args : List Value) : Result String Def :=
+def reify_d_def (args : List Value) : Result String DefS :=
     match args {
         List.cons name_val rest1 =>
             match rest1 {
@@ -870,7 +881,7 @@ def reify_d_def (args : List Value) : Result String Def :=
                                                                     match reify_expr_value (push_locals (pair_names params) List.empty) body_val {
                                                                         Result.err e => Result.err e,
                                                                         Result.ok body_term =>
-                                                                            Result.ok (Def.mk
+                                                                            Result.ok (DefS.mk
                                                                                 (NamePath.mk (List.cons (Identifier.id name) List.empty))
                                                                                 (build_pi_chain params ret_term)
                                                                                 (build_lam_chain params body_term)
@@ -890,10 +901,10 @@ def reify_d_def (args : List Value) : Result String Def :=
     }
 
 /// `MetaDecl.d_instance class_name target_typ methods` (tag 1) -> a real
-/// `Instance`. `name` uses the same `Identifier.id "_"` placeholder
+/// `InstanceS`. `name` uses the same `Identifier.id "_"` placeholder
 /// `lang/parser.mo`'s own `instance_close` always uses (never load-
 /// bearing content, confirmed directly).
-def reify_d_instance (args : List Value) : Result String Decl :=
+def reify_d_instance (args : List Value) : Result String DeclS :=
     match args {
         List.cons class_name_val rest1 =>
             match rest1 {
@@ -912,7 +923,7 @@ def reify_d_instance (args : List Value) : Result String Decl :=
                                                     match reify_defs method_vals {
                                                         Result.err e => Result.err e,
                                                         Result.ok defs =>
-                                                            Result.ok (Decl.instance_d (Instance.mk
+                                                            Result.ok (DeclS.instance_ds (InstanceS.mk
                                                                 (Identifier.id "_")
                                                                 (NamePath.mk (List.cons (Identifier.id class_name) List.empty))
                                                                 no_constraints
@@ -933,10 +944,10 @@ def reify_d_instance (args : List Value) : Result String Decl :=
 
 /// A meta `MetaDecl` value that isn't `d_error` reifies into ordinary
 /// `def`s at the TOP level (`d_def`) or into an instance's own METHODS
-/// (`reify_defs` below, `Instance.defs : List Def`) -- both cases need
-/// the bare `Def`, not a wrapping `Decl.def_d`, hence this separate
+/// (`reify_defs` below, `InstanceS.defs : List DefS`) -- both cases need
+/// the bare `DefS`, not a wrapping `DeclS.def_ds`, hence this separate
 /// entry point from `reify_decl_value`.
-def reify_meta_decl_as_def (v : Value) : Result String Def :=
+def reify_meta_decl_as_def (v : Value) : Result String DefS :=
     match v {
         Value.v_con tag args =>
             if I64.beq tag 0 then reify_d_def args
@@ -945,11 +956,11 @@ def reify_meta_decl_as_def (v : Value) : Result String Def :=
         _ => Result.err "reify_meta_decl_as_def: expected a MetaDecl value (v_con)",
     }
 
-/// `d_error` never actually returns a `Def` -- always short-circuits
+/// `d_error` never actually returns a `DefS` -- always short-circuits
 /// into `Result.err`, at whichever level it's found (top-level list or
 /// nested inside an instance's methods), matching `init/meta.mo`'s own
 /// doc comment on `d_error`.
-def reify_d_error (args : List Value) : Result String Def :=
+def reify_d_error (args : List Value) : Result String DefS :=
     match args {
         List.cons msg_val _ =>
             match value_as_str msg_val {
@@ -960,7 +971,7 @@ def reify_d_error (args : List Value) : Result String Def :=
     }
 
 #[partial]
-def reify_defs (vs : List Value) : Result String (List Def) :=
+def reify_defs (vs : List Value) : Result String (List DefS) :=
     match vs {
         List.empty => Result.ok List.empty,
         List.cons hd rest =>
@@ -976,13 +987,13 @@ def reify_defs (vs : List Value) : Result String (List Def) :=
 
 /// One top-level `MetaDecl` Value (`init/meta.mo`'s `MetaDecl`, tag 0=d_def
 /// 1=d_instance 2=d_error) -> a real `lang.types.Decl`.
-def reify_decl_value (v : Value) : Result String Decl :=
+def reify_decl_value (v : Value) : Result String DeclS :=
     match v {
         Value.v_con tag args =>
             if I64.beq tag 0 then
                 match reify_d_def args {
                     Result.err e => Result.err e,
-                    Result.ok d => Result.ok (Decl.def_d d),
+                    Result.ok d => Result.ok (DeclS.def_ds d),
                 }
             else if I64.beq tag 1 then reify_d_instance args
             else if I64.beq tag 2 then
@@ -995,7 +1006,7 @@ def reify_decl_value (v : Value) : Result String Decl :=
     }
 
 #[partial]
-def reify_decls_go (vs : List Value) : Result String (List Decl) :=
+def reify_decls_go (vs : List Value) : Result String (List DeclS) :=
     match vs {
         List.empty => Result.ok List.empty,
         List.cons hd rest =>
@@ -1017,7 +1028,11 @@ def reify_decls_go (vs : List Value) : Result String (List Decl) :=
 def reify_decls_value_to_decls (v : Value) : Result String (List Decl) :=
     match value_list_to_values v {
         Result.err e => Result.err e,
-        Result.ok vs => reify_decls_go vs,
+        Result.ok vs =>
+            match reify_decls_go vs {
+                Result.err e => Result.err e,
+                Result.ok ds => Result.ok (surface_decls_to_legacy ds),
+            },
     }
 
 // ─── Tests ───────────────────────────────────────────────────────────
@@ -1158,23 +1173,19 @@ def test_reify_e_lam_and_match_arm_first_binder_index : Bool :=
         Result.err _ => false,
         Result.ok t =>
             match t {
-                Term.lam _ _ body =>
+                Surface.lam _ _ body =>
                     match body {
-                        Term.lit lit_ =>
-                            match lit_ {
-                                Literal.match_ _ cases =>
-                                    match cases {
-                                        List.cons case_ _ =>
-                                            match case_ {
-                                                MatchCase.mk _ _ case_body _ _ =>
-                                                    match case_body {
-                                                        Term.var idx _ => I64.beq idx 1, // "x", first-declared
-                                                        _ => false,
-                                                    },
+                        Surface.match_ _ cases =>
+                            match cases {
+                                List.cons case_ _ =>
+                                    match case_ {
+                                        SMatchCase.mk _ _ case_body _ _ =>
+                                            match case_body {
+                                                Surface.var idx _ => I64.beq idx 1, // "x", first-declared
+                                                _ => false,
                                             },
-                                        List.empty => false,
                                     },
-                                _ => false,
+                                List.empty => false,
                             },
                         _ => false,
                     },
@@ -1202,38 +1213,34 @@ def test_reify_e_ctor_args_reference_correct_outer_and_field_indices : Bool :=
         Result.err _ => false,
         Result.ok t =>
             match t {
-                Term.lam _ _ inner1 =>
+                Surface.lam _ _ inner1 =>
                     match inner1 {
-                        Term.lam _ _ body =>
+                        Surface.lam _ _ body =>
                             match body {
-                                Term.lit lit_ =>
-                                    match lit_ {
-                                        Literal.match_ _ cases =>
-                                            match cases {
-                                                List.cons case_ _ =>
-                                                    match case_ {
-                                                        MatchCase.mk _ _ case_body _ _ =>
-                                                            match case_body {
-                                                                // Point.mk v y -- App(App(Var "Point.mk"), Var v), Var y
-                                                                Term.app applied_v_term y_term =>
-                                                                    match applied_v_term {
-                                                                        Term.app _ v_term =>
-                                                                            match v_term {
-                                                                                Term.var v_idx _ =>
-                                                                                    match y_term {
-                                                                                        Term.var y_idx _ => I64.beq v_idx 3 && I64.beq y_idx 0,
-                                                                                        _ => false,
-                                                                                    },
+                                Surface.match_ _ cases =>
+                                    match cases {
+                                        List.cons case_ _ =>
+                                            match case_ {
+                                                SMatchCase.mk _ _ case_body _ _ =>
+                                                    match case_body {
+                                                        // Point.mk v y -- App(App(Var "Point.mk"), Var v), Var y
+                                                        Surface.app applied_v_term y_term =>
+                                                            match applied_v_term {
+                                                                Surface.app _ v_term =>
+                                                                    match v_term {
+                                                                        Surface.var v_idx _ =>
+                                                                            match y_term {
+                                                                                Surface.var y_idx _ => I64.beq v_idx 3 && I64.beq y_idx 0,
                                                                                 _ => false,
                                                                             },
                                                                         _ => false,
                                                                     },
                                                                 _ => false,
                                                             },
+                                                        _ => false,
                                                     },
-                                                List.empty => false,
                                             },
-                                        _ => false,
+                                        List.empty => false,
                                     },
                                 _ => false,
                             },
@@ -1268,9 +1275,9 @@ def test_reify_decl_value_d_def_zero_params : Bool :=
         Result.err _ => false,
         Result.ok d =>
             match d {
-                Decl.def_d def_ =>
+                DeclS.def_ds def_ =>
                     match def_ {
-                        Def.mk {name, typ := _typ, term := _term, constraints := _c, attrs := _a, vis := _v, ..} =>
+                        DefS.mk {name, typ := _typ, term := _term, constraints := _c, attrs := _a, vis := _v, ..} =>
                             match name { NamePath.mk ids => match ids { List.cons id _ => id_is id "Point.x", List.empty => false } },
                     },
                 _ => false,
@@ -1296,15 +1303,15 @@ def test_reify_d_def_outer_params_last_is_index_zero : Bool :=
         Result.err _ => false,
         Result.ok d =>
             match d {
-                Decl.def_d def_ =>
+                DeclS.def_ds def_ =>
                     match def_ {
-                        Def.mk {name := _name, typ := _typ, term, constraints := _c, attrs := _a, vis := _v, ..} =>
+                        DefS.mk {name := _name, typ := _typ, term, constraints := _c, attrs := _a, vis := _v, ..} =>
                             match term {
                                 // fn a => fn b => b
-                                Term.lam _ _ inner =>
+                                Surface.lam _ _ inner =>
                                     match inner {
-                                        Term.lam _ _ body =>
-                                            match body { Term.var idx _ => I64.beq idx 0, _ => false },
+                                        Surface.lam _ _ body =>
+                                            match body { Surface.var idx _ => I64.beq idx 0, _ => false },
                                         _ => false,
                                     },
                                 _ => false,
@@ -1323,9 +1330,9 @@ def test_reify_decl_value_d_instance_wraps_methods : Bool :=
         Result.err _ => false,
         Result.ok d =>
             match d {
-                Decl.instance_d ins =>
+                DeclS.instance_ds ins =>
                     match ins {
-                        Instance.mk _name cls _c _args _vis _ip defs =>
+                        InstanceS.mk _name cls _c _args _vis _ip defs =>
                             (match cls { NamePath.mk ids => match ids { List.cons id _ => id_is id "Debug", List.empty => false } })
                             && match defs { List.cons _ rest => (match rest { List.empty => true, List.cons _ _ => false }), List.empty => false },
                     },
