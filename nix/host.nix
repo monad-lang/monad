@@ -79,6 +79,20 @@
         # needs to produce the host binary.
         doCheck = false;
 
+        # nixpkgs' cargo hook passes `-j "$NIX_BUILD_CORES"`, and in a
+        # sandboxed build that variable is the daemon's `cores` setting -- 32 on
+        # nixos76. Every rustc in the release profile is a multi-GB fat-LTO
+        # link (`lto = "fat"`, `codegen-units = 1`), and the CI runners share
+        # that host with a qemu tenant and no swap: unbounded, this build drove
+        # the nix-daemon cgroup to 8 GB and the kernel OOM killer picked the
+        # runners' own `nix develop` clients off the global victim list (runs
+        # 45919733215 and 46030112306). The hook reads this variable when
+        # `buildPhase` runs, so exporting it in `preBuild` is what reaches it --
+        # a command-line `-j` on a consuming `cargo` never does.
+        preBuild = ''
+          export NIX_BUILD_CORES=4
+        '';
+
         # Deliberately no `git`. No input in Cargo.lock is a git dependency, so
         # the only thing it could have served here was the build-commit probe
         # `llvm/src/link.mo` used to run -- and there is no probe any more: a

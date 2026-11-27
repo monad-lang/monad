@@ -52,6 +52,19 @@ env:
   # the PATH exports, the `.devenv/run` symlink, `mkdir -p "$PREK_HOME"` -- sit
   # OUTSIDE the guard and are unaffected.
   DEVENV_SKIP_TASKS: "1"
+  # Cargo's default `-j` is the host's core count (32 on nixos76), and every
+  # rustc in the release profile is a multi-GB fat-LTO link
+  # (`rust/Cargo.toml`: `lto = "fat"`, `codegen-units = 1`). Unbounded, the
+  # host build behind `MONAD_BIN: cargo run --release` peaks above the runner
+  # unit's 6 GiB `MemoryMax`, and the kernel SIGKILLs it inside its own cgroup
+  # -- exit 137 with no output, which is what killed `pre-commit-checks` and
+  # `wasm-target` on run 45919733215. Two at a time is the same discipline
+  # AGENTS.md prescribes for a local sweep, and the explicit `-j 2` on the test
+  # step already applies it there; this covers the other cargo invocations.
+  # The sandboxed flake build is bounded at its derivation instead
+  # (`nix/host.nix`'s `NIX_BUILD_CORES`), because the cargo hook passes its own
+  # `-j` from that variable and a command-line `-j` would not reach it.
+  CARGO_BUILD_JOBS: "2"
   # GitHub throttles unauthenticated release downloads hard enough to answer
   # HTTP 504s for hours (measured 2026-11-08: every nightly asset 504s bare
   # and 200s with a token). `monadup default`, `monadup`'s own self-checks and
@@ -213,8 +226,16 @@ jobs:
       # the ONLY run of the pre-commit suite in the pipeline, so this job's
       # verdict is decided here, not at shell entry. See the `showOutput` setting
       # in devenv.nix for why the per-hook results print on a green run.
+      #
+      # The dev shell is RECORDED once per job (here) and every later step
+      # enters it as `nix develop "$HOME/.monad-ci-devshell"`, which reuses the
+      # recorded environment instead of re-evaluating the flake. A `nix
+      # develop` client peaks at 1.3-2.6 GB of flake evaluation, and this
+      # pipeline used to pay that once per step (ten times in
+      # `compiler-checks` alone); with a qemu tenant and no swap on the host,
+      # those spikes are what the kernel OOM killer was picking.
       - name: Run pre commit checks
-        run: nix develop --no-pure-eval --accept-flake-config -c devenv tasks run devenv:git-hooks
+        run: nix develop --no-pure-eval --accept-flake-config --profile "$HOME/.monad-ci-devshell" -c devenv tasks run devenv:git-hooks
         env:
           # docs-check's host -- see the comment above the step list. The
           # dev shell inherits this, and prek passes it through to
@@ -244,7 +265,7 @@ jobs:
           # passed. The script defaults to this same `cargo run --release`
           # host and caps the run's memory, the way AGENTS.md prescribes for
           # a whole-corpus sweep.
-          nix develop --no-pure-eval --accept-flake-config -c \
+          nix develop "$HOME/.monad-ci-devshell" -c \
             scripts/check-corpus.sh
 
       # This step is why `nix/host.nix` may set `doCheck = false`: the flake's
@@ -269,7 +290,7 @@ jobs:
       - name: Rust test suite
         if: needs.changes.outputs.compiler == 'true'
         run: |
-          nix develop --no-pure-eval --accept-flake-config -c \
+          nix develop "$HOME/.monad-ci-devshell" -c \
             cargo test --manifest-path rust/Cargo.toml --release -j 2
 
   compiler-checks:
@@ -336,7 +357,7 @@ jobs:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
         run: |
           paths="$(nix build --no-link --print-out-paths --accept-flake-config .#monadHost)"
-          nix develop --no-pure-eval --accept-flake-config -c scripts/push-to-cache.sh $paths
+          nix develop --no-pure-eval --accept-flake-config --profile "$HOME/.monad-ci-devshell" -c scripts/push-to-cache.sh $paths
 
       # The self-compile leg, and the whole substance of this job beyond
       # building the reference host: `scripts/ci-self-compile.sh` installs the
@@ -369,6 +390,14 @@ jobs:
       # nix/monad.nix), and a mote's libraries reach the link through
       # `[link] pkg-config` (llvm/src/link.mo's `pkg_config_link_flags`)
       # rather than through the environment at all.
+      #
+      # The `--profile` call is the step above ("Push the host to the binary
+      # cache"), and it is the job's ONLY flake evaluation: every later step
+      # names the recorded profile as its installable
+      # (`nix develop "$HOME/.monad-ci-devshell" -c ...`, see nix develop's
+      # "Use a build environment previously recorded in a profile"), so it
+      # enters the same environment without re-evaluating the flake. The
+      # record must stay in a step that always runs before the reusers.
       - name: Nightly compatibility gate self-test
         run: scripts/check-nightly-gate.sh
 
@@ -378,8 +407,7 @@ jobs:
       # because the script uses python3, which the runner host does not carry.
       - name: Nightly pin bump self-test
         run: |
-          nix develop --no-pure-eval --accept-flake-config \
-            -c scripts/check-nightly-pin.sh
+          nix develop "$HOME/.monad-ci-devshell" -c scripts/check-nightly-pin.sh
 
       # A4's cheap half (plans/bootstrapping/ownership-regions-memory.md):
       # no compiler-closure mote may regain `[affine] mode = "warn"`. It needs
@@ -387,15 +415,11 @@ jobs:
       # need the dev shell's `awk`/`grep`, not the runner's minimal PATH.
       - name: Affine closure gate (static)
         run: |
-          nix develop --no-pure-eval --accept-flake-config \
-            --profile "$HOME/.monad-ci-devshell" \
-            -c scripts/check-affine-closure.sh --static
+          nix develop "$HOME/.monad-ci-devshell" -c scripts/check-affine-closure.sh --static
 
       - name: Self-compile with the latest nightly (required)
         run: |
-          nix develop --no-pure-eval --accept-flake-config \
-            --profile "$HOME/.monad-ci-devshell" \
-            -c scripts/ci-self-compile.sh
+          nix develop "$HOME/.monad-ci-devshell" -c scripts/ci-self-compile.sh
 
       # A4's acceptance half: the compiler this tree just built must report
       # zero affine diagnostics over the closure whose manifests are at error
@@ -407,9 +431,8 @@ jobs:
       # above still forbids a new warn mote.
       - name: Affine closure gate (tree-built checker)
         run: |
-          nix develop --no-pure-eval --accept-flake-config \
-            --profile "$HOME/.monad-ci-devshell" \
-            -c scripts/check-affine-closure.sh --dynamic \
+          nix develop "$HOME/.monad-ci-devshell" -c \
+            scripts/check-affine-closure.sh --dynamic \
                  "$PWD/target-monad/ci-self-compile/monad" \
                  --promoted-only
 
@@ -423,9 +446,8 @@ jobs:
       # the nightly builds the tree is ci-self-compile.sh's question.
       - name: Affine closure gate (latest nightly's view)
         run: |
-          nix develop --no-pure-eval --accept-flake-config \
-            --profile "$HOME/.monad-ci-devshell" \
-            -c scripts/check-affine-closure.sh --dynamic \
+          nix develop "$HOME/.monad-ci-devshell" -c \
+            scripts/check-affine-closure.sh --dynamic \
                  "${MONAD_HOME:-$HOME/.monad}/bin/monad" \
                  --promoted-only --no-commit-check --affine-only
 
@@ -443,9 +465,8 @@ jobs:
             echo "bootstrap/next-features.txt has no pending feature; skipping"
             exit 0
           fi
-          nix develop --no-pure-eval --accept-flake-config \
-            --profile "$HOME/.monad-ci-devshell" \
-            -c "$PWD/target-monad/ci-self-compile/monad" script bootstrap-next -- \
+          nix develop "$HOME/.monad-ci-devshell" -c \
+            "$PWD/target-monad/ci-self-compile/monad" script bootstrap-next -- \
                  --host "$HOME/.monad/bin/monad" \
                  --out "$PWD/target-monad/bootstrap-next" --fixpoint
 
@@ -455,9 +476,8 @@ jobs:
       # are excluded. (scripts/ci-compiler-checks.sh also runs it.)
       - name: Formatting gate
         run: |
-          nix develop --no-pure-eval --accept-flake-config \
-            --profile "$HOME/.monad-ci-devshell" \
-            -c scripts/check-fmt.sh "$PWD/target-monad/ci-self-compile/monad"
+          nix develop "$HOME/.monad-ci-devshell" -c \
+            scripts/check-fmt.sh "$PWD/target-monad/ci-self-compile/monad"
 
       # The style/name-path ratchet: no counter may rise above
       # scripts/style-baseline.txt. The counters are the linter's rule ids
@@ -471,9 +491,7 @@ jobs:
           # scripts/check-style-ratchet.sh is the same ratchet the
           # `style-ratchet` pre-commit hook (devenv.nix) runs, so a commit
           # cannot pass locally and fail here on counter drift.
-          nix develop --no-pure-eval --accept-flake-config \
-            --profile "$HOME/.monad-ci-devshell" \
-            -c scripts/check-style-ratchet.sh
+          nix develop "$HOME/.monad-ci-devshell" -c scripts/check-style-ratchet.sh
 
       # The consumers below (`clap-monadup-tests` through `wasm-target`) run
       # this tree's compiler as `.#monad` rather than self-compiling it again:
@@ -489,7 +507,7 @@ jobs:
         run: |
           paths="$(nix build --no-link --print-out-paths --accept-flake-config \
             .#monadNightlyRung1 .#monad)"
-          nix develop --no-pure-eval --accept-flake-config -c scripts/push-to-cache.sh $paths
+          nix develop "$HOME/.monad-ci-devshell" -c scripts/push-to-cache.sh $paths
 
   clap-monadup-tests:
     runs-on: [self-hosted, linux]
