@@ -77,7 +77,7 @@
 /// error.
 pub type MlirType {
     /// `i1`, `i8`, `i32`, `i64`, ... -- the width is the payload.
-    int_ (width : I64),
+    integer (width : I64),
     /// `f16`/`f32`/`f64`/`bf16` -- the spelling is the payload, so a
     /// future half type needs no new constructor.
     float_ (spelling : String),
@@ -113,7 +113,7 @@ pub type MlirValue {
     /// `%name` -- an SSA result or a `func.func` parameter. Stored WITHOUT
     /// the `%`, and the renderer adds it, so a construction site cannot
     /// produce a doubled sigil.
-    var_ (name : String),
+    ssa (name : String),
     /// The bare `%argN` form a region's block arguments take. Its own
     /// constructor only so an `scf` body cannot accidentally read like an
     /// ordinary named SSA value.
@@ -188,15 +188,20 @@ pub struct MlirBlock {
     /// that is not a cosmetic difference -- measured against `mlir-opt`
     /// 21.1.8, printing a second `scf.if` arm as `^bb1:` is
     /// `expected 'else' to terminate with `scf.yield``. Every other block
-    /// in this backend is `plain`.
+    /// in this backend is `labelled`.
     separator : MlirBlockSeparator,
 }
 
 /// What introduces a block.
+///
+/// Constructor names in this mote are unique across the compiler: once
+/// `codegen` imports `mlir`, a constructor sharing a bare name with one in
+/// `llvm`/`lang` (`var_`, `int_`, `plain` were) gets the wrong tag in the
+/// compiled binary and its printer reads garbage.
 pub type MlirBlockSeparator {
     /// A region's first block (no line), or a later one introduced by its
     /// `^label(args):` header.
-    plain,
+    labelled,
     /// An `scf.if`'s second arm: the `else` keyword.
     else_arm,
 }
@@ -240,19 +245,19 @@ pub struct MlirModule {
 // ─── type constructors ───────────────────────────────────────────────
 
 /// `iN`.
-pub def MlirType.i_n (width : I64) : MlirType := MlirType.int_ width
+pub def MlirType.i_n (width : I64) : MlirType := MlirType.integer width
 
 /// `i1`.
-pub def MlirType.i1 : MlirType := MlirType.int_ 1
+pub def MlirType.i1 : MlirType := MlirType.integer 1
 
 /// `i8`.
-pub def MlirType.i8 : MlirType := MlirType.int_ 8
+pub def MlirType.i8 : MlirType := MlirType.integer 8
 
 /// `i32`.
-pub def MlirType.i32 : MlirType := MlirType.int_ 32
+pub def MlirType.i32 : MlirType := MlirType.integer 32
 
 /// `i64`.
-pub def MlirType.i64 : MlirType := MlirType.int_ 64
+pub def MlirType.i64 : MlirType := MlirType.integer 64
 
 /// `f32`.
 pub def MlirType.f32 : MlirType := MlirType.float_ "f32"
@@ -295,7 +300,7 @@ pub def MlirType.of_elem_kind (kind : I64) : MlirType :=
 // ─── value and attribute constructors ────────────────────────────────
 
 /// An SSA name reference.
-pub def MlirValue.named (name : String) : MlirValue := MlirValue.var_ name
+pub def MlirValue.named (name : String) : MlirValue := MlirValue.ssa name
 
 /// The `%argN` form a block's arguments take.
 pub def MlirValue.arg (index : I64) : MlirValue := MlirValue.arg_ index
@@ -338,13 +343,13 @@ pub def MlirOp.assign_region (name : String) (text : String) (body : List MlirBl
 /// A block with no arguments -- the common case, so an arity the caller
 /// does not care about is not a parameter it has to spell.
 pub def MlirBlock.entry (label : String) (ops : List MlirOp) : MlirBlock :=
-    { label := label, args := List.empty, ops := ops, separator := MlirBlockSeparator.plain }
+    { label := label, args := List.empty, ops := ops, separator := MlirBlockSeparator.labelled }
 
 /// A block with block-argument types. An `scf.for` body's induction
 /// variable and `iter_args` are block arguments, not parameters, which is
 /// why this exists.
 pub def MlirBlock.with_args (label : String) (args : List MlirType) (ops : List MlirOp) : MlirBlock :=
-    { label := label, args := args, ops := ops, separator := MlirBlockSeparator.plain }
+    { label := label, args := args, ops := ops, separator := MlirBlockSeparator.labelled }
 
 /// An `scf.if`'s `else` arm: a `plain` block introduced by the `else`
 /// keyword. Its label is ignored -- MLIR prints the keyword, not a label --
@@ -387,7 +392,7 @@ pub def MlirModule.of_functions (functions : List MlirFunction) : MlirModule :=
 /// termination checker sees it.
 #[partial]
 pub def show_mlir_type (ty : MlirType) : String := match ty {
-    MlirType.int_ width => String.concat "i" (I64.to_string width),
+    MlirType.integer width => String.concat "i" (I64.to_string width),
     MlirType.float_ spelling => spelling,
     MlirType.index_ => "index",
     MlirType.memref_ dims elem =>
@@ -407,7 +412,7 @@ def show_dims (dims : List I64) : String := match dims {
 
 /// `%name` or `%argN`.
 pub def show_mlir_value (val : MlirValue) : String := match val {
-    MlirValue.var_ name => String.concat "%" name,
+    MlirValue.ssa name => String.concat "%" name,
     MlirValue.arg_ index => String.concat "%arg" (I64.to_string index),
 }
 
@@ -452,3 +457,31 @@ def collect_attr_text (attrs : List MlirAttr) (acc : List String) : List String 
 /// `" {a, b}"` for a non-empty body, `""` for an empty one.
 def show_attr_block (body : String) : String :=
     if String.is_empty body then "" else " {" ++ body ++ "}"
+
+// ─── symbols ─────────────────────────────────────────────────────────
+
+/// `@name`, quoted unless `name` is a bare MLIR identifier
+/// (`[A-Za-z_][A-Za-z0-9_$.]*`). Monad's qualified defs (`main::k`) are not,
+/// and `mlir-translate` carries the quoted spelling through to LLVM IR, where
+/// it matches the host stub's `@"main::k"`.
+#[partial]
+pub def symbol_ref (name : String) : String :=
+    if symbol_is_bare name 0 (String.length name) && Bool.not (String.is_empty name)
+    then String.concat "@" name
+    else String.concat_all ["@\"", name, "\""]
+
+#[partial]
+def symbol_is_bare (s : String) (i : I64) (n : I64) : Bool :=
+    if I64.beq i n then true
+    else match String.get s i {
+        Option.some b => symbol_byte_ok b (I64.beq i 0) && symbol_is_bare s (i + 1) n,
+        Option.none => false,
+    }
+
+/// `_`, letters anywhere; digits, `$` and `.` after the first byte.
+#[partial]
+def symbol_byte_ok (b : U8) (first : Bool) : Bool :=
+    U8.beq b 95u8 || byte_in b 65u8 90u8 || byte_in b 97u8 122u8
+        || (Bool.not first && (byte_in b 48u8 57u8 || U8.beq b 36u8 || U8.beq b 46u8))
+
+def byte_in (b : U8) (lo : U8) (hi : U8) : Bool := Bool.not (U8.lt b lo) && Bool.not (U8.gt b hi)

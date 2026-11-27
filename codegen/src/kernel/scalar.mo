@@ -309,11 +309,11 @@ def is_f64_suffix (suffix : NumSuffix) : Bool := match suffix {
 #[partial]
 def int_type_of_suffix (suffix : NumSuffix) : MlirType := match suffix {
     NumSuffix.i8 => MlirType.i8,
-    NumSuffix.i16 => MlirType.int_ 16,
+    NumSuffix.i16 => MlirType.integer 16,
     NumSuffix.i32 => MlirType.i32,
     NumSuffix.i64 => MlirType.i64,
-    NumSuffix.u8 => MlirType.int_ 8,
-    NumSuffix.u16 => MlirType.int_ 16,
+    NumSuffix.u8 => MlirType.integer 8,
+    NumSuffix.u16 => MlirType.integer 16,
     NumSuffix.u32 => MlirType.i32,
     NumSuffix.u64 => MlirType.i64,
     NumSuffix.f32 => MlirType.f32,

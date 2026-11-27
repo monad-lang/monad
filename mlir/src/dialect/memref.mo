@@ -19,12 +19,12 @@ use lib::ir {MlirOp, MlirType, MlirValue, show_mlir_value}
 use lib::dialect::common {type_suffix}
 
 /// `memref.load %b[%i] : <memref ty>` -- binds the loaded element.
-pub def load (name : String) (buf : MlirValue) (buf_ty : MlirType) (indices : List MlirValue) (loc : String) : MlirOp :=
+pub def load_op (name : String) (buf : MlirValue) (buf_ty : MlirType) (indices : List MlirValue) (loc : String) : MlirOp :=
     MlirOp.assign name ("memref.load " ++ show_mlir_value buf ++ subscript indices
         ++ type_suffix buf_ty) loc
 
 /// `memref.store %v, %b[%i] : <memref ty>` -- a statement, no result.
-pub def store (val : MlirValue) (buf : MlirValue) (buf_ty : MlirType) (indices : List MlirValue) (loc : String) : MlirOp :=
+pub def store_op (val : MlirValue) (buf : MlirValue) (buf_ty : MlirType) (indices : List MlirValue) (loc : String) : MlirOp :=
     MlirOp.stmt ("memref.store " ++ show_mlir_value val ++ ", " ++ show_mlir_value buf
         ++ subscript indices ++ type_suffix buf_ty) loc
 

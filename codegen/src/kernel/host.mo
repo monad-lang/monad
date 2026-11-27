@@ -201,7 +201,7 @@ def abi_result (results : List MlirType) : Option KernelAbiParam := match result
 /// compiled against those exact widths.
 #[partial]
 def c_scalar_name (ty : MlirType) : String := match ty {
-    MlirType.int_ width => String.concat "i" (I64.to_string width),
+    MlirType.integer width => String.concat "i" (I64.to_string width),
     MlirType.float_ spelling => spelling,
     MlirType.index_ => "index",
     MlirType.memref_ _dims _elem => "ptr",

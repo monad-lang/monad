@@ -147,7 +147,7 @@ pub def trunci (name : String) (x : MlirValue) (from : MlirType) (to : MlirType)
 /// The shape Phase 0's fixture needed: an `F32` argument crosses the C ABI
 /// as an `i32` bit pattern (`emit_extern_param_cast`), so the kernel
 /// bitcasts it back rather than taking a float.
-pub def bitcast (name : String) (x : MlirValue) (from : MlirType) (to : MlirType) (loc : String) : MlirOp :=
+pub def bitcast_op (name : String) (x : MlirValue) (from : MlirType) (to : MlirType) (loc : String) : MlirOp :=
     cast name "arith.bitcast" x from to loc
 
 /// `<op> %a, %b : <ty>` -- the shared shape of every two-operand op.

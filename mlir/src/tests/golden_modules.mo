@@ -51,11 +51,11 @@ use lib::ir {
 // every constructor this file calls is named here, which also makes the file
 // the readable index of which ops the goldens use.
 use lib::dialect::arith {
-    addf, bitcast, cmpi, constant_f32, constant_f64, constant_i64,
+    addf, bitcast_op, cmpi, constant_f32, constant_f64, constant_i64,
     constant_index, extf, index_cast, mulf, sitofp,
 }
 use lib::dialect::func {return_, return_void}
-use lib::dialect::memref {load, store}
+use lib::dialect::memref {load_op, store_op}
 use lib::dialect::scf {for_, for_iter, if_result, yield}
 
 /// The source location every golden op carries. One constant rather than a
@@ -92,7 +92,7 @@ def scalar_saxpy_body : MlirBlock :=
         // The boundary is integral: an `F32` crosses a C ABI as its `i32`
         // bit pattern (`emit_extern_param_cast` does `trunc` + `bitcast`),
         // so the kernel takes the bits and bitcasts back.
-        bitcast "a" (MlirValue.named "a_bits") MlirType.i32 MlirType.f32 golden_loc,
+        bitcast_op "a" (MlirValue.named "a_bits") MlirType.i32 MlirType.f32 golden_loc,
         constant_f32 "one" "1.0" golden_loc,
         for_ "i" (MlirValue.named c0) (MlirValue.named c16) (MlirValue.named c1)
             [scf_loop_body] golden_loc,
@@ -107,7 +107,7 @@ def scf_loop_body : MlirBlock :=
         sitofp "x" (MlirValue.named "i64") MlirType.i64 MlirType.f32 golden_loc,
         mulf "t" (MlirValue.named "a") (MlirValue.named "x") MlirType.f32 golden_loc,
         addf "r" (MlirValue.named "t") (MlirValue.named "one") MlirType.f32 golden_loc,
-        store (MlirValue.named "r") (MlirValue.named "dst")
+        store_op (MlirValue.named "r") (MlirValue.named "dst")
             (MlirType.memref_1d 16 MlirType.f32) [MlirValue.named "i"] golden_loc,
     ]
 
@@ -149,7 +149,7 @@ def loop_carried_body : MlirBlock :=
 /// `^bb0(%arg0: T):`, which nothing in this backend emits today.
 def reduce_body : MlirBlock :=
     MlirBlock.entry "" [
-        load "vi" (MlirValue.named "v") (MlirType.memref_1d 16 MlirType.f32)
+        load_op "vi" (MlirValue.named "v") (MlirType.memref_1d 16 MlirType.f32)
             [MlirValue.named "i"] golden_loc,
         extf "vid" (MlirValue.named "vi") MlirType.f32 MlirType.f64 golden_loc,
         addf "next" (MlirValue.named "s") (MlirValue.named "vid") MlirType.f64 golden_loc,

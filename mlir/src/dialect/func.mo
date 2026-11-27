@@ -14,7 +14,7 @@
 /// Getting this wrong is a `mlir-opt` verifier error naming the callee, so
 /// the constructor takes both so a caller cannot spell half of it.
 
-use lib::ir {MlirOp, MlirAttr, MlirType, MlirValue, show_mlir_value}
+use lib::ir {MlirOp, MlirAttr, MlirType, MlirValue, show_mlir_value, symbol_ref}
 use lib::dialect::common {call_signature, operands, type_suffix}
 
 /// `func.call @name(%a, %b) : (t0, t1) -> ret` -- binds the result.
@@ -23,14 +23,14 @@ use lib::dialect::common {call_signature, operands, type_suffix}
 /// (a kernel has no call to make in tail position that matters), but the
 /// field is here rather than added later because it is a single word in a
 /// printer that already has three other optional pieces.
-pub def call (result : String) (callee : String) (args : List MlirValue)
+pub def func_call (result : String) (callee : String) (args : List MlirValue)
     (param_tys : List MlirType) (ret_ty : MlirType) (tail : Bool) (loc : String) : MlirOp :=
     MlirOp.assign result (call_text callee args param_tys ret_ty tail) loc
 
 /// `func.call @name(%a) : (...) -> ret` as a statement -- a call whose
 /// result is discarded. `%_ = func.call ...` is legal MLIR but reads as a
 /// binding nobody uses, so the statement shape is used instead.
-pub def call_void (callee : String) (args : List MlirValue)
+pub def func_call_void (callee : String) (args : List MlirValue)
     (param_tys : List MlirType) (ret_ty : MlirType) (tail : Bool) (loc : String) : MlirOp :=
     MlirOp.stmt (call_text callee args param_tys ret_ty tail) loc
 
@@ -65,7 +65,7 @@ pub def noalias_attr : MlirAttr := MlirAttr.unit "llvm.noalias"
 def call_text (callee : String) (args : List MlirValue)
     (param_tys : List MlirType) (ret_ty : MlirType) (tail : Bool) : String :=
     let kw := if tail then "tail call " else "call " in
-    "func." ++ kw ++ "@" ++ callee ++ "(" ++ operands args ++ ")"
+    "func." ++ kw ++ symbol_ref callee ++ "(" ++ operands args ++ ")"
         ++ call_signature param_tys ret_ty
 
 /// A `func.call`'s argument list is positional and its length must match
@@ -75,7 +75,7 @@ def call_text (callee : String) (args : List MlirValue)
 /// same order, which is what a transposition bug would break.
 #[test]
 def test_call_renders_args_before_signature : Bool :=
-    let op := call "r" "saxpy" [MlirValue.named "a", MlirValue.named "b"]
+    let op := func_call "r" "saxpy" [MlirValue.named "a", MlirValue.named "b"]
         [MlirType.memref_1d 16 MlirType.f32, MlirType.i32] MlirType.f64 false "" in
     String.beq op.text "func.call @saxpy(%a, %b) : (memref<16xf32>, i32) -> f64"
 

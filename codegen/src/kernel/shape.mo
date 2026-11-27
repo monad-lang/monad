@@ -238,11 +238,11 @@ pub def scalar_mlir_type_of (t : Term) : Option MlirType :=
 def scalar_mlir_type_named (n : String) : Option MlirType :=
     if String.beq n "I64" then Option.some MlirType.i64
     else if String.beq n "I32" then Option.some MlirType.i32
-    else if String.beq n "I16" then Option.some (MlirType.int_ 16)
+    else if String.beq n "I16" then Option.some (MlirType.integer 16)
     else if String.beq n "I8" then Option.some MlirType.i8
     else if String.beq n "U64" then Option.some MlirType.i64
     else if String.beq n "U32" then Option.some MlirType.i32
-    else if String.beq n "U16" then Option.some (MlirType.int_ 16)
+    else if String.beq n "U16" then Option.some (MlirType.integer 16)
     else if String.beq n "U8" then Option.some MlirType.i8
     else if String.beq n "F64" then Option.some MlirType.f64
     else if String.beq n "F32" then Option.some MlirType.f32

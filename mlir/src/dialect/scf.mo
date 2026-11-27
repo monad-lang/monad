@@ -74,7 +74,7 @@ pub def for_iter (result : String) (iv : String) (lower : MlirValue) (upper : Ml
 /// Taking ops rather than a block list also makes the `else` arm's shape
 /// unspellable-wrong at the CALL SITE: a caller cannot hand it a labelled
 /// block, because there is no parameter for one.
-pub def if_ (cond : MlirValue) (then_blocks : List MlirBlock) (else_ops : List MlirOp) (loc : String) : MlirOp :=
+pub def if_op (cond : MlirValue) (then_blocks : List MlirBlock) (else_ops : List MlirOp) (loc : String) : MlirOp :=
     MlirOp.stmt_region (if_header cond List.empty)
         (List.append then_blocks [MlirBlock.else_ else_ops]) loc
 

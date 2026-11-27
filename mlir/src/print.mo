@@ -47,8 +47,8 @@
 // (AGENTS.md). Removing them to silence that note breaks the real compiler.
 use lib::ir {
     MlirBlock, MlirBlockSeparator, MlirBlockSeparator.else_arm,
-    MlirBlockSeparator.plain, MlirFunction, MlirModule, MlirOp, MlirParam,
-    MlirType, show_mlir_type,
+    MlirBlockSeparator.labelled, MlirFunction, MlirModule, MlirOp, MlirParam,
+    MlirType, show_mlir_type, symbol_ref,
 }
 
 /// Two spaces per nesting level, which is MLIR's own pretty-printer
@@ -101,7 +101,7 @@ def print_function (f : MlirFunction) : String := match f {
 def function_header (name : String) (params : List MlirParam) (results : List MlirType)
     (visibility : String) (loc : String) : String :=
     let vis := if String.is_empty visibility then "" else visibility ++ " " in
-    "func.func " ++ vis ++ "@" ++ name ++ "(" ++ print_params params ++ ")"
+    "func.func " ++ vis ++ symbol_ref name ++ "(" ++ print_params params ++ ")"
         ++ print_result_list results ++ print_func_loc_suffix loc ++ " {"
 
 /// ` -> (f64)`, or `""` for a function returning nothing.
@@ -297,7 +297,7 @@ def print_region_block (b : MlirBlock) (depth : I64) (first : Bool) : String := 
         // which is `indent (depth - 1)`: the level the op itself is at.
         MlirBlockSeparator.else_arm =>
             "\n" ++ indent (depth - 1) ++ "} else {" ++ print_ops ops depth,
-        MlirBlockSeparator.plain =>
+        MlirBlockSeparator.labelled =>
             // A nested block always carries its label; only a func body's
             // entry block may omit one, and that path goes through
             // `print_function`.
